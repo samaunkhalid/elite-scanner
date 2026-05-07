@@ -65,13 +65,12 @@ def get_setup_type(stock):
     scores = {
         "🧨 SQUEEZE PLAY": stock["squeeze"],
         "📅 CATALYST EVENT": stock["catalyst"],
+        "💎 CLEAN LIQUIDITY": stock.get("execution", 0),
         "💰 SMART MONEY": stock["smart_money"],
-        "📞 OPTIONS FLOW": stock["options"],
         "🐦 SOCIAL MOMENTUM": stock["social"],
         "💪 RELATIVE STRENGTH": stock["strength"],
         "📈 BREAKOUT": stock["technical"],
     }
-    # Top scoring layer determines setup type
     primary = max(scores.items(), key=lambda x: x[1])
     if primary[1] == 0:
         return "—"
@@ -116,13 +115,13 @@ def build_card(stock):
 
     # Build score bar segments
     layers = [
-        ("CAT", stock["catalyst"], 25, "#a855f7"),
-        ("SQZ", stock["squeeze"], 20, "#ef4444"),
-        ("SM", stock["smart_money"], 15, "#3b82f6"),
-        ("OPT", stock["options"], 15, "#10b981"),
+        ("CAT", stock["catalyst"], 20, "#a855f7"),
+        ("EXEC", stock.get("execution", 0), 20, "#14b8a6"),
+        ("SQZ", stock["squeeze"], 15, "#ef4444"),
+        ("SM", stock["smart_money"], 10, "#3b82f6"),
         ("SOC", stock["social"], 10, "#f59e0b"),
-        ("RS", stock["strength"], 10, "#06b6d4"),
-        ("TECH", stock["technical"], 5, "#8b5cf6"),
+        ("RS", stock["strength"], 15, "#06b6d4"),
+        ("TECH", stock["technical"], 15, "#8b5cf6"),
     ]
     
     score_breakdown = ""
@@ -203,7 +202,7 @@ def build_card(stock):
     '''
 
 
-def build_dashboard(stocks):
+def build_dashboard(stocks, regime=None):
     """Build complete HTML dashboard."""
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     ny_time = datetime.now() - timedelta(hours=11)
@@ -217,9 +216,36 @@ def build_dashboard(stocks):
     
     avg_score = sum(s["score"] for s in stocks) / total if total > 0 else 0
     
+    # Build market regime banner
+    regime_html = ""
+    if regime:
+        regime_label = regime.get("label", "Unknown")
+        spy_chg = regime.get("spy_change", 0)
+        qqq_chg = regime.get("qqq_change", 0)
+        iwm_chg = regime.get("iwm_change", 0)
+        vix = regime.get("vix_level", 20)
+        bias = regime.get("bias", "NEUTRAL")
+        
+        bias_color = "#10b981" if bias == "LONG_FAVORED" else \
+                     "#ef4444" if bias == "SHORT_FAVORED" else \
+                     "#f59e0b" if bias == "CAUTION" else "#6b7280"
+        
+        regime_html = f'''
+        <div class="regime-banner" style="border-left: 4px solid {bias_color};">
+            <div class="regime-label">{regime_label}</div>
+            <div class="regime-data">
+                <span>SPY: <strong style="color:{'#10b981' if spy_chg>0 else '#ef4444'};">{spy_chg:+.2f}%</strong></span>
+                <span>QQQ: <strong style="color:{'#10b981' if qqq_chg>0 else '#ef4444'};">{qqq_chg:+.2f}%</strong></span>
+                <span>IWM: <strong style="color:{'#10b981' if iwm_chg>0 else '#ef4444'};">{iwm_chg:+.2f}%</strong></span>
+                <span>VIX: <strong>{vix:.1f}</strong></span>
+                <span class="bias-pill" style="background:{bias_color}22;color:{bias_color};">{bias.replace('_',' ')}</span>
+            </div>
+        </div>
+        '''
+    
     # Build cards
     cards_html = ""
-    for stock in stocks[:30]:  # Top 30
+    for stock in stocks[:30]:
         cards_html += build_card(stock)
     
     # Market status
@@ -354,6 +380,40 @@ body {{
 .legend strong {{ color: #fff; }}
 .legend-item {{ display: flex; align-items: center; gap: 6px; }}
 .legend-dot {{ width: 10px; height: 10px; border-radius: 50%; }}
+
+.regime-banner {{
+    background: linear-gradient(135deg, #1a1a1a 0%, #161616 100%);
+    border: 1px solid #2a2a2a;
+    border-radius: 12px;
+    padding: 16px 20px;
+    margin-bottom: 20px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 12px;
+}}
+.regime-label {{
+    font-size: 16px;
+    font-weight: 600;
+    color: #fff;
+}}
+.regime-data {{
+    display: flex;
+    gap: 16px;
+    align-items: center;
+    font-size: 13px;
+    color: #aaa;
+    flex-wrap: wrap;
+}}
+.regime-data strong {{ color: #fff; }}
+.bias-pill {{
+    padding: 4px 12px;
+    border-radius: 20px;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+}}
 
 .cards-grid {{
     display: grid;
@@ -578,6 +638,7 @@ body {{
 </div>
 
 <div class="container">
+    {regime_html}
     <div class="stats-bar">
         <div class="stat-card highlight">
             <div class="stat-value" style="color:#fbbf24;">{tier_s}</div>
@@ -607,13 +668,13 @@ body {{
 
     <div class="legend">
         <strong>Conviction Layers:</strong>
-        <span class="legend-item"><span class="legend-dot" style="background:#a855f7;"></span>CAT (Catalyst /25)</span>
-        <span class="legend-item"><span class="legend-dot" style="background:#ef4444;"></span>SQZ (Squeeze /20)</span>
-        <span class="legend-item"><span class="legend-dot" style="background:#3b82f6;"></span>SM (Smart Money /15)</span>
-        <span class="legend-item"><span class="legend-dot" style="background:#10b981;"></span>OPT (Options /15)</span>
+        <span class="legend-item"><span class="legend-dot" style="background:#a855f7;"></span>CAT (Catalyst /20)</span>
+        <span class="legend-item"><span class="legend-dot" style="background:#14b8a6;"></span>EXEC (Execution /20)</span>
+        <span class="legend-item"><span class="legend-dot" style="background:#ef4444;"></span>SQZ (Squeeze /15)</span>
+        <span class="legend-item"><span class="legend-dot" style="background:#3b82f6;"></span>SM (Smart Money /10)</span>
         <span class="legend-item"><span class="legend-dot" style="background:#f59e0b;"></span>SOC (Social /10)</span>
-        <span class="legend-item"><span class="legend-dot" style="background:#06b6d4;"></span>RS (Strength /10)</span>
-        <span class="legend-item"><span class="legend-dot" style="background:#8b5cf6;"></span>TECH (Technical /5)</span>
+        <span class="legend-item"><span class="legend-dot" style="background:#06b6d4;"></span>RS (Strength /15)</span>
+        <span class="legend-item"><span class="legend-dot" style="background:#8b5cf6;"></span>TECH (Technical /15)</span>
     </div>
 
     {f'<div class="cards-grid">{cards_html}</div>' if stocks else '<div class="empty-state"><h3>No setups yet</h3><p>Run elite_scanner.py to populate</p></div>'}
@@ -637,10 +698,19 @@ def main():
     with open("elite_watchlist.json", "r") as f:
         stocks = json.load(f)
 
+    # Load market regime if available
+    regime = None
+    if os.path.exists("market_regime.json"):
+        try:
+            with open("market_regime.json", "r") as f:
+                regime = json.load(f)
+        except:
+            pass
+
     print(f"  Loaded {len(stocks)} stocks")
 
     # Build HTML
-    html = build_dashboard(stocks)
+    html = build_dashboard(stocks, regime)
     with open("dashboard.html", "w", encoding="utf-8") as f:
         f.write(html)
 
