@@ -263,22 +263,38 @@ def fetch_social_data():
             results = data.get("results", [])
             social_map = {}
             for item in results:
-                ticker = item.get("ticker")
-                mentions = int(item.get("mentions", 0))
-                m_24h = int(item.get("mentions_24h_ago", 0)) or 1
-                rank = int(item.get("rank", 999))
-                rank_24h = int(item.get("rank_24h_ago", 999)) or 999
+                try:
+                    ticker = item.get("ticker")
+                    if not ticker:
+                        continue
+                    
+                    # Safe integer conversion with None handling
+                    def safe_int(val, default=0):
+                        if val is None:
+                            return default
+                        try:
+                            return int(val)
+                        except (ValueError, TypeError):
+                            return default
 
-                # Velocity = mentions growth + rank improvement
-                mention_growth = mentions / m_24h if m_24h > 0 else 1
-                rank_change = rank_24h - rank  # positive = moved up
+                    mentions = safe_int(item.get("mentions"), 0)
+                    m_24h = safe_int(item.get("mentions_24h_ago"), 1)
+                    if m_24h == 0:
+                        m_24h = 1
+                    rank = safe_int(item.get("rank"), 999)
+                    rank_24h = safe_int(item.get("rank_24h_ago"), 999)
 
-                social_map[ticker] = {
-                    "mentions": mentions,
-                    "growth": mention_growth,
-                    "rank": rank,
-                    "rank_change": rank_change,
-                }
+                    mention_growth = mentions / m_24h if m_24h > 0 else 1
+                    rank_change = rank_24h - rank
+
+                    social_map[ticker] = {
+                        "mentions": mentions,
+                        "growth": mention_growth,
+                        "rank": rank,
+                        "rank_change": rank_change,
+                    }
+                except Exception:
+                    continue
             return social_map
     except Exception as e:
         print(f"  Social data fetch failed: {e}")
@@ -525,6 +541,30 @@ def main():
     print(f"\n[5/5] Scoring stocks through 7 layers...\n")
 
     results = []
+    
+    # Layer-by-layer diagnostics
+    layer_stats = {
+        "catalyst":     {"hits": 0, "total_pts": 0, "max_seen": 0},
+        "squeeze":      {"hits": 0, "total_pts": 0, "max_seen": 0},
+        "smart_money":  {"hits": 0, "total_pts": 0, "max_seen": 0},
+        "options":      {"hits": 0, "total_pts": 0, "max_seen": 0},
+        "social":       {"hits": 0, "total_pts": 0, "max_seen": 0},
+        "strength":     {"hits": 0, "total_pts": 0, "max_seen": 0},
+        "technical":    {"hits": 0, "total_pts": 0, "max_seen": 0},
+    }
+    
+    score_distribution = {
+        "0-9":   0,
+        "10-19": 0,
+        "20-29": 0,
+        "30-39": 0,
+        "40-49": 0,
+        "50+":   0,
+    }
+    
+    quality_filtered = 0
+    no_data_count = 0
+    total_processed = 0
     for symbol in universe:
         try:
             # Get quote
@@ -543,6 +583,7 @@ def main():
                                                   q.get("averageDailyVolume3Month", 0) or 0,
                                                   exchange)
             if not passed:
+                quality_filtered += 1
                 continue
 
             # Get history for this stock
@@ -564,10 +605,36 @@ def main():
             rs_score, rs_reasons = score_strength(symbol, hist_df, spy_df, change_pct)
             tech_score, tech_reasons = score_technical(symbol, hist_df, q)
 
+            # Track layer diagnostics
+            for name, score in [("catalyst", cat_score), ("squeeze", sq_score),
+                                 ("smart_money", sm_score), ("options", opt_score),
+                                 ("social", soc_score), ("strength", rs_score),
+                                 ("technical", tech_score)]:
+                if score > 0:
+                    layer_stats[name]["hits"] += 1
+                layer_stats[name]["total_pts"] += score
+                if score > layer_stats[name]["max_seen"]:
+                    layer_stats[name]["max_seen"] = score
+            
+            total_processed += 1
+
             total = cat_score + sq_score + sm_score + opt_score + soc_score + rs_score + tech_score
 
+            # Score distribution
+            if total < 10:
+                score_distribution["0-9"] += 1
+            elif total < 20:
+                score_distribution["10-19"] += 1
+            elif total < 30:
+                score_distribution["20-29"] += 1
+            elif total < 40:
+                score_distribution["30-39"] += 1
+            elif total < 50:
+                score_distribution["40-49"] += 1
+            else:
+                score_distribution["50+"] += 1
+
             # Keep all stocks scoring at least minimal points
-            # (Yahoo free data limits some layers — adjust thresholds accordingly)
             if total < 10:
                 continue
 
@@ -609,12 +676,64 @@ def main():
         except Exception as e:
             continue
 
+    # ==========================================================
+    # DIAGNOSTIC REPORT — Layer-by-Layer Analysis
+    # ==========================================================
+    print(f"\n{'=' * 70}")
+    print(f"  DIAGNOSTIC REPORT")
+    print(f"{'=' * 70}")
+    print(f"\n  Universe size:        {len(universe)}")
+    print(f"  Filtered by quality:  {quality_filtered}")
+    print(f"  Successfully scored:  {total_processed}")
+    
+    print(f"\n  LAYER HIT RATES (% of stocks getting any points):")
+    print(f"  {'Layer':<14} {'Hits':>6} {'Hit%':>7} {'AvgPts':>8} {'MaxSeen':>9} {'MaxPossible':>13}")
+    print(f"  {'-' * 60}")
+    
+    layer_max = {
+        "catalyst": 25, "squeeze": 20, "smart_money": 15, "options": 15,
+        "social": 10, "strength": 15, "technical": 20
+    }
+    
+    for layer_name, stats in layer_stats.items():
+        hits = stats["hits"]
+        hit_pct = (hits / total_processed * 100) if total_processed > 0 else 0
+        avg_pts = (stats["total_pts"] / total_processed) if total_processed > 0 else 0
+        max_seen = stats["max_seen"]
+        max_possible = layer_max.get(layer_name, 0)
+        
+        # Flag problem layers
+        flag = ""
+        if hit_pct < 5:
+            flag = "  ⚠️ DEAD LAYER"
+        elif hit_pct < 20:
+            flag = "  ⚠️ low hit rate"
+        
+        print(f"  {layer_name:<14} {hits:>6} {hit_pct:>6.1f}% {avg_pts:>7.1f} {max_seen:>8.0f} {max_possible:>11}{flag}")
+    
+    print(f"\n  SCORE DISTRIBUTION:")
+    for bucket, count in score_distribution.items():
+        bar_len = int(count / max(1, total_processed) * 50)
+        bar = "█" * bar_len
+        print(f"  {bucket:<8}: {count:>4} stocks  {bar}")
+    
+    qualified = sum(score_distribution[b] for b in ["10-19","20-29","30-39","40-49","50+"])
+    print(f"\n  Stocks scoring 10+:   {qualified}")
+    print(f"  Stocks scoring 20+:   {sum(score_distribution[b] for b in ['20-29','30-39','40-49','50+'])}")
+    print(f"  Stocks scoring 30+:   {sum(score_distribution[b] for b in ['30-39','40-49','50+'])}")
+    print(f"  Stocks scoring 50+:   {score_distribution['50+']}")
+    print(f"{'=' * 70}\n")
+
     # Sort by score
     results = sorted(results, key=lambda x: x["score"], reverse=True)
     df = pd.DataFrame(results)
 
     if df.empty:
         print("  No stocks passed scoring threshold today.")
+        # Save empty files so workflow doesn't fail
+        pd.DataFrame().to_csv("elite_watchlist.csv", index=False)
+        with open("elite_watchlist.json", "w") as f:
+            f.write("[]")
         return
 
     # Display top results
