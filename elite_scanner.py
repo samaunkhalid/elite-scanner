@@ -1,21 +1,28 @@
 """
-ELITE MULTI-SOURCE STOCK SCANNER
-=================================
-7-Layer Conviction Scoring System
+ELITE MULTI-SOURCE STOCK SCANNER v2
+====================================
+Upgraded with 3 critical professional improvements:
 
-Layers:
-  1. CATALYST     — FDA dates, earnings, news (max 25 pts)
-  2. SQUEEZE      — Short interest, float, borrow (max 20 pts)
-  3. SMART MONEY  — Dark pool, insider buying (max 15 pts)
-  4. OPTIONS      — Unusual call/put activity (max 15 pts)
-  5. SOCIAL       — Reddit mentions velocity (max 10 pts)
-  6. STRENGTH     — RS vs SPY/sector (max 10 pts)
-  7. TECHNICAL    — Breakout setup (max 5 pts)
+  Stage 0: Market Regime Filter (SPY/QQQ/IWM/VIX)
+  Execution Quality Filter (dollar volume, ATR sweet spot)
+  Earnings Exclusion (reject earnings within 2 days)
 
-Threshold: 60+ = Tier 1 setup (display)
-           75+ = Tier S setup (highest conviction)
+7-Layer Conviction Scoring (re-weighted):
+  1. CATALYST     /20 — Earnings 5-15d, fresh news
+  2. EXECUTION    /20 — Dollar volume, ATR%, liquidity (NEW)
+  3. SQUEEZE      /15 — Short interest, float (DEMOTED)
+  4. SMART MONEY  /10 — Accumulation, insider % (DEMOTED)
+  5. SOCIAL       /10 — Reddit mention velocity
+  6. STRENGTH     /15 — RS vs SPY/sector
+  7. TECHNICAL    /15 — EMA stack, gap retention (DEMOTED)
 
-Runs daily pre-market. Outputs ranked watchlist.
+Total: 105 max
+
+Tier System:
+  S (75+): Highest conviction
+  1 (60+): Strong setups
+  2 (45+): Watching
+  3 (30+): Monitor
 """
 
 from yahooquery import Ticker
@@ -24,17 +31,15 @@ import requests
 import json
 import os
 from datetime import datetime, timedelta
-from concurrent.futures import ThreadPoolExecutor
+
 
 # ==============================================================
-# DYNAMIC STOCK UNIVERSE (gainers/losers/active scraping)
+# UNIVERSE BUILDER
 # ==============================================================
 
 def get_dynamic_universe():
-    """Fetch top gainers, losers, and most active stocks daily."""
+    """Fetch top gainers, losers, most active stocks."""
     universe = set()
-
-    # Yahoo screeners give us today's hot stocks
     screeners = ["day_gainers", "day_losers", "most_actives",
                  "small_cap_gainers", "growth_technology_stocks"]
 
@@ -53,49 +58,146 @@ def get_dynamic_universe():
         except Exception as e:
             print(f"  Screener {screener} failed: {e}")
 
-    # Add momentum/squeeze candidates (manually curated proven movers)
     momentum_core = [
-        # AI / Quantum
         "SOUN", "AI", "BBAI", "IONQ", "RGTI", "ARQQ", "PLTR",
-        # Crypto
         "RIOT", "MARA", "CLSK", "HUT", "BITF", "CIFR", "CORZ", "BTBT", "IREN", "MSTR", "COIN",
-        # Semis (volatile)
         "WOLF", "LSCC", "SMCI", "SMTC",
-        # EV / Energy
         "RIVN", "NIO", "LCID", "QS", "CHPT", "PLUG", "FCEL", "BE", "BLNK", "EVGO",
-        # Space / Defense
         "RKLB", "ASTS", "LUNR", "JOBY", "KTOS", "ACHR",
-        # Biotech (squeeze candidates)
         "HIMS", "CRSP", "BNGO", "VKTX", "MDGL", "VRDN", "CYTK", "IOVA", "SAVA",
-        # Squeeze / Meme
         "GME", "AMC", "BBBY", "BB", "NOK",
-        # Fintech
-        "HOOD", "SOFI", "AFRM", "UPST",
-        # Social/Streaming
+        "HOOD", "SOFI", "AFRM", "UPST", "NU",
         "RDDT", "PINS", "SNAP", "RBLX", "ROKU", "DKNG",
-        # Cybersecurity
-        "NET", "CRWD", "ZS", "PANW",
+        "NET", "CRWD", "ZS", "PANW", "OKTA",
     ]
     universe.update(momentum_core)
-
     print(f"  Dynamic universe: {len(universe)} stocks")
     return list(universe)
 
 
 # ==============================================================
-# LAYER 1: CATALYST DETECTION
+# STAGE 0: MARKET REGIME FILTER (NEW)
 # ==============================================================
 
-def score_catalyst(symbol, calendar_all):
-    """
-    Catalyst score (0-25 points)
-    - Earnings within 7 days: +15
-    - Earnings 8-14 days: +8
-    - Recent gap >5%: +5
-    """
-    score = 0
-    reasons = []
+def detect_market_regime():
+    """Determine overall market regime before scanning."""
+    print(f"\n[Stage 0] Detecting market regime...")
+    
+    indicators = ["SPY", "QQQ", "IWM", "^VIX"]
+    regime = {
+        "spy_change": 0, "qqq_change": 0, "iwm_change": 0,
+        "vix_level": 20, "vix_change": 0,
+        "regime": "NORMAL", "bias": "NEUTRAL", "label": "Mixed market",
+    }
+    
+    try:
+        t = Ticker(indicators, asynchronous=True)
+        prices = t.price
+        
+        if isinstance(prices, dict):
+            spy = prices.get("SPY", {})
+            qqq = prices.get("QQQ", {})
+            iwm = prices.get("IWM", {})
+            vix = prices.get("^VIX", {})
+            
+            if isinstance(spy, dict):
+                regime["spy_change"] = (spy.get("regularMarketChangePercent", 0) or 0) * 100
+            if isinstance(qqq, dict):
+                regime["qqq_change"] = (qqq.get("regularMarketChangePercent", 0) or 0) * 100
+            if isinstance(iwm, dict):
+                regime["iwm_change"] = (iwm.get("regularMarketChangePercent", 0) or 0) * 100
+            if isinstance(vix, dict):
+                regime["vix_level"] = vix.get("regularMarketPrice", 20) or 20
+                regime["vix_change"] = (vix.get("regularMarketChangePercent", 0) or 0) * 100
+        
+        spy_chg = regime["spy_change"]
+        vix_lv = regime["vix_level"]
+        
+        if vix_lv > 25:
+            regime["regime"] = "HIGH_VOLATILITY"
+            regime["label"] = f"⚠️ High volatility (VIX {vix_lv:.0f})"
+            regime["bias"] = "CAUTION"
+        elif spy_chg > 1.5 and regime["qqq_change"] > 1.5:
+            regime["regime"] = "RISK_ON"
+            regime["label"] = f"🟢 Strong risk-on ({spy_chg:+.1f}%)"
+            regime["bias"] = "LONG_FAVORED"
+        elif spy_chg > 0.5:
+            regime["regime"] = "BULLISH"
+            regime["label"] = f"🟢 Bullish ({spy_chg:+.1f}%)"
+            regime["bias"] = "LONG_FAVORED"
+        elif spy_chg < -1.5:
+            regime["regime"] = "RISK_OFF"
+            regime["label"] = f"🔴 Risk-off ({spy_chg:+.1f}%)"
+            regime["bias"] = "SHORT_FAVORED"
+        elif spy_chg < -0.5:
+            regime["regime"] = "BEARISH"
+            regime["label"] = f"🔴 Bearish ({spy_chg:+.1f}%)"
+            regime["bias"] = "SHORT_FAVORED"
+        elif abs(spy_chg) < 0.3 and vix_lv < 15:
+            regime["regime"] = "CHOPPY"
+            regime["label"] = f"😴 Choppy/quiet ({spy_chg:+.1f}%)"
+            regime["bias"] = "REDUCE_SIZE"
+        else:
+            regime["regime"] = "NORMAL"
+            regime["label"] = f"⚪ Normal ({spy_chg:+.1f}%)"
+            regime["bias"] = "NEUTRAL"
+        
+        print(f"  SPY: {spy_chg:+.2f}% | QQQ: {regime['qqq_change']:+.2f}% | "
+              f"IWM: {regime['iwm_change']:+.2f}% | VIX: {vix_lv:.1f}")
+        print(f"  Regime: {regime['regime']} | Bias: {regime['bias']}")
+        print(f"  Label:  {regime['label']}")
+    except Exception as e:
+        print(f"  Regime detection failed: {e}")
+    
+    return regime
 
+
+# ==============================================================
+# HELPERS
+# ==============================================================
+
+def get_avg_volume(quote, history_df=None):
+    """Try multiple volume sources."""
+    avg_vol = (
+        quote.get("averageDailyVolume3Month")
+        or quote.get("averageDailyVolume10Day")
+        or quote.get("averageVolume")
+        or quote.get("averageVolume10days")
+        or 0
+    )
+    avg_vol = avg_vol or 0
+    
+    if avg_vol == 0 and history_df is not None and len(history_df) >= 20:
+        try:
+            avg_vol = float(history_df["volume"].tail(20).mean())
+        except:
+            pass
+    
+    return avg_vol
+
+
+def get_atr_pct(history_df, periods=14):
+    """Calculate ATR as % of price."""
+    if history_df is None or len(history_df) < periods + 1:
+        return 0
+    try:
+        df = history_df.tail(periods + 1).copy()
+        df["prev_close"] = df["close"].shift(1)
+        df["tr1"] = df["high"] - df["low"]
+        df["tr2"] = abs(df["high"] - df["prev_close"])
+        df["tr3"] = abs(df["low"] - df["prev_close"])
+        df["tr"] = df[["tr1", "tr2", "tr3"]].max(axis=1)
+        atr = df["tr"].tail(periods).mean()
+        price = df["close"].iloc[-1]
+        if price > 0:
+            return (atr / price) * 100
+    except:
+        pass
+    return 0
+
+
+def has_earnings_within(symbol, calendar_all, days=2):
+    """Check if earnings within X days. Returns (within, days_to_earnings)."""
     try:
         if isinstance(calendar_all, dict):
             sym_cal = calendar_all.get(symbol, {})
@@ -110,29 +212,145 @@ def score_catalyst(symbol, calendar_all):
                             else:
                                 edate = pd.to_datetime(earnings_date)
                             now = pd.Timestamp.now(tz=edate.tz) if edate.tz else pd.Timestamp.now()
-                            days_to_earnings = (edate - now).days
-                            if 0 <= days_to_earnings <= 7:
-                                score += 15
-                                reasons.append(f"Earnings in {days_to_earnings}d")
-                            elif 8 <= days_to_earnings <= 14:
-                                score += 8
-                                reasons.append(f"Earnings in {days_to_earnings}d")
+                            days_to = (edate - now).days
+                            return (days_to >= 0 and days_to <= days), days_to
                         except:
                             pass
     except:
         pass
-
-    return score, reasons
+    return False, None
 
 
 # ==============================================================
-# LAYER 2: SHORT SQUEEZE SETUP
+# HARD REJECT FILTERS (UPGRADED PER CHATGPT)
+# ==============================================================
+
+def hard_reject(symbol, price, market_cap, avg_vol, exchange, atr_pct, earnings_within_2d):
+    """Returns (rejected, reason)."""
+    if price < 2.0:
+        return True, "price_too_low"
+    if price > 500:
+        return True, "price_too_high"
+    if market_cap < 100_000_000:
+        return True, "mkt_cap_too_small"
+    if avg_vol < 200_000:
+        return True, "avg_vol_too_low"
+    
+    # Dollar volume check (NEW)
+    dollar_vol = avg_vol * price
+    if dollar_vol < 5_000_000:
+        return True, "dollar_vol_too_low"
+    
+    if exchange and exchange not in ["NMS", "NYQ", "ASE", "NGM", "PCX", "BTS", "NCM"]:
+        return True, "bad_exchange"
+    
+    # ATR sweet spot (NEW)
+    if atr_pct > 0:
+        if atr_pct < 1.0:
+            return True, "too_low_volatility"
+        if atr_pct > 15:
+            return True, "too_volatile"
+    
+    # Earnings exclusion (NEW)
+    if earnings_within_2d:
+        return True, "earnings_imminent"
+    
+    return False, ""
+
+
+# ==============================================================
+# LAYER 1: CATALYST (FIXED)
+# ==============================================================
+
+def score_catalyst(symbol, change_pct, history_df, days_to_earnings):
+    """Catalyst score (0-20 points)."""
+    score = 0
+    reasons = []
+    
+    if days_to_earnings is not None:
+        if 3 <= days_to_earnings <= 7:
+            score += 8
+            reasons.append(f"Earnings in {days_to_earnings}d")
+        elif 8 <= days_to_earnings <= 15:
+            score += 5
+            reasons.append(f"Earnings in {days_to_earnings}d")
+    
+    if abs(change_pct) >= 15:
+        score += 8
+        reasons.append(f"Major move {change_pct:+.1f}%")
+    elif abs(change_pct) >= 8:
+        score += 5
+        reasons.append(f"Big move {change_pct:+.1f}%")
+    elif abs(change_pct) >= 4:
+        score += 3
+    
+    if history_df is not None and len(history_df) >= 23:
+        try:
+            recent_vol = history_df["volume"].tail(3).mean()
+            base_vol = history_df["volume"].iloc[-23:-3].mean()
+            if base_vol > 0:
+                vol_surge = recent_vol / base_vol
+                if vol_surge > 3:
+                    score += 5
+                    reasons.append(f"Vol surge {vol_surge:.1f}x")
+                elif vol_surge > 2:
+                    score += 3
+        except:
+            pass
+    
+    return min(score, 20), reasons
+
+
+# ==============================================================
+# LAYER 2: EXECUTION QUALITY (NEW from ChatGPT)
+# ==============================================================
+
+def score_execution(symbol, price, avg_vol, atr_pct, today_vol):
+    """Execution Quality score (0-20 points)."""
+    score = 0
+    reasons = []
+    
+    dollar_vol = avg_vol * price
+    if dollar_vol > 100_000_000:
+        score += 7
+        reasons.append(f"${dollar_vol/1e6:.0f}M liq")
+    elif dollar_vol > 50_000_000:
+        score += 5
+        reasons.append(f"${dollar_vol/1e6:.0f}M liq")
+    elif dollar_vol > 25_000_000:
+        score += 3
+    elif dollar_vol > 10_000_000:
+        score += 1
+    
+    if 2 <= atr_pct <= 7:
+        score += 5
+        reasons.append(f"ATR {atr_pct:.1f}% (clean)")
+    elif 1.5 <= atr_pct < 2 or 7 < atr_pct <= 10:
+        score += 3
+    
+    if 10 <= price <= 200:
+        score += 4
+        reasons.append("Clean price range")
+    elif 5 <= price < 10 or 200 < price <= 300:
+        score += 2
+    
+    if avg_vol > 0:
+        rvol = today_vol / avg_vol
+        if rvol > 2.5:
+            score += 4
+            reasons.append(f"RVOL {rvol:.1f}x")
+        elif rvol > 1.5:
+            score += 2
+    
+    return min(score, 20), reasons
+
+
+# ==============================================================
+# LAYER 3: SQUEEZE (DEMOTED 20→15)
 # ==============================================================
 
 def score_squeeze(symbol, key_stats_all):
-    """
-    Squeeze score (0-20 points)
-    """
+    """Squeeze score (0-15 points)."""
     score = 0
     reasons = []
     short_pct = 0
@@ -143,61 +361,54 @@ def score_squeeze(symbol, key_stats_all):
         if isinstance(key_stats_all, dict):
             sym_stats = key_stats_all.get(symbol, {})
             if isinstance(sym_stats, dict):
-                # Short interest
                 short_pct = sym_stats.get("shortPercentOfFloat", 0) or 0
                 if isinstance(short_pct, (int, float)):
                     short_pct = short_pct * 100
-
-                # Float
                 float_size = sym_stats.get("floatShares", 0) or 0
-                
-                # Short ratio (days to cover)
                 days_to_cover = sym_stats.get("shortRatio", 0) or 0
 
-                # Score short %
                 if short_pct >= 30:
-                    score += 10
-                    reasons.append(f"SI {short_pct:.0f}%")
-                elif short_pct >= 20:
                     score += 6
                     reasons.append(f"SI {short_pct:.0f}%")
-                elif short_pct >= 10:
-                    score += 3
+                elif short_pct >= 20:
+                    score += 4
+                    reasons.append(f"SI {short_pct:.0f}%")
+                elif short_pct >= 15:
+                    score += 2
                     reasons.append(f"SI {short_pct:.0f}%")
 
-                # Score float
-                if 0 < float_size < 20_000_000:
+                # Fixed float scoring per ChatGPT
+                float_M = float_size / 1e6 if float_size > 0 else 0
+                if 20 <= float_M <= 150:
                     score += 5
-                    reasons.append(f"Float {float_size/1e6:.0f}M")
-                elif 20_000_000 <= float_size < 50_000_000:
-                    score += 3
-                    reasons.append(f"Float {float_size/1e6:.0f}M")
+                    reasons.append(f"Float {float_M:.0f}M (sweet)")
+                elif 10 <= float_M < 20:
+                    score += 2
+                    reasons.append(f"Float {float_M:.0f}M ⚠️")
+                elif 150 < float_M <= 500:
+                    score += 2
 
-                # Score days to cover
                 if days_to_cover >= 7:
-                    score += 5
+                    score += 4
                     reasons.append(f"DTC {days_to_cover:.1f}d")
                 elif days_to_cover >= 5:
-                    score += 3
+                    score += 2
     except:
         pass
 
-    return score, reasons, {"short_pct": short_pct, "float": float_size, "days_to_cover": days_to_cover}
+    return min(score, 15), reasons, {"short_pct": short_pct, "float": float_size, "days_to_cover": days_to_cover}
 
 
 # ==============================================================
-# LAYER 3: SMART MONEY FLOW
+# LAYER 4: SMART MONEY (DEMOTED 15→10)
 # ==============================================================
 
 def score_smart_money(symbol, key_stats_all, history_df):
-    """
-    Smart money score (0-15 points)
-    """
+    """Smart money score (0-10 points)."""
     score = 0
     reasons = []
 
     try:
-        # Accumulation/Distribution proxy
         if history_df is not None and len(history_df) >= 20:
             df = history_df.tail(20).copy()
             df["change"] = df["close"].pct_change()
@@ -205,56 +416,37 @@ def score_smart_money(symbol, key_stats_all, history_df):
             dn_vol = df[df["change"] < 0]["volume"].mean()
             if up_vol > 0 and dn_vol > 0 and not pd.isna(up_vol) and not pd.isna(dn_vol):
                 acc_ratio = up_vol / dn_vol
-                if acc_ratio > 1.3:
-                    score += 10
-                    reasons.append(f"Accumulating {acc_ratio:.1f}x")
-                elif acc_ratio > 1.1:
+                if acc_ratio > 1.5:
                     score += 5
-                    reasons.append("Accumulating")
+                    reasons.append(f"Accumulating {acc_ratio:.1f}x")
+                elif acc_ratio > 1.2:
+                    score += 3
 
-        # Insider ownership
         if isinstance(key_stats_all, dict):
             sym_stats = key_stats_all.get(symbol, {})
             if isinstance(sym_stats, dict):
                 insider_pct = sym_stats.get("heldPercentInsiders", 0) or 0
                 if isinstance(insider_pct, (int, float)):
                     insider_pct *= 100
-                    if insider_pct >= 10:
+                    if insider_pct >= 20:
                         score += 5
                         reasons.append(f"Insider {insider_pct:.0f}%")
-                    elif insider_pct >= 5:
+                    elif insider_pct >= 10:
                         score += 3
+                        reasons.append(f"Insider {insider_pct:.0f}%")
+                    elif insider_pct >= 5:
+                        score += 1
     except:
         pass
 
-    return score, reasons
+    return min(score, 10), reasons
 
 
 # ==============================================================
-# LAYER 4: OPTIONS FLOW (Unusual Activity)
-# ==============================================================
-
-def score_options(symbol, ticker_data):
-    """
-    Options score (0-15 points)
-    Note: Yahoo options data is slow to fetch per-stock.
-    Currently uses simplified scoring based on quote data.
-    To enable full options flow, upgrade to FlowAlgo or paid API.
-    """
-    score = 0
-    reasons = []
-
-    # Placeholder — return 0 for now to keep scanner fast
-    # Future: integrate with paid options flow API
-    return score, reasons
-
-
-# ==============================================================
-# LAYER 5: SOCIAL SENTIMENT (Reddit/WSB)
+# LAYER 5: SOCIAL (UNCHANGED)
 # ==============================================================
 
 def fetch_social_data():
-    """Fetch trending stocks from ApeWisdom (free Reddit API)."""
     try:
         url = "https://apewisdom.io/api/v1.0/filter/all-stocks/page/1"
         r = requests.get(url, timeout=10)
@@ -268,32 +460,24 @@ def fetch_social_data():
                     if not ticker:
                         continue
                     
-                    # Safe integer conversion with None handling
                     def safe_int(val, default=0):
                         if val is None:
                             return default
                         try:
                             return int(val)
-                        except (ValueError, TypeError):
+                        except:
                             return default
 
                     mentions = safe_int(item.get("mentions"), 0)
-                    m_24h = safe_int(item.get("mentions_24h_ago"), 1)
-                    if m_24h == 0:
-                        m_24h = 1
+                    m_24h = safe_int(item.get("mentions_24h_ago"), 1) or 1
                     rank = safe_int(item.get("rank"), 999)
-                    rank_24h = safe_int(item.get("rank_24h_ago"), 999)
-
-                    mention_growth = mentions / m_24h if m_24h > 0 else 1
-                    rank_change = rank_24h - rank
 
                     social_map[ticker] = {
                         "mentions": mentions,
-                        "growth": mention_growth,
+                        "growth": mentions / m_24h if m_24h > 0 else 1,
                         "rank": rank,
-                        "rank_change": rank_change,
                     }
-                except Exception:
+                except:
                     continue
             return social_map
     except Exception as e:
@@ -302,13 +486,6 @@ def fetch_social_data():
 
 
 def score_social(symbol, social_map):
-    """
-    Social score (0-10 points)
-    - Top 10 trending: +10
-    - Top 25: +5
-    - Mention velocity > 3x: +5
-    - Rising rank (rank improving): +3
-    """
     score = 0
     reasons = []
 
@@ -316,10 +493,9 @@ def score_social(symbol, social_map):
         data = social_map[symbol]
         rank = data["rank"]
         growth = data["growth"]
-        rank_change = data["rank_change"]
 
         if rank <= 10:
-            score += 10
+            score += 8
             reasons.append(f"WSB #{rank}")
         elif rank <= 25:
             score += 5
@@ -328,20 +504,18 @@ def score_social(symbol, social_map):
             score += 2
 
         if growth >= 3:
-            score = min(score + 3, 10)
+            score = min(score + 2, 10)
             reasons.append(f"{growth:.1f}x mentions")
 
     return score, reasons
 
 
 # ==============================================================
-# LAYER 6: RELATIVE STRENGTH
+# LAYER 6: RELATIVE STRENGTH (15)
 # ==============================================================
 
-def score_strength(symbol, history_df, spy_df, change_pct=0):
-    """
-    Relative Strength score (0-15 points) — boosted from 10
-    """
+def score_strength(symbol, history_df, spy_df, change_pct, regime):
+    """RS score (0-15 points) with regime alignment."""
     score = 0
     reasons = []
 
@@ -349,7 +523,6 @@ def score_strength(symbol, history_df, spy_df, change_pct=0):
         return score, reasons
 
     try:
-        # Calculate returns at multiple timeframes
         timeframe_score = 0
         for period, points in [(5, 3), (20, 4), (60, 3)]:
             if len(history_df) >= period and len(spy_df) >= period:
@@ -364,7 +537,6 @@ def score_strength(symbol, history_df, spy_df, change_pct=0):
         elif timeframe_score >= 5:
             reasons.append("RS positive")
 
-        # 52-week high proximity
         high_52w = history_df["close"].tail(252).max() if len(history_df) >= 252 else history_df["close"].max()
         current = history_df["close"].iloc[-1]
         if high_52w > 0:
@@ -380,12 +552,20 @@ def score_strength(symbol, history_df, spy_df, change_pct=0):
                         score += 2
                         reasons.append("V-recovery")
 
-        # Today's move (extra 2 points for big up days)
         if change_pct > 5:
             score += 2
             reasons.append(f"Up {change_pct:.1f}% today")
         elif change_pct > 2:
             score += 1
+        
+        # Regime alignment bonus (NEW)
+        bias = regime.get("bias", "NEUTRAL")
+        if bias == "LONG_FAVORED" and change_pct > 0:
+            score += 2
+            reasons.append("Aligned w/ market")
+        elif bias == "SHORT_FAVORED" and change_pct < 0:
+            score += 2
+            reasons.append("Aligned w/ market")
     except:
         pass
 
@@ -393,18 +573,11 @@ def score_strength(symbol, history_df, spy_df, change_pct=0):
 
 
 # ==============================================================
-# LAYER 7: TECHNICAL BREAKOUT
+# LAYER 7: TECHNICAL (DEMOTED 20→15)
 # ==============================================================
 
-def score_technical(symbol, history_df, quote_data=None):
-    """
-    Technical score (0-20 points) — boosted from 5 since options is disabled
-    - Above EMA9, EMA20, SMA50: +6
-    - Volume surge today vs 20-day avg > 2x: +5
-    - Recent gap > 3%: +4
-    - Within 5% of 20-day high: +3
-    - Bullish daily candle: +2
-    """
+def score_technical(symbol, history_df):
+    """Technical score (0-15 points)."""
     score = 0
     reasons = []
 
@@ -420,32 +593,20 @@ def score_technical(symbol, history_df, quote_data=None):
         latest = df.iloc[-1]
         prev = df.iloc[-2]
 
-        # EMA stack
         if latest["close"] > latest["EMA9"] > latest["EMA20"] > latest["SMA50"]:
-            score += 6
+            score += 5
             reasons.append("EMA stack ↑")
         elif latest["close"] > latest["EMA20"]:
-            score += 3
-            reasons.append("Above EMA20")
+            score += 2
 
-        # Volume surge
-        avg_vol = df["volume"].tail(20).mean()
-        if avg_vol > 0 and latest["volume"] > avg_vol * 2:
-            score += 5
-            reasons.append(f"Vol {latest['volume']/avg_vol:.1f}x")
-        elif avg_vol > 0 and latest["volume"] > avg_vol * 1.5:
-            score += 3
-
-        # Recent gap
         if prev["close"] > 0:
             gap_pct = ((latest["open"] - prev["close"]) / prev["close"]) * 100
             if abs(gap_pct) > 3:
-                score += 4
+                score += 3
                 reasons.append(f"Gap {gap_pct:+.1f}%")
             elif abs(gap_pct) > 1.5:
-                score += 2
+                score += 1
 
-        # 20-day high proximity
         high_20 = df["close"].tail(20).max()
         if high_20 > 0:
             pct_from_high = ((high_20 - latest["close"]) / high_20) * 100
@@ -455,51 +616,37 @@ def score_technical(symbol, history_df, quote_data=None):
             elif pct_from_high < 5:
                 score += 1
 
-        # Bullish daily candle
         if latest["close"] > latest["open"] and latest["close"] > prev["close"]:
             score += 2
 
+        bar_range = latest["high"] - latest["low"]
+        if bar_range > 0:
+            close_position = (latest["close"] - latest["low"]) / bar_range
+            if close_position > 0.75:
+                score += 2
+                reasons.append("Strong close")
     except:
         pass
 
-    return min(score, 20), reasons
+    return min(score, 15), reasons
 
 
 # ==============================================================
-# QUALITY GATE (filters trash)
-# ==============================================================
-
-def passes_quality_gate(symbol, price, market_cap, avg_volume, exchange):
-    """
-    Quality gate to filter penny pumps and OTC garbage.
-    """
-    if price < 2.0 or price > 500:
-        return False, "price out of range"
-    if market_cap < 200_000_000:
-        return False, f"mkt cap ${market_cap/1e6:.0f}M"
-    if avg_volume < 500_000:
-        return False, f"avg vol {avg_volume/1e6:.1f}M"
-    if exchange and exchange not in ["NMS", "NYQ", "ASE", "NGM", "PCX", "BTS"]:
-        return False, f"exchange {exchange}"
-    return True, ""
-
-
-# ==============================================================
-# MAIN SCANNER
+# MAIN
 # ==============================================================
 
 def main():
     print("\n" + "=" * 70)
-    print("ELITE MULTI-SOURCE STOCK SCANNER")
+    print("ELITE MULTI-SOURCE STOCK SCANNER v2 (Pro-Upgraded)")
     print(f"Started: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print("=" * 70)
 
-    # Step 1: Get universe
-    print(f"\n[1/5] Building dynamic universe...")
+    regime = detect_market_regime()
+
+    print(f"\n[Stage 1] Building dynamic universe...")
     universe = get_dynamic_universe()
 
-    # Step 2: Fetch SPY for relative strength
-    print(f"\n[2/5] Fetching SPY benchmark...")
+    print(f"\n[Stage 2] Fetching SPY benchmark...")
     spy_df = None
     try:
         spy = Ticker("SPY")
@@ -509,20 +656,17 @@ def main():
     except Exception as e:
         print(f"  SPY fetch failed: {e}")
 
-    # Step 3: Fetch social data once
-    print(f"\n[3/5] Fetching Reddit/WSB sentiment data...")
+    print(f"\n[Stage 3] Fetching Reddit/WSB sentiment data...")
     social_map = fetch_social_data()
     print(f"  Got social data for {len(social_map)} tickers")
 
-    # Step 4: Fetch all stock data in batch
-    print(f"\n[4/5] Fetching market data for {len(universe)} stocks...")
+    print(f"\n[Stage 4] Fetching market data for {len(universe)} stocks...")
     print(f"  This may take 2-3 minutes...")
 
     tickers = Ticker(universe, asynchronous=True)
     quotes = tickers.price
     history = tickers.history(period="1y", interval="1d")
 
-    # Pre-fetch supporting data in batches (massive speedup)
     print(f"  Fetching key stats...")
     try:
         key_stats_all = tickers.key_stats
@@ -537,119 +681,31 @@ def main():
         print(f"  Calendar fetch failed: {e}")
         calendar_all = {}
 
-    # Step 5: Score each stock through all 7 layers
-    print(f"\n[5/5] Scoring stocks through 7 layers...\n")
+    print(f"\n[Stage 5] Hard reject + 7-layer scoring...\n")
     
-    # DEBUG: Print first 5 stocks' raw quote data
-    print(f"  DEBUG — Sample raw quote data for first 5 stocks:")
-    for sym in list(universe)[:5]:
-        q_sample = quotes.get(sym, {})
-        if isinstance(q_sample, dict):
-            # Show all volume-related fields to find which works
-            v3m = q_sample.get('averageDailyVolume3Month')
-            v10d = q_sample.get('averageDailyVolume10Day')
-            v_avg = q_sample.get('averageVolume')
-            v_today = q_sample.get('regularMarketVolume')
-            print(f"    {sym}: price={q_sample.get('regularMarketPrice', 'N/A')}, "
-                  f"mktcap={q_sample.get('marketCap', 'N/A')}")
-            print(f"        vol3m={v3m}, vol10d={v10d}, volavg={v_avg}, voltoday={v_today}, "
-                  f"exchange={q_sample.get('exchange', 'N/A')}")
-        else:
-            print(f"    {sym}: NO QUOTE DATA (type: {type(q_sample).__name__})")
-    print()
+    layer_stats = {name: {"hits": 0, "total_pts": 0, "max_seen": 0}
+                   for name in ["catalyst", "execution", "squeeze", "smart_money",
+                                "social", "strength", "technical"]}
+    score_distribution = {b: 0 for b in ["0-9","10-19","20-29","30-39","40-49","50-59","60+"]}
+    quality_reasons = {}
+    quality_filtered = 0
+    total_processed = 0
+    earnings_blocked = 0
 
     results = []
-    
-    # Layer-by-layer diagnostics
-    layer_stats = {
-        "catalyst":     {"hits": 0, "total_pts": 0, "max_seen": 0},
-        "squeeze":      {"hits": 0, "total_pts": 0, "max_seen": 0},
-        "smart_money":  {"hits": 0, "total_pts": 0, "max_seen": 0},
-        "options":      {"hits": 0, "total_pts": 0, "max_seen": 0},
-        "social":       {"hits": 0, "total_pts": 0, "max_seen": 0},
-        "strength":     {"hits": 0, "total_pts": 0, "max_seen": 0},
-        "technical":    {"hits": 0, "total_pts": 0, "max_seen": 0},
-    }
-    
-    score_distribution = {
-        "0-9":   0,
-        "10-19": 0,
-        "20-29": 0,
-        "30-39": 0,
-        "40-49": 0,
-        "50+":   0,
-    }
-    
-    quality_filtered = 0
-    no_data_count = 0
-    total_processed = 0
-    
-    # Track WHICH filter is killing stocks
-    quality_reasons = {
-        "price": 0,
-        "mkt_cap": 0,
-        "avg_vol": 0,
-        "exchange": 0,
-        "no_quote": 0,
-    }
     for symbol in universe:
         try:
-            # Get quote
             q = quotes.get(symbol, {})
             if not isinstance(q, dict):
-                quality_reasons["no_quote"] += 1
                 quality_filtered += 1
                 continue
 
             price = q.get("regularMarketPrice", 0) or 0
             change_pct = (q.get("regularMarketChangePercent", 0) or 0) * 100
-            volume = q.get("regularMarketVolume", 0) or 0
+            today_vol = q.get("regularMarketVolume", 0) or 0
             market_cap = q.get("marketCap", 0) or 0
             exchange = q.get("exchange", "")
-            
-            # Try multiple volume field names since Yahoo is inconsistent
-            avg_vol_3m = (
-                q.get("averageDailyVolume3Month")
-                or q.get("averageDailyVolume10Day")
-                or q.get("averageVolume")
-                or q.get("averageVolume10days")
-                or 0
-            )
-            avg_vol_3m = avg_vol_3m or 0
-            
-            # If still no avg volume, derive from history if available
-            if avg_vol_3m == 0:
-                try:
-                    if symbol in history.index.get_level_values(0):
-                        h_df = history.loc[symbol]
-                        if "volume" in h_df.columns and len(h_df) >= 20:
-                            avg_vol_3m = float(h_df["volume"].tail(20).mean())
-                except:
-                    pass
-            
-            # Final fallback: use today's volume
-            if avg_vol_3m == 0 and volume > 0:
-                avg_vol_3m = volume
 
-            # Granular quality gate with reason tracking
-            if price < 2.0 or price > 500:
-                quality_reasons["price"] += 1
-                quality_filtered += 1
-                continue
-            if market_cap < 200_000_000:
-                quality_reasons["mkt_cap"] += 1
-                quality_filtered += 1
-                continue
-            if avg_vol_3m < 500_000:
-                quality_reasons["avg_vol"] += 1
-                quality_filtered += 1
-                continue
-            if exchange and exchange not in ["NMS", "NYQ", "ASE", "NGM", "PCX", "BTS", "NCM"]:
-                quality_reasons["exchange"] += 1
-                quality_filtered += 1
-                continue
-
-            # Get history for this stock
             hist_df = None
             try:
                 if symbol in history.index.get_level_values(0):
@@ -659,18 +715,28 @@ def main():
             except:
                 pass
 
-            # Score all 7 layers
-            cat_score, cat_reasons = score_catalyst(symbol, calendar_all)
+            avg_vol = get_avg_volume(q, hist_df)
+            atr_pct = get_atr_pct(hist_df)
+            within_2d, days_to_earnings = has_earnings_within(symbol, calendar_all, days=2)
+            
+            rejected, reason = hard_reject(symbol, price, market_cap, avg_vol, exchange, atr_pct, within_2d)
+            if rejected:
+                quality_reasons[reason] = quality_reasons.get(reason, 0) + 1
+                quality_filtered += 1
+                if reason == "earnings_imminent":
+                    earnings_blocked += 1
+                continue
+
+            cat_score, cat_reasons = score_catalyst(symbol, change_pct, hist_df, days_to_earnings)
+            exec_score, exec_reasons = score_execution(symbol, price, avg_vol, atr_pct, today_vol)
             sq_score, sq_reasons, sq_data = score_squeeze(symbol, key_stats_all)
             sm_score, sm_reasons = score_smart_money(symbol, key_stats_all, hist_df)
-            opt_score, opt_reasons = score_options(symbol, tickers)
             soc_score, soc_reasons = score_social(symbol, social_map)
-            rs_score, rs_reasons = score_strength(symbol, hist_df, spy_df, change_pct)
-            tech_score, tech_reasons = score_technical(symbol, hist_df, q)
+            rs_score, rs_reasons = score_strength(symbol, hist_df, spy_df, change_pct, regime)
+            tech_score, tech_reasons = score_technical(symbol, hist_df)
 
-            # Track layer diagnostics
-            for name, score in [("catalyst", cat_score), ("squeeze", sq_score),
-                                 ("smart_money", sm_score), ("options", opt_score),
+            for name, score in [("catalyst", cat_score), ("execution", exec_score),
+                                 ("squeeze", sq_score), ("smart_money", sm_score),
                                  ("social", soc_score), ("strength", rs_score),
                                  ("technical", tech_score)]:
                 if score > 0:
@@ -680,10 +746,8 @@ def main():
                     layer_stats[name]["max_seen"] = score
             
             total_processed += 1
+            total = cat_score + exec_score + sq_score + sm_score + soc_score + rs_score + tech_score
 
-            total = cat_score + sq_score + sm_score + opt_score + soc_score + rs_score + tech_score
-
-            # Score distribution
             if total < 10:
                 score_distribution["0-9"] += 1
             elif total < 20:
@@ -694,27 +758,26 @@ def main():
                 score_distribution["30-39"] += 1
             elif total < 50:
                 score_distribution["40-49"] += 1
+            elif total < 60:
+                score_distribution["50-59"] += 1
             else:
-                score_distribution["50+"] += 1
+                score_distribution["60+"] += 1
 
-            # Keep all stocks scoring at least minimal points
-            if total < 10:
+            if total < 25:
                 continue
 
-            # Determine tier and tags
-            # Adjusted thresholds for Yahoo-free data reality
-            if total >= 50:
+            if total >= 75:
                 tier = "S"
-            elif total >= 35:
+            elif total >= 60:
                 tier = "1"
-            elif total >= 20:
+            elif total >= 45:
                 tier = "2"
             else:
                 tier = "3"
 
-            all_reasons = (cat_reasons + sq_reasons + sm_reasons +
-                           opt_reasons + soc_reasons + rs_reasons + tech_reasons)
-            tags = " · ".join(all_reasons[:5])  # Top 5 tags
+            all_reasons = (cat_reasons + exec_reasons + sq_reasons + sm_reasons +
+                           soc_reasons + rs_reasons + tech_reasons)
+            tags = " · ".join(all_reasons[:6])
 
             results.append({
                 "tier": tier,
@@ -723,105 +786,86 @@ def main():
                 "change_pct": round(change_pct, 2),
                 "score": total,
                 "catalyst": cat_score,
+                "execution": exec_score,
                 "squeeze": sq_score,
                 "smart_money": sm_score,
-                "options": opt_score,
                 "social": soc_score,
                 "strength": rs_score,
                 "technical": tech_score,
                 "short_pct": sq_data.get("short_pct", 0),
                 "float_M": round(sq_data.get("float", 0) / 1e6, 1),
                 "days_to_cover": round(sq_data.get("days_to_cover", 0), 1),
+                "atr_pct": round(atr_pct, 2),
+                "dollar_vol_M": round(avg_vol * price / 1e6, 1),
                 "market_cap_B": round(market_cap / 1e9, 2),
+                "days_to_earnings": days_to_earnings if days_to_earnings is not None else "—",
                 "tags": tags,
             })
 
-        except Exception as e:
+        except Exception:
             continue
 
-    # ==========================================================
-    # DIAGNOSTIC REPORT — Layer-by-Layer Analysis
-    # ==========================================================
+    # Diagnostic Report
     print(f"\n{'=' * 70}")
     print(f"  DIAGNOSTIC REPORT")
-    print(f"{'=' * 70}")
-    print(f"\n  Universe size:        {len(universe)}")
+    print(f"{'=' * 70}\n")
+    print(f"  Market Regime:        {regime['label']}")
+    print(f"  Universe size:        {len(universe)}")
     print(f"  Filtered by quality:  {quality_filtered}")
+    print(f"    - Earnings blocked: {earnings_blocked}")
     print(f"  Successfully scored:  {total_processed}")
     
-    # Show WHICH filter is killing stocks
-    print(f"\n  QUALITY GATE BREAKDOWN (which filter rejected what):")
-    print(f"  {'Filter':<14} {'Rejected':>10}")
-    print(f"  {'-' * 26}")
-    for reason, count in quality_reasons.items():
-        if count > 0:
-            print(f"  {reason:<14} {count:>10}")
+    print(f"\n  HARD REJECT BREAKDOWN:")
+    for reason, count in sorted(quality_reasons.items(), key=lambda x: -x[1]):
+        print(f"    {reason:<25} {count:>4}")
     
-    print(f"\n  LAYER HIT RATES (% of stocks getting any points):")
-    print(f"  {'Layer':<14} {'Hits':>6} {'Hit%':>7} {'AvgPts':>8} {'MaxSeen':>9} {'MaxPossible':>13}")
-    print(f"  {'-' * 60}")
-    
-    layer_max = {
-        "catalyst": 25, "squeeze": 20, "smart_money": 15, "options": 15,
-        "social": 10, "strength": 15, "technical": 20
-    }
-    
+    print(f"\n  LAYER HIT RATES:")
+    layer_max = {"catalyst": 20, "execution": 20, "squeeze": 15, "smart_money": 10,
+                 "social": 10, "strength": 15, "technical": 15}
+    print(f"  {'Layer':<14} {'Hits':>6} {'Hit%':>7} {'AvgPts':>8} {'Max':>5}/{'Possible':<8}")
+    print(f"  {'-' * 55}")
     for layer_name, stats in layer_stats.items():
         hits = stats["hits"]
         hit_pct = (hits / total_processed * 100) if total_processed > 0 else 0
         avg_pts = (stats["total_pts"] / total_processed) if total_processed > 0 else 0
         max_seen = stats["max_seen"]
-        max_possible = layer_max.get(layer_name, 0)
-        
-        # Flag problem layers
-        flag = ""
-        if hit_pct < 5:
-            flag = "  ⚠️ DEAD LAYER"
-        elif hit_pct < 20:
-            flag = "  ⚠️ low hit rate"
-        
-        print(f"  {layer_name:<14} {hits:>6} {hit_pct:>6.1f}% {avg_pts:>7.1f} {max_seen:>8.0f} {max_possible:>11}{flag}")
+        max_p = layer_max.get(layer_name, 0)
+        flag = " ⚠️" if hit_pct < 10 else ""
+        print(f"  {layer_name:<14} {hits:>6} {hit_pct:>6.1f}% {avg_pts:>7.1f} {max_seen:>4}/{max_p:<7}{flag}")
     
     print(f"\n  SCORE DISTRIBUTION:")
     for bucket, count in score_distribution.items():
-        bar_len = int(count / max(1, total_processed) * 50)
-        bar = "█" * bar_len
-        print(f"  {bucket:<8}: {count:>4} stocks  {bar}")
+        bar = "█" * int(count / max(1, total_processed) * 50)
+        print(f"  {bucket:<8}: {count:>4}  {bar}")
     
-    qualified = sum(score_distribution[b] for b in ["10-19","20-29","30-39","40-49","50+"])
-    print(f"\n  Stocks scoring 10+:   {qualified}")
-    print(f"  Stocks scoring 20+:   {sum(score_distribution[b] for b in ['20-29','30-39','40-49','50+'])}")
-    print(f"  Stocks scoring 30+:   {sum(score_distribution[b] for b in ['30-39','40-49','50+'])}")
-    print(f"  Stocks scoring 50+:   {score_distribution['50+']}")
     print(f"{'=' * 70}\n")
 
-    # Sort by score
     results = sorted(results, key=lambda x: x["score"], reverse=True)
     df = pd.DataFrame(results)
 
     if df.empty:
         print("  No stocks passed scoring threshold today.")
-        # Save empty files so workflow doesn't fail
         pd.DataFrame().to_csv("elite_watchlist.csv", index=False)
         with open("elite_watchlist.json", "w") as f:
             f.write("[]")
+        with open("market_regime.json", "w") as f:
+            json.dump(regime, f, indent=2)
         return
 
-    # Display top results
-    print(f"\n{'=' * 70}")
-    print(f"  ELITE WATCHLIST — {len(df)} setups found")
+    print(f"  ELITE WATCHLIST — {len(df)} setups")
     print(f"{'=' * 70}\n")
-
     display_cols = ["tier", "symbol", "price", "change_pct", "score",
-                    "short_pct", "float_M", "tags"]
-    print(df[display_cols].head(20).to_string(index=False))
+                    "atr_pct", "dollar_vol_M", "tags"]
+    print(df[display_cols].head(25).to_string(index=False))
 
-    # Save outputs
     df.to_csv("elite_watchlist.csv", index=False)
-    df.head(15).to_json("elite_watchlist.json", orient="records", indent=2)
+    df.head(20).to_json("elite_watchlist.json", orient="records", indent=2)
+    with open("market_regime.json", "w") as f:
+        json.dump(regime, f, indent=2)
 
     print(f"\n  Saved: elite_watchlist.csv ({len(df)} setups)")
-    print(f"  Saved: elite_watchlist.json (top 15)")
+    print(f"  Saved: elite_watchlist.json (top 20)")
+    print(f"  Saved: market_regime.json (regime info)")
     print(f"\n{'=' * 70}\n")
 
 
