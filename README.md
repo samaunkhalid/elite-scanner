@@ -1,66 +1,2485 @@
-# ⚡ Elite Stock Scanner
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta http-equiv="refresh" content="300">
+<title>Elite Stock Scanner</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    background: #0a0a0a;
+    color: #e5e5e5;
+    min-height: 100vh;
+    padding-bottom: 40px;
+}
+.header {
+    background: linear-gradient(135deg, #1a1a1a 0%, #0f0f0f 100%);
+    border-bottom: 1px solid #2a2a2a;
+    padding: 20px 24px;
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    backdrop-filter: blur(10px);
+}
+.header-content {
+    max-width: 1400px;
+    margin: 0 auto;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 12px;
+}
+.title-section h1 {
+    font-size: 22px;
+    font-weight: 600;
+    color: #fff;
+    letter-spacing: -0.02em;
+}
+.title-section .subtitle {
+    font-size: 12px;
+    color: #888;
+    margin-top: 2px;
+}
+.header-meta {
+    display: flex;
+    gap: 16px;
+    align-items: center;
+    font-size: 13px;
+}
+.market-status {
+    padding: 6px 14px;
+    border-radius: 20px;
+    background: #3b82f622;
+    color: #3b82f6;
+    border: 1px solid #3b82f644;
+    font-weight: 500;
+}
+.timestamp {
+    color: #666;
+    font-size: 12px;
+}
 
-Multi-source 7-layer conviction scoring system for finding explosive stocks **before** they move.
+.container {
+    max-width: 1400px;
+    margin: 0 auto;
+    padding: 24px;
+}
 
-## What This Does
+.stats-bar {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 12px;
+    margin-bottom: 24px;
+}
+.stat-card {
+    background: #1a1a1a;
+    border: 1px solid #2a2a2a;
+    border-radius: 12px;
+    padding: 16px;
+    text-align: center;
+}
+.stat-card.highlight {
+    border-color: #fbbf24;
+    background: rgba(251, 191, 36, 0.08);
+}
+.stat-value {
+    font-size: 28px;
+    font-weight: 600;
+    color: #fff;
+    line-height: 1;
+}
+.stat-label {
+    font-size: 11px;
+    color: #888;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-top: 6px;
+}
 
-Scans the entire stock market daily and ranks each stock through **7 layers of conviction**:
+.legend {
+    background: #1a1a1a;
+    border: 1px solid #2a2a2a;
+    border-radius: 12px;
+    padding: 14px 18px;
+    margin-bottom: 20px;
+    font-size: 12px;
+    color: #aaa;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 20px;
+    align-items: center;
+}
+.legend strong { color: #fff; }
+.legend-item { display: flex; align-items: center; gap: 6px; }
+.legend-dot { width: 10px; height: 10px; border-radius: 50%; }
 
-| Layer | Max Pts | What It Detects |
-|---|---|---|
-| 📅 **Catalyst** | 25 | Upcoming earnings, FDA dates |
-| 🧨 **Squeeze** | 20 | High short interest + low float |
-| 💰 **Smart Money** | 15 | Institutional accumulation patterns |
-| 📞 **Options** | 15 | Unusual options activity |
-| 🐦 **Social** | 10 | Reddit/WSB mention velocity |
-| 💪 **Strength** | 10 | Relative strength vs SPY |
-| 📈 **Technical** | 5 | Breakout setup |
+.regime-banner {
+    background: linear-gradient(135deg, #1a1a1a 0%, #161616 100%);
+    border: 1px solid #2a2a2a;
+    border-radius: 12px;
+    padding: 16px 20px;
+    margin-bottom: 20px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 12px;
+}
+.regime-label {
+    font-size: 16px;
+    font-weight: 600;
+    color: #fff;
+}
+.regime-data {
+    display: flex;
+    gap: 16px;
+    align-items: center;
+    font-size: 13px;
+    color: #aaa;
+    flex-wrap: wrap;
+}
+.regime-data strong { color: #fff; }
+.bias-pill {
+    padding: 4px 12px;
+    border-radius: 20px;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+}
 
-**Total: 100 points**
+.cards-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
+    gap: 16px;
+}
 
-## Tier System
+.card {
+    background: #161616;
+    border: 1px solid #2a2a2a;
+    border-radius: 14px;
+    padding: 18px;
+    transition: all 0.2s;
+    position: relative;
+    overflow: hidden;
+}
+.card:hover {
+    transform: translateY(-2px);
+    border-color: #3a3a3a;
+}
 
-- **⭐ Tier S (75+)** — Highest conviction, multi-layer alignment
-- **🟢 Tier 1 (60-74)** — Strong setup, multiple confirmations
-- **🔵 Tier 2 (45-59)** — Worth watching
-- **⚪ Tier 3 (35-44)** — Honorable mention
+.card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    margin-bottom: 10px;
+}
+.card-left {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+.tier-badge {
+    display: inline-block;
+    padding: 3px 10px;
+    border-radius: 6px;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    width: fit-content;
+}
+.symbol {
+    font-size: 24px;
+    font-weight: 700;
+    color: #fff;
+    letter-spacing: -0.02em;
+}
+.sector-pill {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 11px;
+    background: #2a2a2a;
+    color: #aaa;
+    width: fit-content;
+}
+.card-right {
+    text-align: right;
+}
+.price {
+    font-size: 22px;
+    font-weight: 600;
+    color: #fff;
+}
+.change {
+    font-size: 14px;
+    font-weight: 500;
+    margin-top: 2px;
+}
 
-## Setup
+.setup-type {
+    background: #0f0f0f;
+    border: 1px solid #2a2a2a;
+    border-radius: 8px;
+    padding: 8px 12px;
+    font-size: 13px;
+    font-weight: 500;
+    color: #fff;
+    margin: 12px 0;
+    text-align: center;
+}
 
-1. **Fork or copy** this repo to your GitHub account
-2. Go to **Settings → Actions → General → Workflow permissions** and select "Read and write permissions"
-3. Go to **Settings → Pages → Source: Deploy from branch → main / root**
-4. Wait 60 seconds, then visit `https://YOUR_USERNAME.github.io/REPO_NAME/dashboard.html`
+.tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 14px;
+}
+.tag {
+    background: rgba(99, 102, 241, 0.12);
+    color: #a5b4fc;
+    border: 1px solid rgba(99, 102, 241, 0.3);
+    padding: 3px 10px;
+    border-radius: 12px;
+    font-size: 11px;
+    font-weight: 500;
+}
 
-## Schedule
+.score-section {
+    background: #0f0f0f;
+    border-radius: 8px;
+    padding: 12px;
+    margin-bottom: 12px;
+}
+.total-score {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 10px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid #2a2a2a;
+}
+.total-label {
+    font-size: 11px;
+    color: #888;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+.total-value {
+    font-size: 20px;
+    font-weight: 700;
+}
+.score-breakdown {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+.score-row {
+    display: grid;
+    grid-template-columns: 40px 1fr 50px;
+    gap: 8px;
+    align-items: center;
+    font-size: 11px;
+}
+.score-label {
+    color: #888;
+    font-weight: 500;
+}
+.score-bar-bg {
+    height: 6px;
+    background: #1a1a1a;
+    border-radius: 3px;
+    overflow: hidden;
+}
+.score-bar-fill {
+    height: 100%;
+    border-radius: 3px;
+    transition: width 0.3s;
+}
+.score-value {
+    color: #aaa;
+    text-align: right;
+}
 
-The scanner runs automatically:
-- 9:00 AM ET (8:00 PM Bangkok) — Pre-market scan
-- 10:30 AM ET (9:30 PM Bangkok) — Mid-morning update
-- 1:00 PM ET (12:00 AM Bangkok) — Afternoon update
+.squeeze-data {
+    background: rgba(239, 68, 68, 0.05);
+    border: 1px solid rgba(239, 68, 68, 0.15);
+    border-radius: 8px;
+    padding: 10px 12px;
+    margin-bottom: 12px;
+}
+.data-row {
+    display: flex;
+    justify-content: space-between;
+    font-size: 12px;
+    padding: 3px 0;
+}
+.data-label {
+    color: #888;
+}
+.data-value {
+    color: #fff;
+    font-weight: 500;
+}
 
-## Files
+.card-footer {
+    display: flex;
+    gap: 6px;
+}
+.action-btn {
+    flex: 1;
+    background: #1f1f1f;
+    border: 1px solid #2a2a2a;
+    color: #ccc;
+    text-decoration: none;
+    padding: 8px;
+    border-radius: 6px;
+    font-size: 11px;
+    text-align: center;
+    transition: all 0.15s;
+}
+.action-btn:hover {
+    background: #2a2a2a;
+    color: #fff;
+}
 
-- `elite_scanner.py` — Main scoring engine
-- `elite_dashboard.py` — Dashboard builder
-- `.github/workflows/scanner.yml` — Automation schedule
-- `elite_watchlist.csv` — All ranked stocks
-- `elite_watchlist.json` — Top 15 (used by dashboard)
-- `dashboard.html` — Live UI
+.empty-state {
+    text-align: center;
+    padding: 60px 20px;
+    color: #666;
+}
+.empty-state h3 { color: #aaa; margin-bottom: 8px; }
 
-## Manual Run
+@media (max-width: 600px) {
+    .cards-grid { grid-template-columns: 1fr; }
+    .header-meta { flex-direction: column; align-items: flex-start; }
+}
+</style>
+</head>
+<body>
+<div class="header">
+    <div class="header-content">
+        <div class="title-section">
+            <h1>⚡ Elite Stock Scanner</h1>
+            <div class="subtitle">7-Layer Conviction Scoring · Updated 2026-05-07 18:59:04</div>
+        </div>
+        <div class="header-meta">
+            <span class="market-status">Pre-Market</span>
+            <span class="timestamp">NY: 07:59</span>
+        </div>
+    </div>
+</div>
 
-Click **Actions → Elite Scanner → Run workflow** to scan immediately.
+<div class="container">
+    
+        <div class="regime-banner" style="border-left: 4px solid #6b7280;">
+            <div class="regime-label">⚪ Normal (-0.4%)</div>
+            <div class="regime-data">
+                <span>SPY: <strong style="color:#ef4444;">-0.38%</strong></span>
+                <span>QQQ: <strong style="color:#ef4444;">-0.27%</strong></span>
+                <span>IWM: <strong style="color:#ef4444;">-1.68%</strong></span>
+                <span>VIX: <strong>17.1</strong></span>
+                <span class="bias-pill" style="background:#6b728022;color:#6b7280;">NEUTRAL</span>
+            </div>
+        </div>
+        
+    <div class="stats-bar">
+        <div class="stat-card highlight">
+            <div class="stat-value" style="color:#fbbf24;">2</div>
+            <div class="stat-label">⭐ Tier S</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-value" style="color:#10b981;">18</div>
+            <div class="stat-label">Tier 1</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-value" style="color:#3b82f6;">0</div>
+            <div class="stat-label">Tier 2</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-value" style="color:#6b7280;">0</div>
+            <div class="stat-label">Tier 3</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-value">20</div>
+            <div class="stat-label">Total Setups</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-value">65</div>
+            <div class="stat-label">Avg Score</div>
+        </div>
+    </div>
 
-## Local Testing
+    <div class="legend">
+        <strong>Conviction Layers:</strong>
+        <span class="legend-item"><span class="legend-dot" style="background:#a855f7;"></span>CAT (Catalyst /20)</span>
+        <span class="legend-item"><span class="legend-dot" style="background:#14b8a6;"></span>EXEC (Execution /20)</span>
+        <span class="legend-item"><span class="legend-dot" style="background:#ef4444;"></span>SQZ (Squeeze /15)</span>
+        <span class="legend-item"><span class="legend-dot" style="background:#3b82f6;"></span>SM (Smart Money /10)</span>
+        <span class="legend-item"><span class="legend-dot" style="background:#f59e0b;"></span>SOC (Social /10)</span>
+        <span class="legend-item"><span class="legend-dot" style="background:#06b6d4;"></span>RS (Strength /15)</span>
+        <span class="legend-item"><span class="legend-dot" style="background:#8b5cf6;"></span>TECH (Technical /15)</span>
+    </div>
 
-```bash
-pip install -r requirements.txt
-python elite_scanner.py
-python elite_dashboard.py
-# Open dashboard.html in browser
-```
+    <div class="cards-grid">
+    <div class="card" style="border-left: 3px solid #fbbf24; background: rgba(251, 191, 36, 0.12);">
+        <div class="card-header">
+            <div class="card-left">
+                <div class="tier-badge" style="background:#fbbf24;color:#0a0a0a;">TIER S</div>
+                <div class="symbol">FLNC</div>
+                <div class="sector-pill">Other</div>
+            </div>
+            <div class="card-right">
+                <div class="price">$19.29</div>
+                <div class="change" style="color:#10b981;">+42.26%</div>
+            </div>
+        </div>
+        
+        <div class="setup-type">💎 CLEAN LIQUIDITY</div>
+        
+        <div class="tags"><span class="tag">Major move +42.3%</span><span class="tag">Vol surge 3.8x</span><span class="tag">$129M liq</span><span class="tag">Clean price range</span><span class="tag">RVOL 5.8x</span><span class="tag">SI 37%</span></div>
+        
+        <div class="score-section">
+            <div class="total-score">
+                <span class="total-label">Conviction Score</span>
+                <span class="total-value" style="color:#fbbf24;">78/100</span>
+            </div>
+            <div class="score-breakdown">
+                
+            <div class="score-row">
+                <span class="score-label">CAT</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:65.0%;background:#a855f7;"></div>
+                </div>
+                <span class="score-value">13/20</span>
+            </div>
+        
+            <div class="score-row">
+                <span class="score-label">EXEC</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:90.0%;background:#14b8a6;"></div>
+                </div>
+                <span class="score-value">18/20</span>
+            </div>
+        
+            <div class="score-row">
+                <span class="score-label">SQZ</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:86.66666666666667%;background:#ef4444;"></div>
+                </div>
+                <span class="score-value">13/15</span>
+            </div>
+        
+            <div class="score-row">
+                <span class="score-label">SM</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:80.0%;background:#3b82f6;"></div>
+                </div>
+                <span class="score-value">8/10</span>
+            </div>
+        
+            <div class="score-row">
+                <span class="score-label">SOC</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:20.0%;background:#f59e0b;"></div>
+                </div>
+                <span class="score-value">2/10</span>
+            </div>
+        
+            <div class="score-row">
+                <span class="score-label">RS</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:80.0%;background:#06b6d4;"></div>
+                </div>
+                <span class="score-value">12/15</span>
+            </div>
+        
+            <div class="score-row">
+                <span class="score-label">TECH</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:80.0%;background:#8b5cf6;"></div>
+                </div>
+                <span class="score-value">12/15</span>
+            </div>
+        
+            </div>
+        </div>
+        
+        <div class="squeeze-data">
+            <div class="data-row">
+                <span class="data-label">Short %</span>
+                <span class="data-value" style="color:#ef4444;">37%</span>
+            </div>
+        
+            <div class="data-row">
+                <span class="data-label">Float</span>
+                <span class="data-value">97.0M</span>
+            </div>
+        
+            <div class="data-row">
+                <span class="data-label">Days to Cover</span>
+                <span class="data-value" style="color:#f59e0b;">6.8d</span>
+            </div>
+        </div>
+        
+        <div class="card-footer">
+            <a href="https://www.tradingview.com/chart/?symbol=FLNC" target="_blank" class="action-btn">📊 Chart</a>
+            <a href="https://finance.yahoo.com/quote/FLNC" target="_blank" class="action-btn">📈 Yahoo</a>
+            <a href="https://stocktwits.com/symbol/FLNC" target="_blank" class="action-btn">💬 Twits</a>
+        </div>
+    </div>
+    
+    <div class="card" style="border-left: 3px solid #fbbf24; background: rgba(251, 191, 36, 0.12);">
+        <div class="card-header">
+            <div class="card-left">
+                <div class="tier-badge" style="background:#fbbf24;color:#0a0a0a;">TIER S</div>
+                <div class="symbol">AAON</div>
+                <div class="sector-pill">Other</div>
+            </div>
+            <div class="card-right">
+                <div class="price">$127.40</div>
+                <div class="change" style="color:#10b981;">+29.60%</div>
+            </div>
+        </div>
+        
+        <div class="setup-type">💎 CLEAN LIQUIDITY</div>
+        
+        <div class="tags"><span class="tag">Major move +29.6%</span><span class="tag">Vol surge 3.8x</span><span class="tag">$150M liq</span><span class="tag">ATR 6.8% (clean)</span><span class="tag">Clean price range</span><span class="tag">RVOL 5.0x</span></div>
+        
+        <div class="score-section">
+            <div class="total-score">
+                <span class="total-label">Conviction Score</span>
+                <span class="total-value" style="color:#fbbf24;">76/100</span>
+            </div>
+            <div class="score-breakdown">
+                
+            <div class="score-row">
+                <span class="score-label">CAT</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:65.0%;background:#a855f7;"></div>
+                </div>
+                <span class="score-value">13/20</span>
+            </div>
+        
+            <div class="score-row">
+                <span class="score-label">EXEC</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:100.0%;background:#14b8a6;"></div>
+                </div>
+                <span class="score-value">20/20</span>
+            </div>
+        
+            <div class="score-row">
+                <span class="score-label">SQZ</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:60.0%;background:#ef4444;"></div>
+                </div>
+                <span class="score-value">9/15</span>
+            </div>
+        
+            <div class="score-row">
+                <span class="score-label">SM</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:80.0%;background:#3b82f6;"></div>
+                </div>
+                <span class="score-value">8/10</span>
+            </div>
+        
+            <div class="score-row">
+                <span class="score-label">SOC</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:0.0%;background:#f59e0b;"></div>
+                </div>
+                <span class="score-value">0/10</span>
+            </div>
+        
+            <div class="score-row">
+                <span class="score-label">RS</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:100.0%;background:#06b6d4;"></div>
+                </div>
+                <span class="score-value">15/15</span>
+            </div>
+        
+            <div class="score-row">
+                <span class="score-label">TECH</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:73.33333333333333%;background:#8b5cf6;"></div>
+                </div>
+                <span class="score-value">11/15</span>
+            </div>
+        
+            </div>
+        </div>
+        
+        <div class="squeeze-data">
+            <div class="data-row">
+                <span class="data-label">Float</span>
+                <span class="data-value">67.7M</span>
+            </div>
+        
+            <div class="data-row">
+                <span class="data-label">Days to Cover</span>
+                <span class="data-value" style="color:#f59e0b;">9.3d</span>
+            </div>
+        </div>
+        
+        <div class="card-footer">
+            <a href="https://www.tradingview.com/chart/?symbol=AAON" target="_blank" class="action-btn">📊 Chart</a>
+            <a href="https://finance.yahoo.com/quote/AAON" target="_blank" class="action-btn">📈 Yahoo</a>
+            <a href="https://stocktwits.com/symbol/AAON" target="_blank" class="action-btn">💬 Twits</a>
+        </div>
+    </div>
+    
+    <div class="card" style="border-left: 3px solid #10b981; background: rgba(16, 185, 129, 0.10);">
+        <div class="card-header">
+            <div class="card-left">
+                <div class="tier-badge" style="background:#10b981;color:#0a0a0a;">TIER 1</div>
+                <div class="symbol">FUN</div>
+                <div class="sector-pill">Other</div>
+            </div>
+            <div class="card-right">
+                <div class="price">$22.92</div>
+                <div class="change" style="color:#10b981;">+16.38%</div>
+            </div>
+        </div>
+        
+        <div class="setup-type">💎 CLEAN LIQUIDITY</div>
+        
+        <div class="tags"><span class="tag">Major move +16.4%</span><span class="tag">ATR 5.3% (clean)</span><span class="tag">Clean price range</span><span class="tag">RVOL 3.0x</span><span class="tag">SI 24%</span><span class="tag">Float 94M (sweet)</span></div>
+        
+        <div class="score-section">
+            <div class="total-score">
+                <span class="total-label">Conviction Score</span>
+                <span class="total-value" style="color:#10b981;">72/100</span>
+            </div>
+            <div class="score-breakdown">
+                
+            <div class="score-row">
+                <span class="score-label">CAT</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:55.00000000000001%;background:#a855f7;"></div>
+                </div>
+                <span class="score-value">11/20</span>
+            </div>
+        
+            <div class="score-row">
+                <span class="score-label">EXEC</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:80.0%;background:#14b8a6;"></div>
+                </div>
+                <span class="score-value">16/20</span>
+            </div>
+        
+            <div class="score-row">
+                <span class="score-label">SQZ</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:86.66666666666667%;background:#ef4444;"></div>
+                </div>
+                <span class="score-value">13/15</span>
+            </div>
+        
+            <div class="score-row">
+                <span class="score-label">SM</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:50.0%;background:#3b82f6;"></div>
+                </div>
+                <span class="score-value">5/10</span>
+            </div>
+        
+            <div class="score-row">
+                <span class="score-label">SOC</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:0.0%;background:#f59e0b;"></div>
+                </div>
+                <span class="score-value">0/10</span>
+            </div>
+        
+            <div class="score-row">
+                <span class="score-label">RS</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:80.0%;background:#06b6d4;"></div>
+                </div>
+                <span class="score-value">12/15</span>
+            </div>
+        
+            <div class="score-row">
+                <span class="score-label">TECH</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:100.0%;background:#8b5cf6;"></div>
+                </div>
+                <span class="score-value">15/15</span>
+            </div>
+        
+            </div>
+        </div>
+        
+        <div class="squeeze-data">
+            <div class="data-row">
+                <span class="data-label">Short %</span>
+                <span class="data-value" style="color:#ef4444;">24%</span>
+            </div>
+        
+            <div class="data-row">
+                <span class="data-label">Float</span>
+                <span class="data-value">94.0M</span>
+            </div>
+        
+            <div class="data-row">
+                <span class="data-label">Days to Cover</span>
+                <span class="data-value" style="color:#f59e0b;">11.0d</span>
+            </div>
+        </div>
+        
+        <div class="card-footer">
+            <a href="https://www.tradingview.com/chart/?symbol=FUN" target="_blank" class="action-btn">📊 Chart</a>
+            <a href="https://finance.yahoo.com/quote/FUN" target="_blank" class="action-btn">📈 Yahoo</a>
+            <a href="https://stocktwits.com/symbol/FUN" target="_blank" class="action-btn">💬 Twits</a>
+        </div>
+    </div>
+    
+    <div class="card" style="border-left: 3px solid #10b981; background: rgba(16, 185, 129, 0.10);">
+        <div class="card-header">
+            <div class="card-left">
+                <div class="tier-badge" style="background:#10b981;color:#0a0a0a;">TIER 1</div>
+                <div class="symbol">XMTR</div>
+                <div class="sector-pill">Other</div>
+            </div>
+            <div class="card-right">
+                <div class="price">$78.49</div>
+                <div class="change" style="color:#10b981;">+39.17%</div>
+            </div>
+        </div>
+        
+        <div class="setup-type">💎 CLEAN LIQUIDITY</div>
+        
+        <div class="tags"><span class="tag">Major move +39.2%</span><span class="tag">$58M liq</span><span class="tag">ATR 6.0% (clean)</span><span class="tag">Clean price range</span><span class="tag">RVOL 3.6x</span><span class="tag">Float 44M (sweet)</span></div>
+        
+        <div class="score-section">
+            <div class="total-score">
+                <span class="total-label">Conviction Score</span>
+                <span class="total-value" style="color:#10b981;">70/100</span>
+            </div>
+            <div class="score-breakdown">
+                
+            <div class="score-row">
+                <span class="score-label">CAT</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:55.00000000000001%;background:#a855f7;"></div>
+                </div>
+                <span class="score-value">11/20</span>
+            </div>
+        
+            <div class="score-row">
+                <span class="score-label">EXEC</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:90.0%;background:#14b8a6;"></div>
+                </div>
+                <span class="score-value">18/20</span>
+            </div>
+        
+            <div class="score-row">
+                <span class="score-label">SQZ</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:46.666666666666664%;background:#ef4444;"></div>
+                </div>
+                <span class="score-value">7/15</span>
+            </div>
+        
+            <div class="score-row">
+                <span class="score-label">SM</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:60.0%;background:#3b82f6;"></div>
+                </div>
+                <span class="score-value">6/10</span>
+            </div>
+        
+            <div class="score-row">
+                <span class="score-label">SOC</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:0.0%;background:#f59e0b;"></div>
+                </div>
+                <span class="score-value">0/10</span>
+            </div>
+        
+            <div class="score-row">
+                <span class="score-label">RS</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:100.0%;background:#06b6d4;"></div>
+                </div>
+                <span class="score-value">15/15</span>
+            </div>
+        
+            <div class="score-row">
+                <span class="score-label">TECH</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:86.66666666666667%;background:#8b5cf6;"></div>
+                </div>
+                <span class="score-value">13/15</span>
+            </div>
+        
+            </div>
+        </div>
+        
+        <div class="squeeze-data">
+            <div class="data-row">
+                <span class="data-label">Float</span>
+                <span class="data-value">44.5M</span>
+            </div>
+        
+            <div class="data-row">
+                <span class="data-label">Days to Cover</span>
+                <span class="data-value" style="color:#f59e0b;">6.0d</span>
+            </div>
+        </div>
+        
+        <div class="card-footer">
+            <a href="https://www.tradingview.com/chart/?symbol=XMTR" target="_blank" class="action-btn">📊 Chart</a>
+            <a href="https://finance.yahoo.com/quote/XMTR" target="_blank" class="action-btn">📈 Yahoo</a>
+            <a href="https://stocktwits.com/symbol/XMTR" target="_blank" class="action-btn">💬 Twits</a>
+        </div>
+    </div>
+    
+    <div class="card" style="border-left: 3px solid #10b981; background: rgba(16, 185, 129, 0.10);">
+        <div class="card-header">
+            <div class="card-left">
+                <div class="tier-badge" style="background:#10b981;color:#0a0a0a;">TIER 1</div>
+                <div class="symbol">SEZL</div>
+                <div class="sector-pill">Other</div>
+            </div>
+            <div class="card-right">
+                <div class="price">$101.64</div>
+                <div class="change" style="color:#10b981;">+18.15%</div>
+            </div>
+        </div>
+        
+        <div class="setup-type">💎 CLEAN LIQUIDITY</div>
+        
+        <div class="tags"><span class="tag">Major move +18.2%</span><span class="tag">$88M liq</span><span class="tag">ATR 6.9% (clean)</span><span class="tag">Clean price range</span><span class="tag">RVOL 3.2x</span><span class="tag">SI 27%</span></div>
+        
+        <div class="score-section">
+            <div class="total-score">
+                <span class="total-label">Conviction Score</span>
+                <span class="total-value" style="color:#10b981;">69/100</span>
+            </div>
+            <div class="score-breakdown">
+                
+            <div class="score-row">
+                <span class="score-label">CAT</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:40.0%;background:#a855f7;"></div>
+                </div>
+                <span class="score-value">8/20</span>
+            </div>
+        
+            <div class="score-row">
+                <span class="score-label">EXEC</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:90.0%;background:#14b8a6;"></div>
+                </div>
+                <span class="score-value">18/20</span>
+            </div>
+        
+            <div class="score-row">
+                <span class="score-label">SQZ</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:53.333333333333336%;background:#ef4444;"></div>
+                </div>
+                <span class="score-value">8/15</span>
+            </div>
+        
+            <div class="score-row">
+                <span class="score-label">SM</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:100.0%;background:#3b82f6;"></div>
+                </div>
+                <span class="score-value">10/10</span>
+            </div>
+        
+            <div class="score-row">
+                <span class="score-label">SOC</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:0.0%;background:#f59e0b;"></div>
+                </div>
+                <span class="score-value">0/10</span>
+            </div>
+        
+            <div class="score-row">
+                <span class="score-label">RS</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:80.0%;background:#06b6d4;"></div>
+                </div>
+                <span class="score-value">12/15</span>
+            </div>
+        
+            <div class="score-row">
+                <span class="score-label">TECH</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:86.66666666666667%;background:#8b5cf6;"></div>
+                </div>
+                <span class="score-value">13/15</span>
+            </div>
+        
+            </div>
+        </div>
+        
+        <div class="squeeze-data">
+            <div class="data-row">
+                <span class="data-label">Short %</span>
+                <span class="data-value" style="color:#ef4444;">27%</span>
+            </div>
+        
+            <div class="data-row">
+                <span class="data-label">Float</span>
+                <span class="data-value">17.1M</span>
+            </div>
+        
+            <div class="data-row">
+                <span class="data-label">Days to Cover</span>
+                <span class="data-value" style="color:#f59e0b;">6.7d</span>
+            </div>
+        </div>
+        
+        <div class="card-footer">
+            <a href="https://www.tradingview.com/chart/?symbol=SEZL" target="_blank" class="action-btn">📊 Chart</a>
+            <a href="https://finance.yahoo.com/quote/SEZL" target="_blank" class="action-btn">📈 Yahoo</a>
+            <a href="https://stocktwits.com/symbol/SEZL" target="_blank" class="action-btn">💬 Twits</a>
+        </div>
+    </div>
+    
+    <div class="card" style="border-left: 3px solid #10b981; background: rgba(16, 185, 129, 0.10);">
+        <div class="card-header">
+            <div class="card-left">
+                <div class="tier-badge" style="background:#10b981;color:#0a0a0a;">TIER 1</div>
+                <div class="symbol">HIMX</div>
+                <div class="sector-pill">Other</div>
+            </div>
+            <div class="card-right">
+                <div class="price">$16.05</div>
+                <div class="change" style="color:#10b981;">+30.17%</div>
+            </div>
+        </div>
+        
+        <div class="setup-type">💎 CLEAN LIQUIDITY</div>
+        
+        <div class="tags"><span class="tag">Major move +30.2%</span><span class="tag">Vol surge 3.7x</span><span class="tag">$63M liq</span><span class="tag">Clean price range</span><span class="tag">RVOL 5.8x</span><span class="tag">Accumulating 1.7x</span></div>
+        
+        <div class="score-section">
+            <div class="total-score">
+                <span class="total-label">Conviction Score</span>
+                <span class="total-value" style="color:#10b981;">69/100</span>
+            </div>
+            <div class="score-breakdown">
+                
+            <div class="score-row">
+                <span class="score-label">CAT</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:65.0%;background:#a855f7;"></div>
+                </div>
+                <span class="score-value">13/20</span>
+            </div>
+        
+            <div class="score-row">
+                <span class="score-label">EXEC</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:80.0%;background:#14b8a6;"></div>
+                </div>
+                <span class="score-value">16/20</span>
+            </div>
+        
+            <div class="score-row">
+                <span class="score-label">SQZ</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:13.333333333333334%;background:#ef4444;"></div>
+                </div>
+                <span class="score-value">2/15</span>
+            </div>
+        
+            <div class="score-row">
+                <span class="score-label">SM</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:100.0%;background:#3b82f6;"></div>
+                </div>
+                <span class="score-value">10/10</span>
+            </div>
+        
+            <div class="score-row">
+                <span class="score-label">SOC</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:0.0%;background:#f59e0b;"></div>
+                </div>
+                <span class="score-value">0/10</span>
+            </div>
+        
+            <div class="score-row">
+                <span class="score-label">RS</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:100.0%;background:#06b6d4;"></div>
+                </div>
+                <span class="score-value">15/15</span>
+            </div>
+        
+            <div class="score-row">
+                <span class="score-label">TECH</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:86.66666666666667%;background:#8b5cf6;"></div>
+                </div>
+                <span class="score-value">13/15</span>
+            </div>
+        
+            </div>
+        </div>
+        
+        <div class="squeeze-data">
+            <div class="data-row">
+                <span class="data-label">Float</span>
+                <span class="data-value">247.1M</span>
+            </div>
+        </div>
+        
+        <div class="card-footer">
+            <a href="https://www.tradingview.com/chart/?symbol=HIMX" target="_blank" class="action-btn">📊 Chart</a>
+            <a href="https://finance.yahoo.com/quote/HIMX" target="_blank" class="action-btn">📈 Yahoo</a>
+            <a href="https://stocktwits.com/symbol/HIMX" target="_blank" class="action-btn">💬 Twits</a>
+        </div>
+    </div>
+    
+    <div class="card" style="border-left: 3px solid #10b981; background: rgba(16, 185, 129, 0.10);">
+        <div class="card-header">
+            <div class="card-left">
+                <div class="tier-badge" style="background:#10b981;color:#0a0a0a;">TIER 1</div>
+                <div class="symbol">PTRN</div>
+                <div class="sector-pill">Other</div>
+            </div>
+            <div class="card-right">
+                <div class="price">$16.33</div>
+                <div class="change" style="color:#10b981;">+14.60%</div>
+            </div>
+        </div>
+        
+        <div class="setup-type">📈 BREAKOUT</div>
+        
+        <div class="tags"><span class="tag">Big move +14.6%</span><span class="tag">Vol surge 3.5x</span><span class="tag">ATR 4.3% (clean)</span><span class="tag">Clean price range</span><span class="tag">RVOL 4.1x</span><span class="tag">Float 36M (sweet)</span></div>
+        
+        <div class="score-section">
+            <div class="total-score">
+                <span class="total-label">Conviction Score</span>
+                <span class="total-value" style="color:#10b981;">66/100</span>
+            </div>
+            <div class="score-breakdown">
+                
+            <div class="score-row">
+                <span class="score-label">CAT</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:50.0%;background:#a855f7;"></div>
+                </div>
+                <span class="score-value">10/20</span>
+            </div>
+        
+            <div class="score-row">
+                <span class="score-label">EXEC</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:70.0%;background:#14b8a6;"></div>
+                </div>
+                <span class="score-value">14/20</span>
+            </div>
+        
+            <div class="score-row">
+                <span class="score-label">SQZ</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:33.33333333333333%;background:#ef4444;"></div>
+                </div>
+                <span class="score-value">5/15</span>
+            </div>
+        
+            <div class="score-row">
+                <span class="score-label">SM</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:100.0%;background:#3b82f6;"></div>
+                </div>
+                <span class="score-value">10/10</span>
+            </div>
+        
+            <div class="score-row">
+                <span class="score-label">SOC</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:0.0%;background:#f59e0b;"></div>
+                </div>
+                <span class="score-value">0/10</span>
+            </div>
+        
+            <div class="score-row">
+                <span class="score-label">RS</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:80.0%;background:#06b6d4;"></div>
+                </div>
+                <span class="score-value">12/15</span>
+            </div>
+        
+            <div class="score-row">
+                <span class="score-label">TECH</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:100.0%;background:#8b5cf6;"></div>
+                </div>
+                <span class="score-value">15/15</span>
+            </div>
+        
+            </div>
+        </div>
+        
+        <div class="squeeze-data">
+            <div class="data-row">
+                <span class="data-label">Float</span>
+                <span class="data-value">36.4M</span>
+            </div>
+        
+            <div class="data-row">
+                <span class="data-label">Days to Cover</span>
+                <span class="data-value" style="color:#f59e0b;">4.6d</span>
+            </div>
+        </div>
+        
+        <div class="card-footer">
+            <a href="https://www.tradingview.com/chart/?symbol=PTRN" target="_blank" class="action-btn">📊 Chart</a>
+            <a href="https://finance.yahoo.com/quote/PTRN" target="_blank" class="action-btn">📈 Yahoo</a>
+            <a href="https://stocktwits.com/symbol/PTRN" target="_blank" class="action-btn">💬 Twits</a>
+        </div>
+    </div>
+    
+    <div class="card" style="border-left: 3px solid #10b981; background: rgba(16, 185, 129, 0.10);">
+        <div class="card-header">
+            <div class="card-left">
+                <div class="tier-badge" style="background:#10b981;color:#0a0a0a;">TIER 1</div>
+                <div class="symbol">RXO</div>
+                <div class="sector-pill">Other</div>
+            </div>
+            <div class="card-right">
+                <div class="price">$23.14</div>
+                <div class="change" style="color:#10b981;">+17.97%</div>
+            </div>
+        </div>
+        
+        <div class="setup-type">💪 RELATIVE STRENGTH</div>
+        
+        <div class="tags"><span class="tag">Major move +18.0%</span><span class="tag">ATR 5.3% (clean)</span><span class="tag">Clean price range</span><span class="tag">SI 24%</span><span class="tag">Float 126M (sweet)</span><span class="tag">DTC 7.3d</span></div>
+        
+        <div class="score-section">
+            <div class="total-score">
+                <span class="total-label">Conviction Score</span>
+                <span class="total-value" style="color:#10b981;">65/100</span>
+            </div>
+            <div class="score-breakdown">
+                
+            <div class="score-row">
+                <span class="score-label">CAT</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:40.0%;background:#a855f7;"></div>
+                </div>
+                <span class="score-value">8/20</span>
+            </div>
+        
+            <div class="score-row">
+                <span class="score-label">EXEC</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:70.0%;background:#14b8a6;"></div>
+                </div>
+                <span class="score-value">14/20</span>
+            </div>
+        
+            <div class="score-row">
+                <span class="score-label">SQZ</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:86.66666666666667%;background:#ef4444;"></div>
+                </div>
+                <span class="score-value">13/15</span>
+            </div>
+        
+            <div class="score-row">
+                <span class="score-label">SM</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:0.0%;background:#3b82f6;"></div>
+                </div>
+                <span class="score-value">0/10</span>
+            </div>
+        
+            <div class="score-row">
+                <span class="score-label">SOC</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:0.0%;background:#f59e0b;"></div>
+                </div>
+                <span class="score-value">0/10</span>
+            </div>
+        
+            <div class="score-row">
+                <span class="score-label">RS</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:100.0%;background:#06b6d4;"></div>
+                </div>
+                <span class="score-value">15/15</span>
+            </div>
+        
+            <div class="score-row">
+                <span class="score-label">TECH</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:100.0%;background:#8b5cf6;"></div>
+                </div>
+                <span class="score-value">15/15</span>
+            </div>
+        
+            </div>
+        </div>
+        
+        <div class="squeeze-data">
+            <div class="data-row">
+                <span class="data-label">Short %</span>
+                <span class="data-value" style="color:#ef4444;">24%</span>
+            </div>
+        
+            <div class="data-row">
+                <span class="data-label">Float</span>
+                <span class="data-value">125.6M</span>
+            </div>
+        
+            <div class="data-row">
+                <span class="data-label">Days to Cover</span>
+                <span class="data-value" style="color:#f59e0b;">7.3d</span>
+            </div>
+        </div>
+        
+        <div class="card-footer">
+            <a href="https://www.tradingview.com/chart/?symbol=RXO" target="_blank" class="action-btn">📊 Chart</a>
+            <a href="https://finance.yahoo.com/quote/RXO" target="_blank" class="action-btn">📈 Yahoo</a>
+            <a href="https://stocktwits.com/symbol/RXO" target="_blank" class="action-btn">💬 Twits</a>
+        </div>
+    </div>
+    
+    <div class="card" style="border-left: 3px solid #10b981; background: rgba(16, 185, 129, 0.10);">
+        <div class="card-header">
+            <div class="card-left">
+                <div class="tier-badge" style="background:#10b981;color:#0a0a0a;">TIER 1</div>
+                <div class="symbol">LIFE</div>
+                <div class="sector-pill">Other</div>
+            </div>
+            <div class="card-right">
+                <div class="price">$30.29</div>
+                <div class="change" style="color:#10b981;">+31.01%</div>
+            </div>
+        </div>
+        
+        <div class="setup-type">💪 RELATIVE STRENGTH</div>
+        
+        <div class="tags"><span class="tag">Major move +31.0%</span><span class="tag">ATR 6.1% (clean)</span><span class="tag">Clean price range</span><span class="tag">RVOL 3.6x</span><span class="tag">Float 26M (sweet)</span><span class="tag">Accumulating 2.1x</span></div>
+        
+        <div class="score-section">
+            <div class="total-score">
+                <span class="total-label">Conviction Score</span>
+                <span class="total-value" style="color:#10b981;">64/100</span>
+            </div>
+            <div class="score-breakdown">
+                
+            <div class="score-row">
+                <span class="score-label">CAT</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:55.00000000000001%;background:#a855f7;"></div>
+                </div>
+                <span class="score-value">11/20</span>
+            </div>
+        
+            <div class="score-row">
+                <span class="score-label">EXEC</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:70.0%;background:#14b8a6;"></div>
+                </div>
+                <span class="score-value">14/20</span>
+            </div>
+        
+            <div class="score-row">
+                <span class="score-label">SQZ</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:33.33333333333333%;background:#ef4444;"></div>
+                </div>
+                <span class="score-value">5/15</span>
+            </div>
+        
+            <div class="score-row">
+                <span class="score-label">SM</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:60.0%;background:#3b82f6;"></div>
+                </div>
+                <span class="score-value">6/10</span>
+            </div>
+        
+            <div class="score-row">
+                <span class="score-label">SOC</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:0.0%;background:#f59e0b;"></div>
+                </div>
+                <span class="score-value">0/10</span>
+            </div>
+        
+            <div class="score-row">
+                <span class="score-label">RS</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:100.0%;background:#06b6d4;"></div>
+                </div>
+                <span class="score-value">15/15</span>
+            </div>
+        
+            <div class="score-row">
+                <span class="score-label">TECH</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:86.66666666666667%;background:#8b5cf6;"></div>
+                </div>
+                <span class="score-value">13/15</span>
+            </div>
+        
+            </div>
+        </div>
+        
+        <div class="squeeze-data">
+            <div class="data-row">
+                <span class="data-label">Float</span>
+                <span class="data-value">26.0M</span>
+            </div>
+        
+            <div class="data-row">
+                <span class="data-label">Days to Cover</span>
+                <span class="data-value" style="color:#f59e0b;">3.8d</span>
+            </div>
+        </div>
+        
+        <div class="card-footer">
+            <a href="https://www.tradingview.com/chart/?symbol=LIFE" target="_blank" class="action-btn">📊 Chart</a>
+            <a href="https://finance.yahoo.com/quote/LIFE" target="_blank" class="action-btn">📈 Yahoo</a>
+            <a href="https://stocktwits.com/symbol/LIFE" target="_blank" class="action-btn">💬 Twits</a>
+        </div>
+    </div>
+    
+    <div class="card" style="border-left: 3px solid #10b981; background: rgba(16, 185, 129, 0.10);">
+        <div class="card-header">
+            <div class="card-left">
+                <div class="tier-badge" style="background:#10b981;color:#0a0a0a;">TIER 1</div>
+                <div class="symbol">TBLA</div>
+                <div class="sector-pill">Other</div>
+            </div>
+            <div class="card-right">
+                <div class="price">$5.11</div>
+                <div class="change" style="color:#10b981;">+7.57%</div>
+            </div>
+        </div>
+        
+        <div class="setup-type">💪 RELATIVE STRENGTH</div>
+        
+        <div class="tags"><span class="tag">Vol surge 5.0x</span><span class="tag">ATR 4.2% (clean)</span><span class="tag">RVOL 4.2x</span><span class="tag">Float 141M (sweet)</span><span class="tag">Accumulating 2.0x</span><span class="tag">Insider 21%</span></div>
+        
+        <div class="score-section">
+            <div class="total-score">
+                <span class="total-label">Conviction Score</span>
+                <span class="total-value" style="color:#10b981;">63/100</span>
+            </div>
+            <div class="score-breakdown">
+                
+            <div class="score-row">
+                <span class="score-label">CAT</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:40.0%;background:#a855f7;"></div>
+                </div>
+                <span class="score-value">8/20</span>
+            </div>
+        
+            <div class="score-row">
+                <span class="score-label">EXEC</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:60.0%;background:#14b8a6;"></div>
+                </div>
+                <span class="score-value">12/20</span>
+            </div>
+        
+            <div class="score-row">
+                <span class="score-label">SQZ</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:33.33333333333333%;background:#ef4444;"></div>
+                </div>
+                <span class="score-value">5/15</span>
+            </div>
+        
+            <div class="score-row">
+                <span class="score-label">SM</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:100.0%;background:#3b82f6;"></div>
+                </div>
+                <span class="score-value">10/10</span>
+            </div>
+        
+            <div class="score-row">
+                <span class="score-label">SOC</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:0.0%;background:#f59e0b;"></div>
+                </div>
+                <span class="score-value">0/10</span>
+            </div>
+        
+            <div class="score-row">
+                <span class="score-label">RS</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:100.0%;background:#06b6d4;"></div>
+                </div>
+                <span class="score-value">15/15</span>
+            </div>
+        
+            <div class="score-row">
+                <span class="score-label">TECH</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:86.66666666666667%;background:#8b5cf6;"></div>
+                </div>
+                <span class="score-value">13/15</span>
+            </div>
+        
+            </div>
+        </div>
+        
+        <div class="squeeze-data">
+            <div class="data-row">
+                <span class="data-label">Float</span>
+                <span class="data-value">141.3M</span>
+            </div>
+        
+            <div class="data-row">
+                <span class="data-label">Days to Cover</span>
+                <span class="data-value" style="color:#f59e0b;">3.7d</span>
+            </div>
+        </div>
+        
+        <div class="card-footer">
+            <a href="https://www.tradingview.com/chart/?symbol=TBLA" target="_blank" class="action-btn">📊 Chart</a>
+            <a href="https://finance.yahoo.com/quote/TBLA" target="_blank" class="action-btn">📈 Yahoo</a>
+            <a href="https://stocktwits.com/symbol/TBLA" target="_blank" class="action-btn">💬 Twits</a>
+        </div>
+    </div>
+    
+    <div class="card" style="border-left: 3px solid #10b981; background: rgba(16, 185, 129, 0.10);">
+        <div class="card-header">
+            <div class="card-left">
+                <div class="tier-badge" style="background:#10b981;color:#0a0a0a;">TIER 1</div>
+                <div class="symbol">NP</div>
+                <div class="sector-pill">Other</div>
+            </div>
+            <div class="card-right">
+                <div class="price">$29.64</div>
+                <div class="change" style="color:#10b981;">+18.65%</div>
+            </div>
+        </div>
+        
+        <div class="setup-type">💪 RELATIVE STRENGTH</div>
+        
+        <div class="tags"><span class="tag">Major move +18.7%</span><span class="tag">ATR 5.3% (clean)</span><span class="tag">Clean price range</span><span class="tag">RVOL 2.7x</span><span class="tag">SI 20%</span><span class="tag">Float 26M (sweet)</span></div>
+        
+        <div class="score-section">
+            <div class="total-score">
+                <span class="total-label">Conviction Score</span>
+                <span class="total-value" style="color:#10b981;">63/100</span>
+            </div>
+            <div class="score-breakdown">
+                
+            <div class="score-row">
+                <span class="score-label">CAT</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:40.0%;background:#a855f7;"></div>
+                </div>
+                <span class="score-value">8/20</span>
+            </div>
+        
+            <div class="score-row">
+                <span class="score-label">EXEC</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:70.0%;background:#14b8a6;"></div>
+                </div>
+                <span class="score-value">14/20</span>
+            </div>
+        
+            <div class="score-row">
+                <span class="score-label">SQZ</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:60.0%;background:#ef4444;"></div>
+                </div>
+                <span class="score-value">9/15</span>
+            </div>
+        
+            <div class="score-row">
+                <span class="score-label">SM</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:50.0%;background:#3b82f6;"></div>
+                </div>
+                <span class="score-value">5/10</span>
+            </div>
+        
+            <div class="score-row">
+                <span class="score-label">SOC</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:0.0%;background:#f59e0b;"></div>
+                </div>
+                <span class="score-value">0/10</span>
+            </div>
+        
+            <div class="score-row">
+                <span class="score-label">RS</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:100.0%;background:#06b6d4;"></div>
+                </div>
+                <span class="score-value">15/15</span>
+            </div>
+        
+            <div class="score-row">
+                <span class="score-label">TECH</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:80.0%;background:#8b5cf6;"></div>
+                </div>
+                <span class="score-value">12/15</span>
+            </div>
+        
+            </div>
+        </div>
+        
+        <div class="squeeze-data">
+            <div class="data-row">
+                <span class="data-label">Short %</span>
+                <span class="data-value" style="color:#ef4444;">20%</span>
+            </div>
+        
+            <div class="data-row">
+                <span class="data-label">Float</span>
+                <span class="data-value">25.8M</span>
+            </div>
+        
+            <div class="data-row">
+                <span class="data-label">Days to Cover</span>
+                <span class="data-value" style="color:#f59e0b;">3.4d</span>
+            </div>
+        </div>
+        
+        <div class="card-footer">
+            <a href="https://www.tradingview.com/chart/?symbol=NP" target="_blank" class="action-btn">📊 Chart</a>
+            <a href="https://finance.yahoo.com/quote/NP" target="_blank" class="action-btn">📈 Yahoo</a>
+            <a href="https://stocktwits.com/symbol/NP" target="_blank" class="action-btn">💬 Twits</a>
+        </div>
+    </div>
+    
+    <div class="card" style="border-left: 3px solid #10b981; background: rgba(16, 185, 129, 0.10);">
+        <div class="card-header">
+            <div class="card-left">
+                <div class="tier-badge" style="background:#10b981;color:#0a0a0a;">TIER 1</div>
+                <div class="symbol">CGNX</div>
+                <div class="sector-pill">Other</div>
+            </div>
+            <div class="card-right">
+                <div class="price">$65.69</div>
+                <div class="change" style="color:#10b981;">+5.51%</div>
+            </div>
+        </div>
+        
+        <div class="setup-type">💎 CLEAN LIQUIDITY</div>
+        
+        <div class="tags"><span class="tag">Vol surge 3.1x</span><span class="tag">$146M liq</span><span class="tag">ATR 4.1% (clean)</span><span class="tag">Clean price range</span><span class="tag">RVOL 2.7x</span><span class="tag">Accumulating 1.6x</span></div>
+        
+        <div class="score-section">
+            <div class="total-score">
+                <span class="total-label">Conviction Score</span>
+                <span class="total-value" style="color:#10b981;">63/100</span>
+            </div>
+            <div class="score-breakdown">
+                
+            <div class="score-row">
+                <span class="score-label">CAT</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:40.0%;background:#a855f7;"></div>
+                </div>
+                <span class="score-value">8/20</span>
+            </div>
+        
+            <div class="score-row">
+                <span class="score-label">EXEC</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:100.0%;background:#14b8a6;"></div>
+                </div>
+                <span class="score-value">20/20</span>
+            </div>
+        
+            <div class="score-row">
+                <span class="score-label">SQZ</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:13.333333333333334%;background:#ef4444;"></div>
+                </div>
+                <span class="score-value">2/15</span>
+            </div>
+        
+            <div class="score-row">
+                <span class="score-label">SM</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:50.0%;background:#3b82f6;"></div>
+                </div>
+                <span class="score-value">5/10</span>
+            </div>
+        
+            <div class="score-row">
+                <span class="score-label">SOC</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:0.0%;background:#f59e0b;"></div>
+                </div>
+                <span class="score-value">0/10</span>
+            </div>
+        
+            <div class="score-row">
+                <span class="score-label">RS</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:100.0%;background:#06b6d4;"></div>
+                </div>
+                <span class="score-value">15/15</span>
+            </div>
+        
+            <div class="score-row">
+                <span class="score-label">TECH</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:86.66666666666667%;background:#8b5cf6;"></div>
+                </div>
+                <span class="score-value">13/15</span>
+            </div>
+        
+            </div>
+        </div>
+        
+        <div class="squeeze-data">
+            <div class="data-row">
+                <span class="data-label">Float</span>
+                <span class="data-value">158.1M</span>
+            </div>
+        </div>
+        
+        <div class="card-footer">
+            <a href="https://www.tradingview.com/chart/?symbol=CGNX" target="_blank" class="action-btn">📊 Chart</a>
+            <a href="https://finance.yahoo.com/quote/CGNX" target="_blank" class="action-btn">📈 Yahoo</a>
+            <a href="https://stocktwits.com/symbol/CGNX" target="_blank" class="action-btn">💬 Twits</a>
+        </div>
+    </div>
+    
+    <div class="card" style="border-left: 3px solid #10b981; background: rgba(16, 185, 129, 0.10);">
+        <div class="card-header">
+            <div class="card-left">
+                <div class="tier-badge" style="background:#10b981;color:#0a0a0a;">TIER 1</div>
+                <div class="symbol">HRB</div>
+                <div class="sector-pill">Other</div>
+            </div>
+            <div class="card-right">
+                <div class="price">$36.33</div>
+                <div class="change" style="color:#10b981;">+23.89%</div>
+            </div>
+        </div>
+        
+        <div class="setup-type">💎 CLEAN LIQUIDITY</div>
+        
+        <div class="tags"><span class="tag">Major move +23.9%</span><span class="tag">$88M liq</span><span class="tag">ATR 4.7% (clean)</span><span class="tag">Clean price range</span><span class="tag">SI 19%</span><span class="tag">Float 126M (sweet)</span></div>
+        
+        <div class="score-section">
+            <div class="total-score">
+                <span class="total-label">Conviction Score</span>
+                <span class="total-value" style="color:#10b981;">62/100</span>
+            </div>
+            <div class="score-breakdown">
+                
+            <div class="score-row">
+                <span class="score-label">CAT</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:40.0%;background:#a855f7;"></div>
+                </div>
+                <span class="score-value">8/20</span>
+            </div>
+        
+            <div class="score-row">
+                <span class="score-label">EXEC</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:80.0%;background:#14b8a6;"></div>
+                </div>
+                <span class="score-value">16/20</span>
+            </div>
+        
+            <div class="score-row">
+                <span class="score-label">SQZ</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:73.33333333333333%;background:#ef4444;"></div>
+                </div>
+                <span class="score-value">11/15</span>
+            </div>
+        
+            <div class="score-row">
+                <span class="score-label">SM</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:0.0%;background:#3b82f6;"></div>
+                </div>
+                <span class="score-value">0/10</span>
+            </div>
+        
+            <div class="score-row">
+                <span class="score-label">SOC</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:0.0%;background:#f59e0b;"></div>
+                </div>
+                <span class="score-value">0/10</span>
+            </div>
+        
+            <div class="score-row">
+                <span class="score-label">RS</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:80.0%;background:#06b6d4;"></div>
+                </div>
+                <span class="score-value">12/15</span>
+            </div>
+        
+            <div class="score-row">
+                <span class="score-label">TECH</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:100.0%;background:#8b5cf6;"></div>
+                </div>
+                <span class="score-value">15/15</span>
+            </div>
+        
+            </div>
+        </div>
+        
+        <div class="squeeze-data">
+            <div class="data-row">
+                <span class="data-label">Short %</span>
+                <span class="data-value" style="color:#ef4444;">19%</span>
+            </div>
+        
+            <div class="data-row">
+                <span class="data-label">Float</span>
+                <span class="data-value">125.7M</span>
+            </div>
+        
+            <div class="data-row">
+                <span class="data-label">Days to Cover</span>
+                <span class="data-value" style="color:#f59e0b;">7.1d</span>
+            </div>
+        </div>
+        
+        <div class="card-footer">
+            <a href="https://www.tradingview.com/chart/?symbol=HRB" target="_blank" class="action-btn">📊 Chart</a>
+            <a href="https://finance.yahoo.com/quote/HRB" target="_blank" class="action-btn">📈 Yahoo</a>
+            <a href="https://stocktwits.com/symbol/HRB" target="_blank" class="action-btn">💬 Twits</a>
+        </div>
+    </div>
+    
+    <div class="card" style="border-left: 3px solid #10b981; background: rgba(16, 185, 129, 0.10);">
+        <div class="card-header">
+            <div class="card-left">
+                <div class="tier-badge" style="background:#10b981;color:#0a0a0a;">TIER 1</div>
+                <div class="symbol">CCRN</div>
+                <div class="sector-pill">Other</div>
+            </div>
+            <div class="card-right">
+                <div class="price">$13.08</div>
+                <div class="change" style="color:#10b981;">+29.38%</div>
+            </div>
+        </div>
+        
+        <div class="setup-type">📅 CATALYST EVENT</div>
+        
+        <div class="tags"><span class="tag">Major move +29.4%</span><span class="tag">Vol surge 5.6x</span><span class="tag">ATR 4.0% (clean)</span><span class="tag">Clean price range</span><span class="tag">RVOL 7.7x</span><span class="tag">Float 30M (sweet)</span></div>
+        
+        <div class="score-section">
+            <div class="total-score">
+                <span class="total-label">Conviction Score</span>
+                <span class="total-value" style="color:#10b981;">62/100</span>
+            </div>
+            <div class="score-breakdown">
+                
+            <div class="score-row">
+                <span class="score-label">CAT</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:65.0%;background:#a855f7;"></div>
+                </div>
+                <span class="score-value">13/20</span>
+            </div>
+        
+            <div class="score-row">
+                <span class="score-label">EXEC</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:65.0%;background:#14b8a6;"></div>
+                </div>
+                <span class="score-value">13/20</span>
+            </div>
+        
+            <div class="score-row">
+                <span class="score-label">SQZ</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:33.33333333333333%;background:#ef4444;"></div>
+                </div>
+                <span class="score-value">5/15</span>
+            </div>
+        
+            <div class="score-row">
+                <span class="score-label">SM</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:60.0%;background:#3b82f6;"></div>
+                </div>
+                <span class="score-value">6/10</span>
+            </div>
+        
+            <div class="score-row">
+                <span class="score-label">SOC</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:0.0%;background:#f59e0b;"></div>
+                </div>
+                <span class="score-value">0/10</span>
+            </div>
+        
+            <div class="score-row">
+                <span class="score-label">RS</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:80.0%;background:#06b6d4;"></div>
+                </div>
+                <span class="score-value">12/15</span>
+            </div>
+        
+            <div class="score-row">
+                <span class="score-label">TECH</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:86.66666666666667%;background:#8b5cf6;"></div>
+                </div>
+                <span class="score-value">13/15</span>
+            </div>
+        
+            </div>
+        </div>
+        
+        <div class="squeeze-data">
+            <div class="data-row">
+                <span class="data-label">Float</span>
+                <span class="data-value">29.8M</span>
+            </div>
+        </div>
+        
+        <div class="card-footer">
+            <a href="https://www.tradingview.com/chart/?symbol=CCRN" target="_blank" class="action-btn">📊 Chart</a>
+            <a href="https://finance.yahoo.com/quote/CCRN" target="_blank" class="action-btn">📈 Yahoo</a>
+            <a href="https://stocktwits.com/symbol/CCRN" target="_blank" class="action-btn">💬 Twits</a>
+        </div>
+    </div>
+    
+    <div class="card" style="border-left: 3px solid #10b981; background: rgba(16, 185, 129, 0.10);">
+        <div class="card-header">
+            <div class="card-left">
+                <div class="tier-badge" style="background:#10b981;color:#0a0a0a;">TIER 1</div>
+                <div class="symbol">RXT</div>
+                <div class="sector-pill">Other</div>
+            </div>
+            <div class="card-right">
+                <div class="price">$3.62</div>
+                <div class="change" style="color:#10b981;">+59.12%</div>
+            </div>
+        </div>
+        
+        <div class="setup-type">💪 RELATIVE STRENGTH</div>
+        
+        <div class="tags"><span class="tag">Major move +59.1%</span><span class="tag">Vol surge 10.1x</span><span class="tag">$58M liq</span><span class="tag">RVOL 11.3x</span><span class="tag">SI 20%</span><span class="tag">Float 109M (sweet)</span></div>
+        
+        <div class="score-section">
+            <div class="total-score">
+                <span class="total-label">Conviction Score</span>
+                <span class="total-value" style="color:#10b981;">62/100</span>
+            </div>
+            <div class="score-breakdown">
+                
+            <div class="score-row">
+                <span class="score-label">CAT</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:65.0%;background:#a855f7;"></div>
+                </div>
+                <span class="score-value">13/20</span>
+            </div>
+        
+            <div class="score-row">
+                <span class="score-label">EXEC</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:45.0%;background:#14b8a6;"></div>
+                </div>
+                <span class="score-value">9/20</span>
+            </div>
+        
+            <div class="score-row">
+                <span class="score-label">SQZ</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:46.666666666666664%;background:#ef4444;"></div>
+                </div>
+                <span class="score-value">7/15</span>
+            </div>
+        
+            <div class="score-row">
+                <span class="score-label">SM</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:50.0%;background:#3b82f6;"></div>
+                </div>
+                <span class="score-value">5/10</span>
+            </div>
+        
+            <div class="score-row">
+                <span class="score-label">SOC</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:20.0%;background:#f59e0b;"></div>
+                </div>
+                <span class="score-value">2/10</span>
+            </div>
+        
+            <div class="score-row">
+                <span class="score-label">RS</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:100.0%;background:#06b6d4;"></div>
+                </div>
+                <span class="score-value">15/15</span>
+            </div>
+        
+            <div class="score-row">
+                <span class="score-label">TECH</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:73.33333333333333%;background:#8b5cf6;"></div>
+                </div>
+                <span class="score-value">11/15</span>
+            </div>
+        
+            </div>
+        </div>
+        
+        <div class="squeeze-data">
+            <div class="data-row">
+                <span class="data-label">Short %</span>
+                <span class="data-value" style="color:#ef4444;">20%</span>
+            </div>
+        
+            <div class="data-row">
+                <span class="data-label">Float</span>
+                <span class="data-value">108.9M</span>
+            </div>
+        </div>
+        
+        <div class="card-footer">
+            <a href="https://www.tradingview.com/chart/?symbol=RXT" target="_blank" class="action-btn">📊 Chart</a>
+            <a href="https://finance.yahoo.com/quote/RXT" target="_blank" class="action-btn">📈 Yahoo</a>
+            <a href="https://stocktwits.com/symbol/RXT" target="_blank" class="action-btn">💬 Twits</a>
+        </div>
+    </div>
+    
+    <div class="card" style="border-left: 3px solid #10b981; background: rgba(16, 185, 129, 0.10);">
+        <div class="card-header">
+            <div class="card-left">
+                <div class="tier-badge" style="background:#10b981;color:#0a0a0a;">TIER 1</div>
+                <div class="symbol">AGL</div>
+                <div class="sector-pill">Other</div>
+            </div>
+            <div class="card-right">
+                <div class="price">$60.88</div>
+                <div class="change" style="color:#10b981;">+118.61%</div>
+            </div>
+        </div>
+        
+        <div class="setup-type">📈 BREAKOUT</div>
+        
+        <div class="tags"><span class="tag">Major move +118.6%</span><span class="tag">Vol surge 3.3x</span><span class="tag">Clean price range</span><span class="tag">RVOL 6.5x</span><span class="tag">Float 11M ⚠️</span><span class="tag">Accumulating 1.7x</span></div>
+        
+        <div class="score-section">
+            <div class="total-score">
+                <span class="total-label">Conviction Score</span>
+                <span class="total-value" style="color:#10b981;">61/100</span>
+            </div>
+            <div class="score-breakdown">
+                
+            <div class="score-row">
+                <span class="score-label">CAT</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:65.0%;background:#a855f7;"></div>
+                </div>
+                <span class="score-value">13/20</span>
+            </div>
+        
+            <div class="score-row">
+                <span class="score-label">EXEC</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:70.0%;background:#14b8a6;"></div>
+                </div>
+                <span class="score-value">14/20</span>
+            </div>
+        
+            <div class="score-row">
+                <span class="score-label">SQZ</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:13.333333333333334%;background:#ef4444;"></div>
+                </div>
+                <span class="score-value">2/15</span>
+            </div>
+        
+            <div class="score-row">
+                <span class="score-label">SM</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:50.0%;background:#3b82f6;"></div>
+                </div>
+                <span class="score-value">5/10</span>
+            </div>
+        
+            <div class="score-row">
+                <span class="score-label">SOC</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:0.0%;background:#f59e0b;"></div>
+                </div>
+                <span class="score-value">0/10</span>
+            </div>
+        
+            <div class="score-row">
+                <span class="score-label">RS</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:80.0%;background:#06b6d4;"></div>
+                </div>
+                <span class="score-value">12/15</span>
+            </div>
+        
+            <div class="score-row">
+                <span class="score-label">TECH</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:100.0%;background:#8b5cf6;"></div>
+                </div>
+                <span class="score-value">15/15</span>
+            </div>
+        
+            </div>
+        </div>
+        
+        <div class="squeeze-data">
+            <div class="data-row">
+                <span class="data-label">Float</span>
+                <span class="data-value">10.7M</span>
+            </div>
+        
+            <div class="data-row">
+                <span class="data-label">Days to Cover</span>
+                <span class="data-value" style="color:#f59e0b;">3.3d</span>
+            </div>
+        </div>
+        
+        <div class="card-footer">
+            <a href="https://www.tradingview.com/chart/?symbol=AGL" target="_blank" class="action-btn">📊 Chart</a>
+            <a href="https://finance.yahoo.com/quote/AGL" target="_blank" class="action-btn">📈 Yahoo</a>
+            <a href="https://stocktwits.com/symbol/AGL" target="_blank" class="action-btn">💬 Twits</a>
+        </div>
+    </div>
+    
+    <div class="card" style="border-left: 3px solid #10b981; background: rgba(16, 185, 129, 0.10);">
+        <div class="card-header">
+            <div class="card-left">
+                <div class="tier-badge" style="background:#10b981;color:#0a0a0a;">TIER 1</div>
+                <div class="symbol">LAMR</div>
+                <div class="sector-pill">Other</div>
+            </div>
+            <div class="card-right">
+                <div class="price">$150.75</div>
+                <div class="change" style="color:#10b981;">+6.80%</div>
+            </div>
+        </div>
+        
+        <div class="setup-type">💎 CLEAN LIQUIDITY</div>
+        
+        <div class="tags"><span class="tag">$81M liq</span><span class="tag">ATR 2.2% (clean)</span><span class="tag">Clean price range</span><span class="tag">Float 85M (sweet)</span><span class="tag">DTC 7.3d</span><span class="tag">RS strong (5/20/60d)</span></div>
+        
+        <div class="score-section">
+            <div class="total-score">
+                <span class="total-label">Conviction Score</span>
+                <span class="total-value" style="color:#10b981;">61/100</span>
+            </div>
+            <div class="score-breakdown">
+                
+            <div class="score-row">
+                <span class="score-label">CAT</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:15.0%;background:#a855f7;"></div>
+                </div>
+                <span class="score-value">3/20</span>
+            </div>
+        
+            <div class="score-row">
+                <span class="score-label">EXEC</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:80.0%;background:#14b8a6;"></div>
+                </div>
+                <span class="score-value">16/20</span>
+            </div>
+        
+            <div class="score-row">
+                <span class="score-label">SQZ</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:60.0%;background:#ef4444;"></div>
+                </div>
+                <span class="score-value">9/15</span>
+            </div>
+        
+            <div class="score-row">
+                <span class="score-label">SM</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:30.0%;background:#3b82f6;"></div>
+                </div>
+                <span class="score-value">3/10</span>
+            </div>
+        
+            <div class="score-row">
+                <span class="score-label">SOC</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:0.0%;background:#f59e0b;"></div>
+                </div>
+                <span class="score-value">0/10</span>
+            </div>
+        
+            <div class="score-row">
+                <span class="score-label">RS</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:100.0%;background:#06b6d4;"></div>
+                </div>
+                <span class="score-value">15/15</span>
+            </div>
+        
+            <div class="score-row">
+                <span class="score-label">TECH</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:100.0%;background:#8b5cf6;"></div>
+                </div>
+                <span class="score-value">15/15</span>
+            </div>
+        
+            </div>
+        </div>
+        
+        <div class="squeeze-data">
+            <div class="data-row">
+                <span class="data-label">Float</span>
+                <span class="data-value">84.9M</span>
+            </div>
+        
+            <div class="data-row">
+                <span class="data-label">Days to Cover</span>
+                <span class="data-value" style="color:#f59e0b;">7.3d</span>
+            </div>
+        </div>
+        
+        <div class="card-footer">
+            <a href="https://www.tradingview.com/chart/?symbol=LAMR" target="_blank" class="action-btn">📊 Chart</a>
+            <a href="https://finance.yahoo.com/quote/LAMR" target="_blank" class="action-btn">📈 Yahoo</a>
+            <a href="https://stocktwits.com/symbol/LAMR" target="_blank" class="action-btn">💬 Twits</a>
+        </div>
+    </div>
+    
+    <div class="card" style="border-left: 3px solid #10b981; background: rgba(16, 185, 129, 0.10);">
+        <div class="card-header">
+            <div class="card-left">
+                <div class="tier-badge" style="background:#10b981;color:#0a0a0a;">TIER 1</div>
+                <div class="symbol">FA</div>
+                <div class="sector-pill">Other</div>
+            </div>
+            <div class="card-right">
+                <div class="price">$15.86</div>
+                <div class="change" style="color:#10b981;">+23.40%</div>
+            </div>
+        </div>
+        
+        <div class="setup-type">📈 BREAKOUT</div>
+        
+        <div class="tags"><span class="tag">Major move +23.4%</span><span class="tag">ATR 4.6% (clean)</span><span class="tag">Clean price range</span><span class="tag">SI 17%</span><span class="tag">Float 79M (sweet)</span><span class="tag">DTC 12.6d</span></div>
+        
+        <div class="score-section">
+            <div class="total-score">
+                <span class="total-label">Conviction Score</span>
+                <span class="total-value" style="color:#10b981;">61/100</span>
+            </div>
+            <div class="score-breakdown">
+                
+            <div class="score-row">
+                <span class="score-label">CAT</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:40.0%;background:#a855f7;"></div>
+                </div>
+                <span class="score-value">8/20</span>
+            </div>
+        
+            <div class="score-row">
+                <span class="score-label">EXEC</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:60.0%;background:#14b8a6;"></div>
+                </div>
+                <span class="score-value">12/20</span>
+            </div>
+        
+            <div class="score-row">
+                <span class="score-label">SQZ</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:73.33333333333333%;background:#ef4444;"></div>
+                </div>
+                <span class="score-value">11/15</span>
+            </div>
+        
+            <div class="score-row">
+                <span class="score-label">SM</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:30.0%;background:#3b82f6;"></div>
+                </div>
+                <span class="score-value">3/10</span>
+            </div>
+        
+            <div class="score-row">
+                <span class="score-label">SOC</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:0.0%;background:#f59e0b;"></div>
+                </div>
+                <span class="score-value">0/10</span>
+            </div>
+        
+            <div class="score-row">
+                <span class="score-label">RS</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:80.0%;background:#06b6d4;"></div>
+                </div>
+                <span class="score-value">12/15</span>
+            </div>
+        
+            <div class="score-row">
+                <span class="score-label">TECH</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:100.0%;background:#8b5cf6;"></div>
+                </div>
+                <span class="score-value">15/15</span>
+            </div>
+        
+            </div>
+        </div>
+        
+        <div class="squeeze-data">
+            <div class="data-row">
+                <span class="data-label">Short %</span>
+                <span class="data-value" style="color:#ef4444;">17%</span>
+            </div>
+        
+            <div class="data-row">
+                <span class="data-label">Float</span>
+                <span class="data-value">79.5M</span>
+            </div>
+        
+            <div class="data-row">
+                <span class="data-label">Days to Cover</span>
+                <span class="data-value" style="color:#f59e0b;">12.6d</span>
+            </div>
+        </div>
+        
+        <div class="card-footer">
+            <a href="https://www.tradingview.com/chart/?symbol=FA" target="_blank" class="action-btn">📊 Chart</a>
+            <a href="https://finance.yahoo.com/quote/FA" target="_blank" class="action-btn">📈 Yahoo</a>
+            <a href="https://stocktwits.com/symbol/FA" target="_blank" class="action-btn">💬 Twits</a>
+        </div>
+    </div>
+    
+    <div class="card" style="border-left: 3px solid #10b981; background: rgba(16, 185, 129, 0.10);">
+        <div class="card-header">
+            <div class="card-left">
+                <div class="tier-badge" style="background:#10b981;color:#0a0a0a;">TIER 1</div>
+                <div class="symbol">COLD</div>
+                <div class="sector-pill">Other</div>
+            </div>
+            <div class="card-right">
+                <div class="price">$14.73</div>
+                <div class="change" style="color:#10b981;">+15.99%</div>
+            </div>
+        </div>
+        
+        <div class="setup-type">💎 CLEAN LIQUIDITY</div>
+        
+        <div class="tags"><span class="tag">Major move +16.0%</span><span class="tag">$58M liq</span><span class="tag">ATR 4.0% (clean)</span><span class="tag">Clean price range</span><span class="tag">RVOL 2.8x</span><span class="tag">RS strong (5/20/60d)</span></div>
+        
+        <div class="score-section">
+            <div class="total-score">
+                <span class="total-label">Conviction Score</span>
+                <span class="total-value" style="color:#10b981;">60/100</span>
+            </div>
+            <div class="score-breakdown">
+                
+            <div class="score-row">
+                <span class="score-label">CAT</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:40.0%;background:#a855f7;"></div>
+                </div>
+                <span class="score-value">8/20</span>
+            </div>
+        
+            <div class="score-row">
+                <span class="score-label">EXEC</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:90.0%;background:#14b8a6;"></div>
+                </div>
+                <span class="score-value">18/20</span>
+            </div>
+        
+            <div class="score-row">
+                <span class="score-label">SQZ</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:26.666666666666668%;background:#ef4444;"></div>
+                </div>
+                <span class="score-value">4/15</span>
+            </div>
+        
+            <div class="score-row">
+                <span class="score-label">SM</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:30.0%;background:#3b82f6;"></div>
+                </div>
+                <span class="score-value">3/10</span>
+            </div>
+        
+            <div class="score-row">
+                <span class="score-label">SOC</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:0.0%;background:#f59e0b;"></div>
+                </div>
+                <span class="score-value">0/10</span>
+            </div>
+        
+            <div class="score-row">
+                <span class="score-label">RS</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:80.0%;background:#06b6d4;"></div>
+                </div>
+                <span class="score-value">12/15</span>
+            </div>
+        
+            <div class="score-row">
+                <span class="score-label">TECH</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:100.0%;background:#8b5cf6;"></div>
+                </div>
+                <span class="score-value">15/15</span>
+            </div>
+        
+            </div>
+        </div>
+        
+        <div class="squeeze-data">
+            <div class="data-row">
+                <span class="data-label">Float</span>
+                <span class="data-value">284.3M</span>
+            </div>
+        
+            <div class="data-row">
+                <span class="data-label">Days to Cover</span>
+                <span class="data-value" style="color:#f59e0b;">5.2d</span>
+            </div>
+        </div>
+        
+        <div class="card-footer">
+            <a href="https://www.tradingview.com/chart/?symbol=COLD" target="_blank" class="action-btn">📊 Chart</a>
+            <a href="https://finance.yahoo.com/quote/COLD" target="_blank" class="action-btn">📈 Yahoo</a>
+            <a href="https://stocktwits.com/symbol/COLD" target="_blank" class="action-btn">💬 Twits</a>
+        </div>
+    </div>
+    
+    <div class="card" style="border-left: 3px solid #10b981; background: rgba(16, 185, 129, 0.10);">
+        <div class="card-header">
+            <div class="card-left">
+                <div class="tier-badge" style="background:#10b981;color:#0a0a0a;">TIER 1</div>
+                <div class="symbol">DDOG</div>
+                <div class="sector-pill">Other</div>
+            </div>
+            <div class="card-right">
+                <div class="price">$187.00</div>
+                <div class="change" style="color:#10b981;">+30.12%</div>
+            </div>
+        </div>
+        
+        <div class="setup-type">💎 CLEAN LIQUIDITY</div>
+        
+        <div class="tags"><span class="tag">Major move +30.1%</span><span class="tag">$1123M liq</span><span class="tag">ATR 5.4% (clean)</span><span class="tag">Clean price range</span><span class="tag">RVOL 3.5x</span><span class="tag">29.0x mentions</span></div>
+        
+        <div class="score-section">
+            <div class="total-score">
+                <span class="total-label">Conviction Score</span>
+                <span class="total-value" style="color:#10b981;">60/100</span>
+            </div>
+            <div class="score-breakdown">
+                
+            <div class="score-row">
+                <span class="score-label">CAT</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:55.00000000000001%;background:#a855f7;"></div>
+                </div>
+                <span class="score-value">11/20</span>
+            </div>
+        
+            <div class="score-row">
+                <span class="score-label">EXEC</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:100.0%;background:#14b8a6;"></div>
+                </div>
+                <span class="score-value">20/20</span>
+            </div>
+        
+            <div class="score-row">
+                <span class="score-label">SQZ</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:13.333333333333334%;background:#ef4444;"></div>
+                </div>
+                <span class="score-value">2/15</span>
+            </div>
+        
+            <div class="score-row">
+                <span class="score-label">SM</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:0.0%;background:#3b82f6;"></div>
+                </div>
+                <span class="score-value">0/10</span>
+            </div>
+        
+            <div class="score-row">
+                <span class="score-label">SOC</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:40.0%;background:#f59e0b;"></div>
+                </div>
+                <span class="score-value">4/10</span>
+            </div>
+        
+            <div class="score-row">
+                <span class="score-label">RS</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:80.0%;background:#06b6d4;"></div>
+                </div>
+                <span class="score-value">12/15</span>
+            </div>
+        
+            <div class="score-row">
+                <span class="score-label">TECH</span>
+                <div class="score-bar-bg">
+                    <div class="score-bar-fill" style="width:73.33333333333333%;background:#8b5cf6;"></div>
+                </div>
+                <span class="score-value">11/15</span>
+            </div>
+        
+            </div>
+        </div>
+        
+        <div class="squeeze-data">
+            <div class="data-row">
+                <span class="data-label">Float</span>
+                <span class="data-value">325.4M</span>
+            </div>
+        </div>
+        
+        <div class="card-footer">
+            <a href="https://www.tradingview.com/chart/?symbol=DDOG" target="_blank" class="action-btn">📊 Chart</a>
+            <a href="https://finance.yahoo.com/quote/DDOG" target="_blank" class="action-btn">📈 Yahoo</a>
+            <a href="https://stocktwits.com/symbol/DDOG" target="_blank" class="action-btn">💬 Twits</a>
+        </div>
+    </div>
+    </div>
+</div>
 
-## Cost
-
-$0/month. Fully automated. Runs in the cloud.
+</body>
+</html>
