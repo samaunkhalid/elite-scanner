@@ -1,1 +1,239 @@
-
+tier,symbol,price,change_pct,score,catalyst,squeeze,smart_money,options,social,strength,technical,short_pct,float_M,days_to_cover,market_cap_B,tags
+S,SEZL,103.94,20.84,56,0,14,15,0,0,12,15,26.75,17.1,6.7,3.5,SI 27% · Float 17M · Accumulating 1.3x · Insider 53% · RS strong (5/20/60d)
+S,FLNC,17.14,26.4,50,0,13,10,0,3,9,15,37.330002,97.0,6.8,3.15,SI 37% · Accumulating · Insider 16% · 14.0x mentions · RS positive
+S,HIMX,17.14,39.01,50,0,0,15,0,0,15,20,7.7,247.1,2.6,2.99,Accumulating 1.4x · Insider 31% · RS strong (5/20/60d) · Near 52WH · Up 39.0% today
+1,INTC,112.3,-0.63,49,0,0,15,0,10,13,11,2.87,5016.9,1.4,564.42,Accumulating 1.5x · Insider 13% · WSB #10 · RS strong (5/20/60d) · Near 52WH
+1,AAON,138.08,40.47,49,0,8,10,0,0,15,16,10.520000999999999,67.7,9.3,11.3,SI 11% · DTC 9.3d · Accumulating · Insider 17% · RS strong (5/20/60d)
+1,CRWV,131.4,-4.77,47,0,6,15,0,5,10,11,21.87,285.2,2.1,69.41,SI 22% · Accumulating 1.5x · Insider 22% · 5.3x mentions · RS strong (5/20/60d)
+1,XMTR,75.97,34.71,47,0,9,8,0,0,15,15,10.4499996,44.5,6.0,4.0,SI 10% · Float 44M · Accumulating · RS strong (5/20/60d) · Near 52WH
+1,CPRX,31.12,1.98,47,0,5,13,0,0,13,16,8.89,114.5,7.2,3.81,DTC 7.2d · Accumulating 1.8x · RS strong (5/20/60d) · Near 52WH · EMA stack ↑
+1,BTDR,14.07,-6.82,46,0,13,15,0,0,10,8,36.119997999999995,131.3,6.7,3.42,SI 36% · Accumulating 1.4x · Insider 34% · RS strong (5/20/60d) · EMA stack ↑
+1,RXT,3.92,72.84,46,0,3,10,0,0,15,18,19.650000000000002,108.9,2.8,0.98,SI 20% · Accumulating 3.0x · RS strong (5/20/60d) · Near 52WH · Up 72.8% today
+1,PTRN,15.1,5.96,45,0,3,15,0,0,12,15,5.7800002,36.4,4.6,3.0,Float 36M · Accumulating 1.4x · Insider 70% · RS strong (5/20/60d) · Up 6.0% today
+1,IONQ,50.96,-3.06,45,0,6,10,0,8,10,11,23.18,360.0,3.6,19.02,SI 23% · Accumulating 1.8x · WSB #14 · 6.2x mentions · RS strong (5/20/60d)
+1,AUR,7.16,-1.51,44,0,8,15,0,0,10,11,18.190001,1243.4,10.8,14.03,SI 18% · DTC 10.8d · Accumulating 1.5x · Insider 24% · RS strong (5/20/60d)
+1,OKLO,75.75,-4.86,44,0,3,15,0,5,12,9,18.84,145.6,3.0,13.17,SI 19% · Accumulating 1.5x · Insider 16% · 3.8x mentions · RS strong (5/20/60d)
+1,APLD,41.79,-5.46,43,0,10,15,0,0,10,8,30.409999999999997,253.9,3.8,11.94,SI 30% · Accumulating 1.3x · Insider 11% · RS strong (5/20/60d) · EMA stack ↑
+1,FUN,23.09,17.24,43,0,11,5,0,0,12,15,23.599999999999998,94.0,11.0,2.35,SI 24% · DTC 11.0d · Accumulating · RS strong (5/20/60d) · Up 17.2% today
+1,AMD,414.69,-1.61,42,0,0,10,0,10,13,9,2.1999999999999997,1622.1,1.1,676.19,Accumulating 1.3x · WSB #2 · RS strong (5/20/60d) · Near 52WH · EMA stack ↑
+1,WOLF,46.91,8.88,42,0,6,10,0,0,15,11,0.0,28.2,6.5,2.27,Float 28M · Accumulating 1.5x · RS strong (5/20/60d) · Near 52WH · Up 8.9% today
+1,OSG,5.62,33.18,42,0,3,13,0,0,9,17,3.2,39.9,2.1,0.25,Float 40M · Accumulating 1.9x · RS positive · Up 33.2% today · Above EMA20
+1,MARA,12.78,-1.92,41,0,10,10,0,0,10,11,35.32,371.4,2.3,4.87,SI 35% · Accumulating 1.4x · RS strong (5/20/60d) · EMA stack ↑ · Near 20D high
+1,RXO,22.66,15.52,41,0,11,0,0,0,15,15,23.62,125.6,7.3,3.73,SI 24% · DTC 7.3d · RS strong (5/20/60d) · Near 52WH · Up 15.5% today
+1,LINE,39.83,5.34,40,0,8,10,0,0,9,13,10.569999,57.2,7.9,9.99,SI 11% · DTC 7.9d · Accumulating · Insider 69% · RS positive
+1,ALGM,47.56,-7.41,40,0,8,15,0,0,7,10,12.709999999999999,124.0,7.0,8.81,SI 13% · DTC 7.0d · Accumulating 1.3x · Insider 33% · RS positive
+1,CARS,12.02,7.42,40,0,3,10,0,0,12,15,14.979999999999999,50.1,3.6,0.69,SI 15% · Accumulating · Insider 12% · RS strong (5/20/60d) · Up 7.4% today
+1,LFST,8.47,15.15,40,0,0,10,0,0,15,15,3.45,204.0,3.6,3.29,Accumulating 1.4x · RS strong (5/20/60d) · Near 52WH · Up 15.1% today · EMA stack ↑
+1,CGNX,69.84,12.19,40,0,0,10,0,0,15,15,3.3099998,158.1,2.8,11.67,Accumulating 1.4x · RS strong (5/20/60d) · Near 52WH · Up 12.2% today · EMA stack ↑
+1,TTGT,6.2,4.2,40,0,13,5,0,0,11,11,13.120000000000001,17.6,8.8,0.45,SI 13% · Float 18M · DTC 8.8d · Insider 59% · RS strong (5/20/60d)
+1,LEU,216.68,-6.31,39,0,14,10,0,0,9,6,22.89,18.3,5.8,4.26,SI 23% · Float 18M · Accumulating 1.3x · RS positive · V-recovery
+1,SMCI,34.11,-1.56,39,0,3,10,0,5,10,11,19.33,500.6,1.8,20.48,SI 19% · Accumulating · Insider 14% · WSB #17 · RS strong (5/20/60d)
+1,PRMB,21.96,10.91,39,0,15,0,0,0,12,12,40.43,242.8,8.2,7.98,SI 40% · DTC 8.2d · RS strong (5/20/60d) · Up 10.9% today · Above EMA20
+1,VYX,8.31,18.21,39,0,15,0,0,0,9,15,30.869999999999997,119.5,10.1,1.16,SI 31% · DTC 10.1d · RS positive · Up 18.2% today · EMA stack ↑
+1,CLSK,14.04,-3.14,39,0,10,10,0,0,10,9,46.25,246.9,4.3,3.59,SI 46% · Accumulating 1.5x · RS strong (5/20/60d) · EMA stack ↑
+1,CYTK,74.03,-1.08,38,0,8,10,0,0,13,7,19.510001,123.8,7.6,9.21,SI 20% · DTC 7.6d · Accumulating 2.0x · RS strong (5/20/60d) · Near 52WH
+1,SNEX,120.28,13.06,38,0,0,8,0,0,15,15,5.88,68.9,3.1,9.47,Accumulating · RS strong (5/20/60d) · Near 52WH · Up 13.1% today · EMA stack ↑
+1,DXYZ,44.06,7.96,38,0,3,10,0,0,12,13,13.83,0.0,1.1,0.97,SI 14% · Accumulating 1.4x · RS strong (5/20/60d) · Up 8.0% today · EMA stack ↑
+1,ASPN,5.14,24.76,38,0,6,5,0,0,12,15,10.0200005,77.5,5.6,0.43,SI 10% · Insider 16% · RS strong (5/20/60d) · Up 24.8% today · EMA stack ↑
+1,SABR,2.1,14.75,38,0,8,5,0,0,12,13,18.67,280.8,9.2,0.83,SI 19% · DTC 9.2d · Insider 16% · RS strong (5/20/60d) · Up 14.8% today
+1,HNST,3.88,14.31,38,0,8,5,0,0,12,13,10.15,101.9,7.2,0.44,SI 10% · DTC 7.2d · Insider 14% · RS strong (5/20/60d) · Up 14.3% today
+1,JMIA,9.18,23.06,37,0,0,10,0,0,9,18,4.61,188.8,3.9,1.14,Accumulating · Insider 11% · RS positive · Up 23.1% today · EMA stack ↑
+1,AMZN,273.76,-0.43,37,0,0,13,0,2,13,9,0.95,9776.6,2.0,2944.87,Accumulating 1.5x · RS strong (5/20/60d) · Near 52WH · EMA stack ↑ · Near 20D high
+1,BB,5.96,-0.5,37,0,0,10,0,5,13,9,5.19,586.2,2.7,3.5,Accumulating 1.9x · 11.3x mentions · RS strong (5/20/60d) · Near 52WH · EMA stack ↑
+1,TFX,133.72,8.51,36,0,3,5,0,0,15,13,8.3900005,44.0,3.4,5.92,Float 44M · Accumulating · RS strong (5/20/60d) · Near 52WH · Up 8.5% today
+1,CRL,191.35,5.42,36,0,9,0,0,0,12,15,10.870000000000001,48.7,5.4,9.44,SI 11% · Float 49M · RS strong (5/20/60d) · Up 5.4% today · EMA stack ↑
+1,RGTI,19.4,-3.43,36,0,3,10,0,0,12,11,14.580000000000002,327.2,1.8,6.45,SI 15% · Accumulating 1.5x · RS strong (5/20/60d) · V-recovery · EMA stack ↑
+1,HUT,98.84,-9.27,36,0,3,13,0,0,10,10,17.799999,86.4,3.7,11.13,SI 18% · Accumulating 1.5x · RS strong (5/20/60d) · EMA stack ↑ · Gap -4.2%
+1,PINS,22.23,5.06,36,0,3,10,0,0,12,11,18.879999,477.1,4.2,12.45,SI 19% · Accumulating 1.3x · RS strong (5/20/60d) · Up 5.1% today · EMA stack ↑
+1,SVM,13.92,6.99,36,0,6,0,0,0,15,15,12.149999000000001,212.0,5.7,3.07,SI 12% · RS strong (5/20/60d) · Near 52WH · Up 7.0% today · EMA stack ↑
+1,AI,9.62,0.21,36,0,15,5,0,0,7,9,33.12,135.2,9.2,1.4,SI 33% · DTC 9.2d · Insider 23% · RS positive · EMA stack ↑
+1,CLOV,2.84,6.01,35,0,5,5,0,0,12,13,9.790000000000001,404.8,7.1,1.49,DTC 7.1d · Accumulating · RS strong (5/20/60d) · Up 6.0% today · EMA stack ↑
+1,HRB,35.94,22.58,35,0,8,0,0,0,12,15,19.02,125.7,7.1,4.56,SI 19% · DTC 7.1d · RS strong (5/20/60d) · Up 22.6% today · EMA stack ↑
+1,ACLS,161.83,-5.36,35,0,9,10,0,0,10,6,16.459998000000002,30.4,5.1,4.97,SI 16% · Float 30M · Accumulating 1.4x · RS strong (5/20/60d) · EMA stack ↑
+1,LTH,32.12,-4.36,35,0,0,15,0,0,13,7,6.75,163.2,3.4,7.15,Accumulating 1.6x · Insider 12% · RS strong (5/20/60d) · Near 52WH · EMA stack ↑
+1,PAYC,133.63,5.76,35,0,6,5,0,0,9,15,11.459999999999999,45.4,2.6,7.25,SI 11% · Float 45M · Insider 14% · RS positive · Up 5.8% today
+1,CRDO,189.14,-4.61,35,0,0,15,0,0,13,7,5.63,165.8,1.2,34.89,Accumulating 1.5x · Insider 11% · RS strong (5/20/60d) · Near 52WH · EMA stack ↑
+1,PLUG,3.24,-2.12,35,0,9,10,0,0,10,6,27.839999999999996,1330.5,5.0,4.52,SI 28% · Accumulating 1.3x · RS strong (5/20/60d) · EMA stack ↑
+1,WRBY,27.22,23.56,35,0,3,8,0,0,12,12,11.229999,92.2,4.5,3.34,SI 11% · Accumulating · RS strong (5/20/60d) · Up 23.6% today · Above EMA20
+1,ALB,218.16,13.27,35,0,0,5,0,0,15,15,0.04,117.4,0.0,25.72,Accumulating · RS strong (5/20/60d) · Near 52WH · Up 13.3% today · EMA stack ↑
+1,FA,14.95,16.32,35,0,8,0,0,0,12,15,17.32,79.5,12.6,2.58,SI 17% · DTC 12.6d · RS strong (5/20/60d) · Up 16.3% today · EMA stack ↑
+1,KTB,78.94,5.34,35,0,3,5,0,0,12,15,9.879999999999999,54.3,5.6,4.39,Accumulating · RS strong (5/20/60d) · Up 5.3% today · EMA stack ↑ · Gap +4.2%
+1,FTNT,110.31,22.63,35,0,0,5,0,0,15,15,3.19,623.5,3.0,80.76,Insider 17% · RS strong (5/20/60d) · Near 52WH · Up 22.6% today · EMA stack ↑
+2,IREN,59.84,-1.86,34,0,3,5,0,5,10,11,18.459999999999997,302.8,1.8,19.85,SI 18% · Accumulating · WSB #20 · RS strong (5/20/60d) · EMA stack ↑
+2,SOUN,9.34,-0.34,34,0,13,0,0,5,9,7,37.59,386.9,6.2,3.98,SI 38% · WSB #18 · RS positive · V-recovery · EMA stack ↑
+2,SGML,23.59,3.21,34,0,0,5,0,0,14,15,8.939999,57.7,1.3,2.63,Accumulating · RS strong (5/20/60d) · Near 52WH · EMA stack ↑ · Gap +3.2%
+2,EPC,23.87,6.61,34,0,11,0,0,0,12,11,12.16,45.7,7.8,1.12,SI 12% · Float 46M · DTC 7.8d · RS strong (5/20/60d) · Up 6.6% today
+2,DOCN,151.69,-5.77,34,0,3,15,0,0,10,6,14.510000000000002,81.2,2.0,15.83,SI 15% · Accumulating 1.7x · Insider 22% · RS strong (5/20/60d) · EMA stack ↑
+2,KEEL,3.95,-4.13,34,0,3,10,0,0,10,11,11.73,576.6,2.0,2.38,SI 12% · Accumulating 1.9x · RS strong (5/20/60d) · EMA stack ↑ · Gap -4.4%
+2,QS,7.62,-4.13,34,0,8,10,0,0,9,7,18.63,486.3,9.9,4.69,SI 19% · DTC 9.9d · Accumulating · Insider 14% · RS positive
+2,MSTR,183.38,-1.84,34,0,3,10,0,0,12,9,11.3900006,325.6,2.0,64.25,SI 11% · Accumulating 1.5x · RS strong (5/20/60d) · V-recovery · EMA stack ↑
+2,ZS,149.5,7.68,34,0,3,10,0,0,9,12,10.08,104.2,3.5,24.04,SI 10% · Accumulating · Insider 35% · RS positive · Up 7.7% today
+2,ARM,220.19,-7.21,33,0,3,0,0,10,10,10,11.459999999999999,136.6,1.9,233.84,SI 11% · WSB #4 · 4.9x mentions · RS strong (5/20/60d) · EMA stack ↑
+2,COLD,14.39,13.31,33,0,6,0,0,0,12,15,10.43,284.3,5.2,4.13,SI 10% · RS strong (5/20/60d) · Up 13.3% today · EMA stack ↑ · Gap +3.1%
+2,MTSI,331.53,7.01,33,0,0,5,0,0,15,13,4.62,67.6,2.8,24.87,Insider 11% · RS strong (5/20/60d) · Near 52WH · Up 7.0% today · EMA stack ↑
+2,DDOG,184.51,28.39,33,0,0,0,0,5,12,16,4.44,325.4,2.8,65.68,23.0x mentions · RS strong (5/20/60d) · Up 28.4% today · EMA stack ↑ · Gap +30.6%
+2,RUN,15.0,16.91,33,0,9,0,0,0,9,15,27.3,227.9,6.7,3.53,SI 27% · RS positive · Up 16.9% today · EMA stack ↑ · Gap +12.5%
+2,RIOT,23.28,-1.68,33,0,3,8,0,0,13,9,14.23,348.5,3.1,8.8,SI 14% · Accumulating · RS strong (5/20/60d) · Near 52WH · EMA stack ↑
+2,ORCL,195.43,0.72,33,0,0,10,0,2,10,11,1.71,1709.0,1.1,562.07,Accumulating · Insider 41% · RS strong (5/20/60d) · EMA stack ↑ · Near 20D high
+2,DELL,230.47,-3.49,33,0,0,13,0,0,13,7,8.3100006,300.4,2.6,149.85,Accumulating 1.4x · RS strong (5/20/60d) · Near 52WH · EMA stack ↑
+2,ALKT,17.83,6.45,32,0,6,5,0,0,9,12,12.020000999999999,65.5,6.8,1.91,SI 12% · Insider 24% · RS positive · Up 6.4% today · Above EMA20
+2,HIMS,26.2,-2.55,32,0,10,13,0,0,9,0,37.25,207.4,2.7,6.05,SI 37% · Accumulating 1.5x · RS positive · V-recovery
+2,PTON,5.36,2.98,32,0,3,10,0,0,8,11,13.48,399.6,3.7,2.28,SI 13% · Accumulating 1.3x · RS positive · EMA stack ↑ · Gap +13.4%
+2,NVDA,209.3,0.79,32,0,0,0,0,10,13,9,1.2200001,23321.7,1.7,5087.04,WSB #5 · RS strong (5/20/60d) · Near 52WH · EMA stack ↑
+2,ADI,412.48,-0.77,32,0,0,10,0,0,13,9,2.2800000000000002,486.4,3.0,201.37,Accumulating 1.4x · RS strong (5/20/60d) · Near 52WH · EMA stack ↑ · Near 20D high
+2,MUX,25.16,10.24,32,0,8,5,0,0,9,10,16.900000000000002,50.9,8.7,1.51,SI 17% · DTC 8.7d · Insider 14% · RS positive · Up 10.2% today
+2,ROKU,127.67,-0.24,32,0,0,10,0,0,13,9,6.47,130.1,3.1,18.86,Accumulating 1.6x · RS strong (5/20/60d) · Near 52WH · EMA stack ↑ · Near 20D high
+2,NSP,31.55,9.74,32,0,6,3,0,0,11,12,13.100000000000001,36.5,3.5,1.2,SI 13% · Float 36M · RS positive · V-recovery · Up 9.7% today
+2,SIMO,242.5,-1.0,32,0,0,10,0,0,13,9,0.0,128.3,0.6,8.22,Accumulating 2.4x · RS strong (5/20/60d) · Near 52WH · EMA stack ↑ · Near 20D high
+2,ICL,5.97,6.23,32,0,0,10,0,0,9,13,0.43,723.4,1.8,7.71,Accumulating · Insider 44% · RS positive · Up 6.2% today · EMA stack ↑
+2,POWL,304.09,-5.07,32,0,6,10,0,0,10,6,13.370000000000001,29.1,5.0,11.08,SI 13% · Float 29M · Accumulating · Insider 21% · RS strong (5/20/60d)
+2,SMTC,117.88,-1.1,31,0,0,5,0,0,13,13,7.739999999999999,92.4,2.0,10.98,Accumulating · RS strong (5/20/60d) · Near 52WH · EMA stack ↑ · Gap +4.9%
+2,DLO,14.04,0.07,31,0,6,10,0,0,6,9,11.68,88.7,6.2,4.14,SI 12% · Accumulating · Insider 23% · RS positive · EMA stack ↑
+2,ENOV,26.63,7.16,31,0,8,0,0,0,12,11,17.790001999999998,56.4,11.6,1.53,SI 18% · DTC 11.6d · RS strong (5/20/60d) · Up 7.2% today · EMA stack ↑
+2,TSLA,412.6,3.53,31,0,0,5,0,5,8,13,2.1300000999999997,2815.9,1.1,1549.61,Insider 11% · WSB #12 · RS positive · EMA stack ↑ · Near 20D high
+2,CORZ,21.16,-14.11,31,0,9,5,0,0,10,7,21.61,233.4,5.4,6.68,SI 22% · Accumulating · RS strong (5/20/60d) · Above EMA20 · Gap -8.9%
+2,VERX,13.87,9.69,31,0,6,3,0,0,12,10,11.450000000000001,69.8,6.6,2.24,SI 11% · RS strong (5/20/60d) · Up 9.7% today · Above EMA20 · Gap +10.6%
+2,RKLB,81.41,-3.83,31,0,0,10,0,5,10,6,5.4899998,528.6,1.3,47.06,Accumulating 1.3x · WSB #19 · RS strong (5/20/60d) · EMA stack ↑
+2,ACHR,6.41,-0.08,31,0,3,15,0,0,7,6,14.16,627.0,3.5,4.87,SI 14% · Accumulating 1.4x · Insider 15% · RS positive · Above EMA20
+2,HWM,276.23,7.72,30,0,0,0,0,0,15,15,2.3599999,396.9,4.3,110.75,RS strong (5/20/60d) · Near 52WH · Up 7.7% today · EMA stack ↑ · Gap +7.6%
+2,SYM,56.59,-7.46,30,0,11,15,0,0,0,4,27.529999999999998,110.0,11.5,34.09,SI 28% · DTC 11.5d · Accumulating 1.3x · Insider 14% · Gap -6.4%
+2,BROS,53.3,-9.75,30,0,13,8,0,5,0,4,65.709996,116.3,5.4,8.78,SI 66% · Accumulating · 22.0x mentions · Gap -8.6%
+2,STVN,17.91,-5.7,30,0,3,10,0,0,7,10,2.16,48.9,1.7,4.89,Float 49M · Accumulating 2.6x · RS positive · EMA stack ↑ · Gap -4.7%
+2,FOUR,48.03,12.01,30,0,9,5,0,0,9,7,19.259999999999998,46.2,6.8,4.76,SI 19% · Float 46M · Insider 30% · RS positive · Up 12.0% today
+2,VIA,18.09,4.39,30,0,6,5,0,0,8,11,10.89,60.2,5.0,1.54,SI 11% · Insider 29% · RS positive · EMA stack ↑ · Near 20D high
+2,CRUS,178.05,6.18,30,0,0,0,0,0,15,15,6.510000000000001,50.6,4.6,9.08,RS strong (5/20/60d) · Near 52WH · Up 6.2% today · EMA stack ↑ · Gap +4.6%
+2,CIFR,20.61,-5.93,29,0,3,10,0,0,10,6,16.780001,333.1,2.3,8.43,SI 17% · Accumulating 1.4x · RS strong (5/20/60d) · EMA stack ↑
+2,IOVA,3.86,-5.62,29,0,11,5,0,0,6,7,26.090000000000003,353.5,7.8,1.72,SI 26% · DTC 7.8d · Accumulating · RS positive · Above EMA20
+2,SNAP,5.88,-3.85,29,0,3,10,0,2,7,7,10.5,1104.7,1.9,9.92,SI 10% · Accumulating · Insider 23% · RS positive · Above EMA20
+2,WULF,24.19,-6.02,29,0,6,5,0,0,10,8,28.499999999999996,328.2,3.1,11.92,SI 28% · Insider 23% · RS strong (5/20/60d) · EMA stack ↑
+2,ACMR,60.49,9.23,29,0,0,5,0,0,9,15,5.2600004,53.9,2.8,4.01,Insider 13% · RS positive · Up 9.2% today · EMA stack ↑ · Gap -4.3%
+2,OKTA,81.74,5.52,29,0,0,5,0,0,9,15,5.33,168.0,2.0,14.46,Accumulating · RS positive · Up 5.5% today · EMA stack ↑ · Gap +3.3%
+2,AVPT,10.85,5.6,29,0,3,5,0,0,9,12,6.0300004,146.3,7.0,2.34,Insider 23% · RS positive · Up 5.6% today · Above EMA20 · Gap +3.0%
+2,VICR,265.74,-5.21,29,0,6,10,0,0,7,6,10.75,24.6,1.9,12.11,SI 11% · Float 25M · Accumulating · Insider 27% · RS positive
+2,ALAB,197.71,-7.61,28,0,3,15,0,0,7,3,11.1099996,140.8,2.9,33.89,SI 11% · Accumulating 1.3x · Insider 11% · RS positive · Above EMA20
+2,AMKR,74.58,-3.43,28,0,3,5,0,0,13,7,14.249999999999998,134.3,2.6,18.49,SI 14% · Insider 50% · RS strong (5/20/60d) · Near 52WH · EMA stack ↑
+2,SMR,12.71,-5.99,28,0,6,5,0,0,7,10,23.52,311.9,2.7,4.11,SI 24% · Accumulating · RS positive · EMA stack ↑ · Gap -3.7%
+2,NTCT,37.41,5.33,28,0,0,0,0,0,15,13,5.0300002,68.3,3.8,2.7,RS strong (5/20/60d) · Near 52WH · Up 5.3% today · EMA stack ↑ · Gap +7.2%
+2,GOGO,4.55,5.81,28,0,11,5,0,0,5,7,20.82,97.7,8.8,0.62,SI 21% · DTC 8.8d · Insider 25% · Up 5.8% today · Above EMA20
+2,SAIL,12.29,5.77,28,0,9,0,0,0,9,10,26.44,76.0,5.1,6.97,SI 26% · RS positive · Up 5.8% today · Above EMA20 · Near 20D high
+2,ACIW,46.53,7.51,28,0,3,0,0,0,12,13,6.1100002,100.5,6.2,4.72,RS strong (5/20/60d) · Up 7.5% today · EMA stack ↑ · Gap +9.3% · Near 20D high
+2,PANW,196.7,7.14,27,0,0,0,0,0,12,15,3.2099999999999995,809.1,3.1,159.52,RS strong (5/20/60d) · Up 7.1% today · EMA stack ↑ · Gap +4.0% · Near 20D high
+2,BBAI,4.31,-1.37,27,0,6,5,0,0,7,9,25.16,475.7,4.4,2.06,SI 25% · Accumulating · RS positive · EMA stack ↑ · Near 20D high
+2,NET,250.17,0.64,27,0,0,5,0,0,13,9,3.0299999,315.4,1.8,88.4,Accumulating · RS strong (5/20/60d) · Near 52WH · EMA stack ↑ · Near 20D high
+2,CRWD,493.98,5.53,27,0,0,0,0,0,12,15,2.6199998,248.9,1.6,125.73,RS strong (5/20/60d) · Up 5.5% today · EMA stack ↑ · Gap +4.0% · Near 20D high
+2,VTRS,16.86,5.71,27,0,0,0,0,0,12,15,3.04,1141.4,4.0,19.63,RS positive · Near 52WH · Up 5.7% today · EMA stack ↑ · Gap +3.7%
+2,FIG,20.92,8.45,27,0,6,0,0,0,9,12,26.47,217.9,3.6,11.02,SI 26% · RS positive · Up 8.4% today · Above EMA20 · Gap +4.8%
+2,MSFT,424.25,2.51,27,0,0,0,0,10,8,9,1.1199999999999999,7417.6,2.5,3151.55,WSB #7 · RS positive · EMA stack ↑
+2,INTA,24.38,5.66,27,0,3,5,0,0,9,10,9.2,52.5,6.0,1.88,Insider 11% · RS positive · Up 5.7% today · Above EMA20 · Near 20D high
+2,PATH,10.94,4.19,27,0,6,3,0,0,8,10,29.69,425.8,4.5,5.73,SI 30% · RS positive · Above EMA20 · Near 20D high
+2,DT,40.14,5.05,27,0,0,0,0,0,12,15,4.2600001999999995,296.5,1.3,12.1,RS strong (5/20/60d) · Up 5.1% today · EMA stack ↑ · Gap +4.7% · Near 20D high
+2,ECG,156.5,-7.49,26,0,0,10,0,0,10,6,4.58,50.9,3.7,7.99,Accumulating 1.7x · RS strong (5/20/60d) · EMA stack ↑
+2,CRSP,54.93,-0.27,26,0,11,3,0,0,6,6,27.040002,96.0,13.9,5.3,SI 27% · DTC 13.9d · RS positive · EMA stack ↑
+2,LGN,96.75,-5.38,26,0,0,10,0,0,10,6,5.96,50.3,1.5,15.89,Accumulating 1.4x · RS strong (5/20/60d) · EMA stack ↑
+2,SEI,72.16,-6.83,26,0,6,10,0,0,7,3,22.81,55.2,4.6,6.74,SI 23% · Accumulating · Insider 10% · RS positive · Above EMA20
+2,AAPL,291.19,1.3,26,0,0,5,0,0,10,11,0.9199999999999999,14662.2,3.2,4276.81,Accumulating · RS positive · Near 52WH · EMA stack ↑ · Near 20D high
+2,AG,22.37,5.62,26,0,0,5,0,0,9,12,0.0,488.1,1.0,11.04,Accumulating · RS positive · Up 5.6% today · Above EMA20 · Gap +4.8%
+2,DAVE,258.32,4.85,26,0,8,5,0,0,8,5,13.270001,10.1,2.7,3.28,SI 13% · Float 10M · Insider 11% · RS positive · Above EMA20
+2,PD,7.34,7.14,25,0,3,3,0,0,6,13,16.239999,80.3,3.4,0.56,SI 16% · Up 7.1% today · EMA stack ↑ · Near 20D high
+2,U,28.78,5.5,25,0,0,0,0,0,12,13,8.0,355.5,2.2,12.56,RS strong (5/20/60d) · Up 5.5% today · EMA stack ↑ · Gap +9.5% · Near 20D high
+2,NOK,12.56,-4.8,25,0,0,10,0,0,7,8,1.2200001,4443.6,0.9,70.1,Accumulating 1.4x · RS positive · EMA stack ↑
+2,RBRK,60.97,5.52,25,0,0,0,0,0,12,13,8.290000000000001,154.7,3.1,12.55,RS strong (5/20/60d) · Up 5.5% today · EMA stack ↑ · Gap +5.6% · Near 20D high
+2,WIX,79.41,6.17,25,0,6,0,0,0,9,10,17.559999,46.8,2.6,4.63,SI 18% · Float 47M · RS positive · Up 6.2% today · Above EMA20
+2,ESTC,52.08,6.05,24,0,0,5,0,0,9,10,5.1,82.9,2.3,5.39,Insider 12% · RS positive · Up 6.0% today · Above EMA20 · Gap +6.1%
+2,VRNS,28.96,4.89,24,0,0,0,0,0,11,13,7.4399999999999995,111.1,3.5,3.4,RS strong (5/20/60d) · EMA stack ↑ · Near 20D high
+2,BILL,38.58,4.06,24,0,6,5,0,0,5,8,17.84,88.3,6.5,3.82,SI 18% · Insider 12% · Above EMA20
+2,MDB,294.1,10.87,24,0,0,0,0,0,9,15,4.14,78.0,2.1,23.64,RS positive · Up 10.9% today · EMA stack ↑ · Gap +9.3% · Near 20D high
+2,COIN,195.91,-1.04,24,0,3,5,0,0,10,6,12.82,219.9,2.3,51.73,SI 13% · Accumulating · RS strong (5/20/60d) · EMA stack ↑
+2,DSGX,74.27,4.36,24,0,0,5,0,0,8,11,0.0,85.7,3.6,6.38,Accumulating · RS positive · EMA stack ↑
+2,MIRM,101.06,-8.2,24,0,8,10,0,0,3,3,17.909999,52.5,8.6,6.16,SI 18% · DTC 8.6d · Accumulating 2.0x · Above EMA20
+2,DOCU,48.65,4.55,24,0,3,0,0,0,8,13,10.22,192.2,2.9,9.45,SI 10% · RS positive · EMA stack ↑ · Near 20D high
+2,AMPX,16.64,-25.01,23,0,3,10,0,3,3,4,15.540000000000001,128.3,2.8,2.34,SI 16% · Accumulating 1.3x · 8.5x mentions · Gap -13.8%
+2,ORA,121.93,6.16,23,0,0,5,0,0,5,13,7.71,57.7,4.1,7.49,Accumulating · Up 6.2% today · EMA stack ↑ · Gap +7.0% · Near 20D high
+2,VRDN,17.12,-2.34,23,0,3,10,0,0,7,3,10.75,103.0,3.1,1.76,SI 11% · Accumulating 1.8x · RS positive · Above EMA20
+2,USAS,6.76,4.24,23,0,0,5,0,0,8,10,2.6500002,274.3,1.3,2.2,Insider 20% · RS positive · Above EMA20 · Gap +4.3% · Near 20D high
+2,DUOL,108.22,3.05,23,0,9,0,0,0,5,9,22.28,39.8,4.6,5.04,SI 22% · Float 40M · EMA stack ↑
+2,AVGO,417.52,-1.86,22,0,0,5,0,0,10,7,1.17999995,4675.7,2.1,1976.84,Accumulating · RS positive · Near 52WH · EMA stack ↑
+2,WDC,462.6,-4.25,22,0,0,0,0,0,13,9,8.92,342.2,3.1,159.45,RS strong (5/20/60d) · Near 52WH · EMA stack ↑
+2,ACVA,6.08,16.48,22,0,0,0,0,0,9,13,6.0700003,155.9,3.9,1.12,RS positive · Up 16.5% today · EMA stack ↑ · Gap +18.3% · Near 20D high
+2,MIDD,156.96,10.14,22,0,3,0,0,0,9,10,4.99,36.5,3.7,7.32,Float 36M · RS positive · Up 10.1% today · Above EMA20 · Gap +13.9%
+2,FORM,150.19,0.71,22,0,0,0,0,0,13,9,5.3400002,77.4,1.8,11.71,RS strong (5/20/60d) · Near 52WH · EMA stack ↑
+2,TTMI,156.12,-5.17,22,0,0,5,0,0,10,7,5.1999997,102.3,2.1,16.21,Accumulating · RS positive · Near 52WH · EMA stack ↑
+2,CUK,27.47,6.56,22,0,0,5,0,0,5,12,0.75,1286.0,0.3,38.07,Accumulating · Up 6.6% today · Above EMA20 · Gap +5.8%
+2,AAOI,165.36,-7.38,22,0,3,5,0,0,7,7,13.139999999999999,72.3,0.8,13.24,SI 13% · Accumulating · RS positive · Above EMA20 · Gap -3.7%
+2,ARQT,23.08,-4.52,22,0,8,10,0,0,0,4,14.140001,92.2,12.6,2.89,SI 14% · DTC 12.6d · Accumulating 1.3x · Gap -5.6%
+2,FCEL,12.3,-3.98,22,0,0,10,0,0,7,5,7.39,52.8,2.9,0.65,Accumulating 1.8x · RS positive · Above EMA20
+2,TSM,414.99,-1.08,22,0,0,0,0,0,13,9,0.53,23639.1,2.0,2152.3,RS strong (5/20/60d) · Near 52WH · EMA stack ↑ · Near 20D high
+2,CAVA,82.15,-8.22,21,0,6,8,0,0,3,4,13.780000000000001,104.6,5.4,9.56,SI 14% · Accumulating · Gap -3.3%
+2,SRPT,21.55,-6.4,21,0,11,0,0,0,3,7,28.77,92.9,7.7,2.28,SI 29% · DTC 7.7d · Above EMA20 · Gap -3.4%
+2,AXON,417.17,8.11,21,0,0,0,0,0,9,12,4.52,76.6,2.8,33.61,RS positive · Up 8.1% today · Above EMA20 · Gap +5.8% · Near 20D high
+2,ASTS,69.05,-2.31,21,0,6,3,0,10,0,2,21.33,253.1,3.5,26.8,SI 21% · WSB #9
+2,BE,275.12,-3.62,21,0,0,8,0,0,7,6,9.34,267.9,2.2,78.26,Accumulating · RS positive · EMA stack ↑
+2,JOBY,10.3,-2.06,21,0,3,5,0,0,7,6,12.540000000000001,637.9,3.8,10.13,SI 13% · Insider 33% · RS positive · Above EMA20
+2,IOT,30.31,4.81,21,0,6,0,0,0,8,7,10.290000000000001,353.6,5.5,17.6,SI 10% · RS positive · Above EMA20
+2,AFRM,67.72,3.26,21,0,0,0,0,0,8,13,6.39,279.3,3.5,22.56,RS positive · EMA stack ↑ · Near 20D high
+2,WGS,39.2,12.93,21,0,12,5,0,0,2,2,26.610001999999998,21.1,5.6,1.16,SI 27% · Float 21M · Insider 12% · Up 12.9% today
+2,EXK,10.93,17.4,21,0,0,0,0,0,9,12,0.0,295.0,1.9,3.24,RS positive · Up 17.4% today · Above EMA20 · Gap +9.2% · Near 20D high
+2,SHAK,68.11,-29.44,21,0,12,0,0,0,0,9,20.25,38.5,5.8,2.91,SI 20% · Float 38M · Vol 3.2x · Gap -26.6%
+2,RDDT,162.7,-2.32,21,0,3,0,0,5,7,6,12.0699994,137.4,3.8,31.32,SI 12% · WSB #21 · RS positive · EMA stack ↑
+2,NTSK,11.18,5.97,20,0,0,0,0,0,9,11,0.0,164.8,3.1,4.48,RS positive · Up 6.0% today · EMA stack ↑ · Near 20D high
+2,BMNR,22.43,-2.12,20,0,0,5,0,0,8,7,5.11,529.6,0.6,12.77,Accumulating · RS positive · V-recovery · EMA stack ↑
+2,BOBS,11.28,14.47,20,0,9,0,0,0,2,9,20.43,28.2,4.4,1.47,SI 20% · Float 28M · Up 14.5% today · Above EMA20 · Gap +8.6%
+2,VG,11.29,-5.96,20,0,10,5,0,0,3,2,93.96,499.7,1.0,28.02,SI 94% · Accumulating
+2,UPST,29.25,1.92,20,0,13,5,0,0,0,2,33.400002,78.4,6.0,2.8,SI 33% · Insider 13%
+2,NOW,93.62,5.13,20,0,0,0,0,2,9,9,3.7800000000000002,1028.3,2.0,96.55,RS positive · Up 5.1% today · Above EMA20 · Gap +3.5%
+3,YSS,34.4,-6.7,19,0,0,5,0,0,6,8,8.51,86.0,2.2,4.39,Insider 10% · RS positive · EMA stack ↑
+3,LSCC,120.69,-3.59,19,0,0,5,0,0,10,4,7.9,135.8,3.6,16.54,Accumulating · RS positive · Near 52WH · Above EMA20
+3,PTC,146.28,6.96,19,0,0,0,0,0,9,10,5.72,118.5,3.6,17.41,RS positive · Up 7.0% today · Above EMA20 · Gap +12.6% · Near 20D high
+3,OPEN,5.49,0.83,19,0,3,0,0,0,7,9,14.469999999999999,847.7,4.0,5.29,SI 14% · RS positive · EMA stack ↑ · Near 20D high
+3,AAL,13.14,1.55,18,0,0,0,0,0,7,11,9.08,656.4,1.0,8.69,RS positive · EMA stack ↑ · Near 20D high
+3,PBF,39.47,-5.1,18,0,3,10,0,0,3,2,13.68,96.7,3.2,4.67,SI 14% · Accumulating · Insider 17%
+3,PAAS,59.46,5.07,17,0,0,0,0,0,5,12,0.0,420.9,0.5,25.05,Up 5.1% today · Above EMA20 · Gap +4.3% · Near 20D high
+3,VKTX,31.88,-1.24,17,0,11,0,0,0,6,0,21.079999,113.3,10.0,3.7,SI 21% · DTC 10.0d · RS positive
+3,FSM,10.82,9.96,17,0,0,0,0,0,5,12,0.0,302.0,2.1,3.3,Up 10.0% today · Above EMA20 · Gap +4.8% · Near 20D high
+3,HL,18.95,4.41,17,0,0,5,0,0,4,8,0.0,662.0,0.0,12.71,Accumulating · Above EMA20 · Gap +5.4%
+3,CELH,34.24,4.39,17,0,0,5,0,3,1,8,8.189999,197.2,3.1,8.8,Insider 28% · 4.0x mentions · Above EMA20
+3,RELY,22.39,-5.63,17,0,0,3,0,0,7,7,3.0700000000000003,185.7,2.1,4.71,RS positive · Above EMA20 · Gap +3.1%
+3,ATEC,7.58,8.44,17,0,6,5,0,0,2,4,10.560001,120.9,6.4,1.17,SI 11% · Insider 20% · Up 8.4% today
+3,PSLV,26.34,5.13,17,0,0,0,0,0,5,12,0.0,0.0,0.0,16.8,Up 5.1% today · Above EMA20 · Gap +4.3% · Near 20D high
+3,BTG,5.18,15.64,17,0,0,0,0,0,5,12,0.0,1256.4,1.7,6.92,Up 15.6% today · Above EMA20 · Gap +9.4% · Near 20D high
+3,CTRI,34.91,-16.46,17,0,0,10,0,0,3,4,3.39,100.5,2.5,3.52,Accumulating 1.7x · Gap -10.2%
+3,SNOW,150.89,7.98,17,0,0,0,0,0,9,8,5.35,335.5,2.6,52.16,RS positive · Up 8.0% today · Above EMA20 · Gap +9.8%
+3,MNTN,9.23,5.26,16,0,3,3,0,0,6,4,3.58,38.3,3.0,0.72,Float 38M · Up 5.3% today
+3,QTWO,51.8,4.99,16,0,0,0,0,0,5,11,5.239999699999999,61.6,4.0,3.24,EMA stack ↑
+3,AGBK,7.25,5.22,16,0,0,5,0,0,5,6,8.08,130.2,2.5,1.16,Insider 15% · Up 5.2% today · Gap +3.8%
+3,TARS,61.19,-5.51,15,0,11,0,0,0,0,4,10.95,32.3,10.4,2.63,SI 11% · Float 32M · DTC 10.4d · Gap -3.2%
+3,COHR,322.3,-6.49,15,0,0,0,0,5,3,7,6.0900003,176.6,1.1,60.43,23.0x mentions · Above EMA20 · Gap -4.6%
+3,ONDS,9.0,-3.64,15,0,10,5,0,0,0,0,33.87,463.9,2.4,4.41,SI 34% · Accumulating
+3,CLS,391.15,-5.49,15,0,0,5,0,0,7,3,2.27,113.6,1.3,44.97,Accumulating · RS positive · Above EMA20
+3,DKNG,24.34,1.76,15,0,0,0,0,0,7,8,8.5,478.6,3.1,12.07,RS positive · Above EMA20 · Near 20D high
+3,LUNR,25.03,-4.94,15,0,6,3,0,0,3,3,23.94,129.3,1.9,4.0,SI 24% · Above EMA20
+3,INTR,6.89,-12.1,15,0,3,10,0,0,0,2,16.950001,208.5,3.2,3.04,SI 17% · Accumulating · Insider 19%
+3,CRGY,12.18,-7.06,15,0,3,5,0,0,3,4,12.3,297.1,4.0,4.02,SI 12% · Insider 15% · Gap -4.0%
+3,GPGI,14.05,-19.53,15,0,6,5,0,0,0,4,19.830000000000002,229.1,5.8,4.07,SI 20% · Insider 21% · Gap -23.7%
+3,TPR,134.18,-9.85,14,0,5,5,0,0,0,4,7.21,201.5,7.3,27.46,DTC 7.3d · Accumulating · Gap -9.1%
+3,PL,37.16,-6.39,14,0,3,5,0,0,3,3,13.59,286.9,2.1,13.24,SI 14% · Accumulating · Above EMA20
+3,EQX,14.95,4.04,14,0,0,0,0,0,4,10,0.0,758.7,1.7,11.8,Above EMA20 · Gap +3.4%
+3,GME,24.84,-1.33,14,0,8,3,0,0,0,3,15.120000000000001,408.2,9.8,11.14,SI 15% · DTC 9.8d · Above EMA20
+3,MMS,68.45,7.04,13,0,0,0,0,0,5,8,8.09,53.8,3.5,3.73,Up 7.0% today · Above EMA20 · Near 20D high
+3,FSLY,20.21,-35.98,13,0,3,0,0,3,3,4,14.62,143.6,1.3,3.16,SI 15% · 20.0x mentions · Gap -27.7%
+3,BKV,28.43,-4.74,13,0,3,10,0,0,0,0,8.930001,29.2,3.5,3.11,Float 29M · Accumulating · Insider 66%
+3,HP,36.73,-7.78,13,0,6,0,0,0,3,4,11.18,95.8,6.0,3.73,SI 11% · Gap -6.2%
+3,BLKB,37.19,5.28,13,0,3,0,0,0,6,4,8.3500005,34.4,4.1,1.71,Float 34M · Up 5.3% today
+3,BSY,33.62,4.82,12,0,3,5,0,0,1,3,8.459999999999999,148.9,6.7,10.19,Insider 44%
+3,PR,19.77,-6.81,12,0,0,5,0,0,3,4,2.3699999,766.2,1.4,17.35,Accumulating · Gap -3.8%
+3,PCVX,50.12,-12.22,12,0,8,0,0,0,0,4,10.0,132.3,10.7,7.24,SI 10% · DTC 10.7d · Gap -3.7%
+3,BKD,13.44,-5.25,12,0,8,0,0,0,0,4,16.34,234.3,11.7,3.21,SI 16% · DTC 11.7d · Gap -6.7%
+3,TER,363.72,-5.01,12,0,0,0,0,0,6,6,3.6199997999999995,156.2,1.6,56.94,RS positive · EMA stack ↑
+3,EGO,33.58,6.07,12,0,0,0,0,0,5,7,0.0,257.5,3.9,8.75,Up 6.1% today · Above EMA20
+3,BBBY,5.31,0.57,12,0,0,0,0,0,4,8,0.0,0.0,0.0,0.39,EMA stack ↑
+3,CTRA,32.56,-8.62,12,0,0,0,0,0,3,9,2.77,747.9,1.6,24.72,Vol 7.2x · Gap -6.1%
+3,ARIS,20.04,5.85,12,0,0,0,0,0,5,7,0.0,187.8,2.0,4.13,Up 5.8% today · Above EMA20
+3,MGY,27.17,-5.17,12,0,8,0,0,0,0,4,14.17,179.3,7.3,5.19,SI 14% · DTC 7.3d · Gap -3.0%
+3,FNF,48.15,-6.12,12,0,0,8,0,0,0,4,2.79,256.4,3.5,12.96,Accumulating · Gap -7.8%
+3,RIVN,14.36,-0.92,11,0,6,5,0,0,0,0,13.059999999999999,840.5,5.3,19.28,SI 13% · Insider 38%
+3,GXO,52.74,5.68,11,0,0,5,0,0,2,4,4.97,113.8,4.4,6.07,Accumulating · Up 5.7% today
+3,GRAB,3.82,1.33,11,0,0,5,0,0,3,3,6.6199996,2672.9,4.5,15.62,Insider 22% · Above EMA20
+3,LCID,6.0,-2.99,11,0,6,5,0,0,0,0,29.37,156.3,4.7,2.34,SI 29% · Insider 10%
+3,ELAN,24.82,-5.19,11,0,0,5,0,0,3,3,7.8200005,494.9,4.1,12.39,Accumulating · Above EMA20
+3,CDE,18.77,0.08,10,0,0,0,0,0,3,7,3.73,636.0,1.0,19.42,Above EMA20 · Gap +3.5%
+3,INFQ,12.7,-6.27,10,0,0,8,0,0,0,2,0.0,142.6,1.6,2.75,Accumulating
