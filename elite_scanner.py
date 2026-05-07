@@ -539,6 +539,20 @@ def main():
 
     # Step 5: Score each stock through all 7 layers
     print(f"\n[5/5] Scoring stocks through 7 layers...\n")
+    
+    # DEBUG: Print first 3 stocks' raw quote data
+    sample_count = 0
+    print(f"  DEBUG — Sample raw quote data for first 5 stocks:")
+    for sym in list(universe)[:5]:
+        q_sample = quotes.get(sym, {})
+        if isinstance(q_sample, dict):
+            print(f"    {sym}: price={q_sample.get('regularMarketPrice', 'N/A')}, "
+                  f"mktcap={q_sample.get('marketCap', 'N/A')}, "
+                  f"avgvol={q_sample.get('averageDailyVolume3Month', 'N/A')}, "
+                  f"exchange={q_sample.get('exchange', 'N/A')}")
+        else:
+            print(f"    {sym}: NO QUOTE DATA (type: {type(q_sample).__name__}) value: {q_sample}")
+    print()
 
     results = []
     
@@ -565,11 +579,22 @@ def main():
     quality_filtered = 0
     no_data_count = 0
     total_processed = 0
+    
+    # Track WHICH filter is killing stocks
+    quality_reasons = {
+        "price": 0,
+        "mkt_cap": 0,
+        "avg_vol": 0,
+        "exchange": 0,
+        "no_quote": 0,
+    }
     for symbol in universe:
         try:
             # Get quote
             q = quotes.get(symbol, {})
             if not isinstance(q, dict):
+                quality_reasons["no_quote"] += 1
+                quality_filtered += 1
                 continue
 
             price = q.get("regularMarketPrice", 0) or 0
@@ -577,12 +602,23 @@ def main():
             volume = q.get("regularMarketVolume", 0) or 0
             market_cap = q.get("marketCap", 0) or 0
             exchange = q.get("exchange", "")
+            avg_vol_3m = q.get("averageDailyVolume3Month", 0) or 0
 
-            # Quality gate
-            passed, reason = passes_quality_gate(symbol, price, market_cap,
-                                                  q.get("averageDailyVolume3Month", 0) or 0,
-                                                  exchange)
-            if not passed:
+            # Granular quality gate with reason tracking
+            if price < 2.0 or price > 500:
+                quality_reasons["price"] += 1
+                quality_filtered += 1
+                continue
+            if market_cap < 200_000_000:
+                quality_reasons["mkt_cap"] += 1
+                quality_filtered += 1
+                continue
+            if avg_vol_3m < 500_000:
+                quality_reasons["avg_vol"] += 1
+                quality_filtered += 1
+                continue
+            if exchange and exchange not in ["NMS", "NYQ", "ASE", "NGM", "PCX", "BTS", "NCM"]:
+                quality_reasons["exchange"] += 1
                 quality_filtered += 1
                 continue
 
@@ -685,6 +721,14 @@ def main():
     print(f"\n  Universe size:        {len(universe)}")
     print(f"  Filtered by quality:  {quality_filtered}")
     print(f"  Successfully scored:  {total_processed}")
+    
+    # Show WHICH filter is killing stocks
+    print(f"\n  QUALITY GATE BREAKDOWN (which filter rejected what):")
+    print(f"  {'Filter':<14} {'Rejected':>10}")
+    print(f"  {'-' * 26}")
+    for reason, count in quality_reasons.items():
+        if count > 0:
+            print(f"  {reason:<14} {count:>10}")
     
     print(f"\n  LAYER HIT RATES (% of stocks getting any points):")
     print(f"  {'Layer':<14} {'Hits':>6} {'Hit%':>7} {'AvgPts':>8} {'MaxSeen':>9} {'MaxPossible':>13}")
