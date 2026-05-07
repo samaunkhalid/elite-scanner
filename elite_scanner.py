@@ -540,18 +540,22 @@ def main():
     # Step 5: Score each stock through all 7 layers
     print(f"\n[5/5] Scoring stocks through 7 layers...\n")
     
-    # DEBUG: Print first 3 stocks' raw quote data
-    sample_count = 0
+    # DEBUG: Print first 5 stocks' raw quote data
     print(f"  DEBUG — Sample raw quote data for first 5 stocks:")
     for sym in list(universe)[:5]:
         q_sample = quotes.get(sym, {})
         if isinstance(q_sample, dict):
+            # Show all volume-related fields to find which works
+            v3m = q_sample.get('averageDailyVolume3Month')
+            v10d = q_sample.get('averageDailyVolume10Day')
+            v_avg = q_sample.get('averageVolume')
+            v_today = q_sample.get('regularMarketVolume')
             print(f"    {sym}: price={q_sample.get('regularMarketPrice', 'N/A')}, "
-                  f"mktcap={q_sample.get('marketCap', 'N/A')}, "
-                  f"avgvol={q_sample.get('averageDailyVolume3Month', 'N/A')}, "
+                  f"mktcap={q_sample.get('marketCap', 'N/A')}")
+            print(f"        vol3m={v3m}, vol10d={v10d}, volavg={v_avg}, voltoday={v_today}, "
                   f"exchange={q_sample.get('exchange', 'N/A')}")
         else:
-            print(f"    {sym}: NO QUOTE DATA (type: {type(q_sample).__name__}) value: {q_sample}")
+            print(f"    {sym}: NO QUOTE DATA (type: {type(q_sample).__name__})")
     print()
 
     results = []
@@ -602,7 +606,30 @@ def main():
             volume = q.get("regularMarketVolume", 0) or 0
             market_cap = q.get("marketCap", 0) or 0
             exchange = q.get("exchange", "")
-            avg_vol_3m = q.get("averageDailyVolume3Month", 0) or 0
+            
+            # Try multiple volume field names since Yahoo is inconsistent
+            avg_vol_3m = (
+                q.get("averageDailyVolume3Month")
+                or q.get("averageDailyVolume10Day")
+                or q.get("averageVolume")
+                or q.get("averageVolume10days")
+                or 0
+            )
+            avg_vol_3m = avg_vol_3m or 0
+            
+            # If still no avg volume, derive from history if available
+            if avg_vol_3m == 0:
+                try:
+                    if symbol in history.index.get_level_values(0):
+                        h_df = history.loc[symbol]
+                        if "volume" in h_df.columns and len(h_df) >= 20:
+                            avg_vol_3m = float(h_df["volume"].tail(20).mean())
+                except:
+                    pass
+            
+            # Final fallback: use today's volume
+            if avg_vol_3m == 0 and volume > 0:
+                avg_vol_3m = volume
 
             # Granular quality gate with reason tracking
             if price < 2.0 or price > 500:
