@@ -86,36 +86,39 @@ def get_dynamic_universe():
 # LAYER 1: CATALYST DETECTION
 # ==============================================================
 
-def score_catalyst(symbol, ticker_data):
+def score_catalyst(symbol, calendar_all):
     """
     Catalyst score (0-25 points)
     - Earnings within 7 days: +15
-    - News in last 24h: +5
-    - Recent gap >5% with sustained volume: +5
+    - Earnings 8-14 days: +8
+    - Recent gap >5%: +5
     """
     score = 0
     reasons = []
 
     try:
-        cal = ticker_data.calendar_events
-        if isinstance(cal, dict):
-            sym_cal = cal.get(symbol, {})
+        if isinstance(calendar_all, dict):
+            sym_cal = calendar_all.get(symbol, {})
             if isinstance(sym_cal, dict):
                 earnings = sym_cal.get("earnings", {})
                 if isinstance(earnings, dict):
                     earnings_date = earnings.get("earningsDate")
                     if earnings_date:
-                        if isinstance(earnings_date, list) and earnings_date:
-                            edate = pd.to_datetime(earnings_date[0])
-                        else:
-                            edate = pd.to_datetime(earnings_date)
-                        days_to_earnings = (edate - pd.Timestamp.now(tz=edate.tz)).days
-                        if 0 <= days_to_earnings <= 7:
-                            score += 15
-                            reasons.append(f"Earnings in {days_to_earnings}d")
-                        elif 8 <= days_to_earnings <= 14:
-                            score += 8
-                            reasons.append(f"Earnings in {days_to_earnings}d")
+                        try:
+                            if isinstance(earnings_date, list) and earnings_date:
+                                edate = pd.to_datetime(earnings_date[0])
+                            else:
+                                edate = pd.to_datetime(earnings_date)
+                            now = pd.Timestamp.now(tz=edate.tz) if edate.tz else pd.Timestamp.now()
+                            days_to_earnings = (edate - now).days
+                            if 0 <= days_to_earnings <= 7:
+                                score += 15
+                                reasons.append(f"Earnings in {days_to_earnings}d")
+                            elif 8 <= days_to_earnings <= 14:
+                                score += 8
+                                reasons.append(f"Earnings in {days_to_earnings}d")
+                        except:
+                            pass
     except:
         pass
 
@@ -126,15 +129,9 @@ def score_catalyst(symbol, ticker_data):
 # LAYER 2: SHORT SQUEEZE SETUP
 # ==============================================================
 
-def score_squeeze(symbol, ticker_data):
+def score_squeeze(symbol, key_stats_all):
     """
     Squeeze score (0-20 points)
-    - Short % float > 30%: +10
-    - Short % float 20-30%: +6
-    - Short % float 10-20%: +3
-    - Float < 20M: +5
-    - Float 20-50M: +3
-    - Days to cover > 5: +5
     """
     score = 0
     reasons = []
@@ -143,14 +140,13 @@ def score_squeeze(symbol, ticker_data):
     days_to_cover = 0
 
     try:
-        kstats = ticker_data.key_stats
-        if isinstance(kstats, dict):
-            sym_stats = kstats.get(symbol, {})
+        if isinstance(key_stats_all, dict):
+            sym_stats = key_stats_all.get(symbol, {})
             if isinstance(sym_stats, dict):
                 # Short interest
                 short_pct = sym_stats.get("shortPercentOfFloat", 0) or 0
                 if isinstance(short_pct, (int, float)):
-                    short_pct = short_pct * 100  # convert decimal to %
+                    short_pct = short_pct * 100
 
                 # Float
                 float_size = sym_stats.get("floatShares", 0) or 0
@@ -167,6 +163,7 @@ def score_squeeze(symbol, ticker_data):
                     reasons.append(f"SI {short_pct:.0f}%")
                 elif short_pct >= 10:
                     score += 3
+                    reasons.append(f"SI {short_pct:.0f}%")
 
                 # Score float
                 if 0 < float_size < 20_000_000:
@@ -174,6 +171,7 @@ def score_squeeze(symbol, ticker_data):
                     reasons.append(f"Float {float_size/1e6:.0f}M")
                 elif 20_000_000 <= float_size < 50_000_000:
                     score += 3
+                    reasons.append(f"Float {float_size/1e6:.0f}M")
 
                 # Score days to cover
                 if days_to_cover >= 7:
@@ -191,12 +189,9 @@ def score_squeeze(symbol, ticker_data):
 # LAYER 3: SMART MONEY FLOW
 # ==============================================================
 
-def score_smart_money(symbol, ticker_data, history_df):
+def score_smart_money(symbol, key_stats_all, history_df):
     """
     Smart money score (0-15 points)
-    Proxy: relative volume on UP days vs DOWN days (institutional accumulation)
-    - High volume on up days, low on down days = accumulation: +10
-    - Insider ownership > 5%: +5
     """
     score = 0
     reasons = []
@@ -208,18 +203,18 @@ def score_smart_money(symbol, ticker_data, history_df):
             df["change"] = df["close"].pct_change()
             up_vol = df[df["change"] > 0]["volume"].mean()
             dn_vol = df[df["change"] < 0]["volume"].mean()
-            if up_vol > 0 and dn_vol > 0:
+            if up_vol > 0 and dn_vol > 0 and not pd.isna(up_vol) and not pd.isna(dn_vol):
                 acc_ratio = up_vol / dn_vol
                 if acc_ratio > 1.3:
                     score += 10
-                    reasons.append(f"Accumulating (UV/DV {acc_ratio:.1f})")
+                    reasons.append(f"Accumulating {acc_ratio:.1f}x")
                 elif acc_ratio > 1.1:
                     score += 5
+                    reasons.append("Accumulating")
 
         # Insider ownership
-        kstats = ticker_data.key_stats
-        if isinstance(kstats, dict):
-            sym_stats = kstats.get(symbol, {})
+        if isinstance(key_stats_all, dict):
+            sym_stats = key_stats_all.get(symbol, {})
             if isinstance(sym_stats, dict):
                 insider_pct = sym_stats.get("heldPercentInsiders", 0) or 0
                 if isinstance(insider_pct, (int, float)):
@@ -242,46 +237,15 @@ def score_smart_money(symbol, ticker_data, history_df):
 def score_options(symbol, ticker_data):
     """
     Options score (0-15 points)
-    Note: Yahoo gives limited options data — this is a basic implementation
-    - Has active options chain: +5
-    - Implied vol > 80: +5 (high IV = expected move)
-    - Open interest > 10K on near-term calls: +5
+    Note: Yahoo options data is slow to fetch per-stock.
+    Currently uses simplified scoring based on quote data.
+    To enable full options flow, upgrade to FlowAlgo or paid API.
     """
     score = 0
     reasons = []
 
-    try:
-        opts = ticker_data.option_chain
-        if isinstance(opts, pd.DataFrame) and not opts.empty:
-            # Filter for symbol
-            if symbol in opts.index.get_level_values(0):
-                sym_opts = opts.loc[symbol]
-                if not sym_opts.empty:
-                    score += 5
-                    reasons.append("Options active")
-
-                    # Look at calls
-                    if "optionType" in sym_opts.columns:
-                        calls = sym_opts[sym_opts["optionType"] == "calls"]
-                        if not calls.empty and "openInterest" in calls.columns:
-                            max_oi = calls["openInterest"].max()
-                            if max_oi > 50_000:
-                                score += 7
-                                reasons.append(f"Heavy call OI {max_oi/1000:.0f}K")
-                            elif max_oi > 10_000:
-                                score += 4
-                            
-                            # Implied vol check
-                            if "impliedVolatility" in calls.columns:
-                                avg_iv = calls["impliedVolatility"].mean() * 100
-                                if avg_iv > 100:
-                                    score += 3
-                                    reasons.append(f"IV {avg_iv:.0f}%")
-                                elif avg_iv > 80:
-                                    score += 2
-    except:
-        pass
-
+    # Placeholder — return 0 for now to keep scanner fast
+    # Future: integrate with paid options flow API
     return score, reasons
 
 
@@ -358,12 +322,9 @@ def score_social(symbol, social_map):
 # LAYER 6: RELATIVE STRENGTH
 # ==============================================================
 
-def score_strength(symbol, history_df, spy_df):
+def score_strength(symbol, history_df, spy_df, change_pct=0):
     """
-    Relative Strength score (0-10 points)
-    - Outperforming SPY 5d AND 20d AND 60d: +10
-    - Outperforming SPY in 2 of 3: +6
-    - At/near 52-week high: +3 bonus
+    Relative Strength score (0-15 points) — boosted from 10
     """
     score = 0
     reasons = []
@@ -373,47 +334,60 @@ def score_strength(symbol, history_df, spy_df):
 
     try:
         # Calculate returns at multiple timeframes
-        for period, points_full, points_partial in [(5, 3, 0), (20, 4, 0), (60, 3, 0)]:
+        timeframe_score = 0
+        for period, points in [(5, 3), (20, 4), (60, 3)]:
             if len(history_df) >= period and len(spy_df) >= period:
                 stock_ret = (history_df["close"].iloc[-1] / history_df["close"].iloc[-period] - 1) * 100
                 spy_ret = (spy_df["close"].iloc[-1] / spy_df["close"].iloc[-period] - 1) * 100
                 if stock_ret > spy_ret:
-                    score += points_full
+                    timeframe_score += points
 
-        if score >= 8:
+        score += timeframe_score
+        if timeframe_score >= 8:
             reasons.append("RS strong (5/20/60d)")
-        elif score >= 5:
+        elif timeframe_score >= 5:
             reasons.append("RS positive")
 
         # 52-week high proximity
         high_52w = history_df["close"].tail(252).max() if len(history_df) >= 252 else history_df["close"].max()
         current = history_df["close"].iloc[-1]
-        pct_from_high = ((high_52w - current) / high_52w) * 100
-        if pct_from_high < 5:
-            score = min(score + 3, 10)
-            reasons.append("Near 52WH")
-        elif pct_from_high > 50:
-            # V-bottom recovery setup
-            low_52w = history_df["close"].tail(252).min() if len(history_df) >= 252 else history_df["close"].min()
-            pct_from_low = ((current - low_52w) / low_52w) * 100
-            if pct_from_low > 50:
-                score = min(score + 2, 10)
-                reasons.append("V-recovery")
+        if high_52w > 0:
+            pct_from_high = ((high_52w - current) / high_52w) * 100
+            if pct_from_high < 5:
+                score += 3
+                reasons.append("Near 52WH")
+            elif pct_from_high > 50:
+                low_52w = history_df["close"].tail(252).min() if len(history_df) >= 252 else history_df["close"].min()
+                if low_52w > 0:
+                    pct_from_low = ((current - low_52w) / low_52w) * 100
+                    if pct_from_low > 50:
+                        score += 2
+                        reasons.append("V-recovery")
+
+        # Today's move (extra 2 points for big up days)
+        if change_pct > 5:
+            score += 2
+            reasons.append(f"Up {change_pct:.1f}% today")
+        elif change_pct > 2:
+            score += 1
     except:
         pass
 
-    return score, reasons
+    return min(score, 15), reasons
 
 
 # ==============================================================
 # LAYER 7: TECHNICAL BREAKOUT
 # ==============================================================
 
-def score_technical(symbol, history_df):
+def score_technical(symbol, history_df, quote_data=None):
     """
-    Technical score (0-5 points)
-    - Above EMA9, EMA20, SMA50: +3
-    - Volume surge today vs 20-day avg > 2x: +2
+    Technical score (0-20 points) — boosted from 5 since options is disabled
+    - Above EMA9, EMA20, SMA50: +6
+    - Volume surge today vs 20-day avg > 2x: +5
+    - Recent gap > 3%: +4
+    - Within 5% of 20-day high: +3
+    - Bullish daily candle: +2
     """
     score = 0
     reasons = []
@@ -428,21 +402,51 @@ def score_technical(symbol, history_df):
         df["SMA50"] = df["close"].rolling(50).mean()
 
         latest = df.iloc[-1]
+        prev = df.iloc[-2]
+
+        # EMA stack
         if latest["close"] > latest["EMA9"] > latest["EMA20"] > latest["SMA50"]:
-            score += 3
+            score += 6
             reasons.append("EMA stack ↑")
         elif latest["close"] > latest["EMA20"]:
-            score += 1
+            score += 3
+            reasons.append("Above EMA20")
 
         # Volume surge
         avg_vol = df["volume"].tail(20).mean()
-        if latest["volume"] > avg_vol * 2:
-            score += 2
+        if avg_vol > 0 and latest["volume"] > avg_vol * 2:
+            score += 5
             reasons.append(f"Vol {latest['volume']/avg_vol:.1f}x")
+        elif avg_vol > 0 and latest["volume"] > avg_vol * 1.5:
+            score += 3
+
+        # Recent gap
+        if prev["close"] > 0:
+            gap_pct = ((latest["open"] - prev["close"]) / prev["close"]) * 100
+            if abs(gap_pct) > 3:
+                score += 4
+                reasons.append(f"Gap {gap_pct:+.1f}%")
+            elif abs(gap_pct) > 1.5:
+                score += 2
+
+        # 20-day high proximity
+        high_20 = df["close"].tail(20).max()
+        if high_20 > 0:
+            pct_from_high = ((high_20 - latest["close"]) / high_20) * 100
+            if pct_from_high < 2:
+                score += 3
+                reasons.append("Near 20D high")
+            elif pct_from_high < 5:
+                score += 1
+
+        # Bullish daily candle
+        if latest["close"] > latest["open"] and latest["close"] > prev["close"]:
+            score += 2
+
     except:
         pass
 
-    return score, reasons
+    return min(score, 20), reasons
 
 
 # ==============================================================
@@ -502,6 +506,21 @@ def main():
     quotes = tickers.price
     history = tickers.history(period="1y", interval="1d")
 
+    # Pre-fetch supporting data in batches (massive speedup)
+    print(f"  Fetching key stats...")
+    try:
+        key_stats_all = tickers.key_stats
+    except Exception as e:
+        print(f"  Key stats fetch failed: {e}")
+        key_stats_all = {}
+
+    print(f"  Fetching calendar events...")
+    try:
+        calendar_all = tickers.calendar_events
+    except Exception as e:
+        print(f"  Calendar fetch failed: {e}")
+        calendar_all = {}
+
     # Step 5: Score each stock through all 7 layers
     print(f"\n[5/5] Scoring stocks through 7 layers...\n")
 
@@ -537,26 +556,28 @@ def main():
                 pass
 
             # Score all 7 layers
-            cat_score, cat_reasons = score_catalyst(symbol, tickers)
-            sq_score, sq_reasons, sq_data = score_squeeze(symbol, tickers)
-            sm_score, sm_reasons = score_smart_money(symbol, tickers, hist_df)
+            cat_score, cat_reasons = score_catalyst(symbol, calendar_all)
+            sq_score, sq_reasons, sq_data = score_squeeze(symbol, key_stats_all)
+            sm_score, sm_reasons = score_smart_money(symbol, key_stats_all, hist_df)
             opt_score, opt_reasons = score_options(symbol, tickers)
             soc_score, soc_reasons = score_social(symbol, social_map)
-            rs_score, rs_reasons = score_strength(symbol, hist_df, spy_df)
-            tech_score, tech_reasons = score_technical(symbol, hist_df)
+            rs_score, rs_reasons = score_strength(symbol, hist_df, spy_df, change_pct)
+            tech_score, tech_reasons = score_technical(symbol, hist_df, q)
 
             total = cat_score + sq_score + sm_score + opt_score + soc_score + rs_score + tech_score
 
-            # Only keep tier 1 setups
-            if total < 35:
+            # Keep all stocks scoring at least minimal points
+            # (Yahoo free data limits some layers — adjust thresholds accordingly)
+            if total < 10:
                 continue
 
             # Determine tier and tags
-            if total >= 75:
+            # Adjusted thresholds for Yahoo-free data reality
+            if total >= 50:
                 tier = "S"
-            elif total >= 60:
+            elif total >= 35:
                 tier = "1"
-            elif total >= 45:
+            elif total >= 20:
                 tier = "2"
             else:
                 tier = "3"
