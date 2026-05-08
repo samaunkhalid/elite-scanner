@@ -6,1686 +6,2394 @@
 <meta http-equiv="refresh" content="300">
 <title>Elite Scanner — Pro Desk</title>
 <style>
-:root {
-    --bg:#080b10; --panel:#101620; --panel2:#0d121a; --border:#1f2937;
-    --text:#e5e7eb; --muted:#94a3b8; --muted2:#64748b;
-    --green:#22c55e; --red:#ef4444; --blue:#38bdf8; --orange:#f59e0b;
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
 }
-* { box-sizing:border-box; margin:0; padding:0; }
+
 body {
-    background: radial-gradient(circle at top left, rgba(56,189,248,.08), transparent 30%),
-                radial-gradient(circle at top right, rgba(34,197,94,.05), transparent 25%),
-                var(--bg);
-    color:var(--text);
-    font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    background:
+        radial-gradient(circle at top right, rgba(16, 185, 129, 0.10), transparent 28%),
+        linear-gradient(180deg, #05070b 0%, #080b12 100%);
+    color: #e5e7eb;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    min-height: 100vh;
+    padding-bottom: 44px;
 }
-a { color:inherit; }
-.positive { color:var(--green); } .negative { color:var(--red); }
-.topbar {
-    position:sticky; top:0; z-index:50; border-bottom:1px solid var(--border);
-    background:rgba(8,11,16,.92); backdrop-filter:blur(14px);
+
+.header {
+    position: sticky;
+    top: 0;
+    z-index: 50;
+    background: rgba(3, 7, 18, 0.92);
+    border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+    backdrop-filter: blur(14px);
 }
-.topbar-inner {
-    max-width:1540px; margin:0 auto; padding:18px 24px;
-    display:flex; justify-content:space-between; gap:18px; align-items:center;
+
+.header-inner {
+    max-width: 1480px;
+    margin: 0 auto;
+    padding: 16px 22px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 18px;
 }
-.brand h1 { font-size:22px; letter-spacing:-.03em; }
-.brand p { color:var(--muted); font-size:12px; margin-top:4px; }
-.status {
-    padding:8px 14px; border:1px solid #22c55e; color:#22c55e;
-    border-radius:999px; font-size:12px; font-weight:800; text-align:center;
+
+.title h1 {
+    font-size: 19px;
+    font-weight: 750;
+    letter-spacing: -0.02em;
 }
-.time { color:var(--muted); font-size:12px; text-align:right; margin-top:4px; }
-.container { max-width:1540px; margin:0 auto; padding:24px; }
-.regime {
-    border:1px solid var(--border); border-left:4px solid var(--accent);
-    background:linear-gradient(135deg, rgba(16,22,32,.96), rgba(13,18,26,.96));
-    border-radius:16px; padding:18px 20px; display:flex; justify-content:space-between;
-    gap:16px; align-items:center; margin-bottom:18px;
+
+.title p {
+    color: #94a3b8;
+    font-size: 12px;
+    margin-top: 3px;
 }
-.regime-title { font-size:17px; font-weight:900; }
-.regime-sub { color:var(--muted); font-size:12px; margin-top:4px; }
-.tape { display:flex; gap:10px; flex-wrap:wrap; justify-content:flex-end; }
-.tape span {
-    border:1px solid var(--border); background:rgba(15,23,42,.7);
-    border-radius:999px; padding:7px 10px; color:var(--muted); font-size:12px;
+
+.header-meta {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    font-size: 12px;
+    color: #94a3b8;
 }
-.tape b { margin-left:4px; }
-.kpis { display:grid; grid-template-columns:repeat(6,minmax(120px,1fr)); gap:12px; margin-bottom:22px; }
-.kpi { border:1px solid var(--border); background:rgba(16,22,32,.85); border-radius:14px; padding:15px; }
-.kpi div { font-size:26px; font-weight:900; letter-spacing:-.03em; }
-.kpi span { color:var(--muted); font-size:11px; text-transform:uppercase; letter-spacing:.08em; margin-top:5px; display:block; }
-.nav { display:flex; flex-wrap:wrap; gap:10px; margin-bottom:24px; }
-.nav a {
-    text-decoration:none; border:1px solid var(--border); background:rgba(15,23,42,.65);
-    color:var(--muted); border-radius:999px; padding:9px 13px; font-size:12px; font-weight:800;
+
+.status-pill {
+    padding: 5px 11px;
+    border-radius: 999px;
+    font-weight: 700;
+    border: 1px solid rgba(148, 163, 184, 0.18);
 }
-.nav a:hover { color:var(--text); border-color:#334155; }
-.section { margin-bottom:32px; }
-.section-head {
-    --accent:var(--blue); border:1px solid var(--border); border-left:4px solid var(--accent);
-    background:rgba(16,22,32,.78); padding:16px 18px; border-radius:14px;
-    display:flex; justify-content:space-between; gap:12px; align-items:center; margin-bottom:14px;
+
+.status-blue { color: #60a5fa; background: rgba(59, 130, 246, 0.10); }
+.status-green { color: #34d399; background: rgba(16, 185, 129, 0.10); }
+.status-yellow { color: #fbbf24; background: rgba(245, 158, 11, 0.10); }
+.status-gray { color: #94a3b8; background: rgba(148, 163, 184, 0.08); }
+
+.container {
+    max-width: 1480px;
+    margin: 0 auto;
+    padding: 22px;
 }
-.section-head h2 { font-size:18px; letter-spacing:-.02em; }
-.section-head p { color:var(--muted); font-size:12px; margin-top:4px; }
-.count {
-    border:1px solid var(--border); background:rgba(15,23,42,.9); border-radius:12px;
-    min-width:46px; text-align:center; padding:10px 12px; font-weight:900;
+
+.regime-banner {
+    border-radius: 14px;
+    border: 1px solid rgba(148, 163, 184, 0.14);
+    padding: 16px 18px;
+    display: flex;
+    justify-content: space-between;
+    gap: 16px;
+    flex-wrap: wrap;
+    margin-bottom: 16px;
+    background: rgba(15, 23, 42, 0.82);
 }
-.grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(390px,1fr)); gap:14px; }
-.card {
-    --accent:var(--blue); border:1px solid var(--border); border-top:3px solid var(--accent);
-    background:linear-gradient(180deg, rgba(16,22,32,.96), rgba(10,15,22,.96));
-    border-radius:16px; padding:16px; box-shadow:0 10px 30px rgba(0,0,0,.18);
+
+.regime-banner strong {
+    display: block;
+    font-size: 15px;
+    margin-bottom: 4px;
 }
-.card:hover { border-color:#334155; transform:translateY(-1px); transition:.15s ease; }
-.card-top { display:flex; justify-content:space-between; gap:12px; align-items:flex-start; }
-.sym-row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
-.symbol { font-size:25px; font-weight:950; letter-spacing:-.04em; }
-.sector,.tier {
-    border:1px solid var(--border); background:rgba(15,23,42,.8); border-radius:999px;
-    padding:4px 8px; font-size:11px; font-weight:850;
+
+.regime-banner span {
+    color: #94a3b8;
+    font-size: 12px;
 }
-.bucket { color:var(--muted); font-size:11px; text-transform:uppercase; letter-spacing:.08em; margin-top:5px; }
-.score { min-width:62px; text-align:right; font-size:27px; font-weight:950; }
-.score small { color:var(--muted2); font-size:11px; }
+
+.regime-banner.bullish { border-left: 4px solid #10b981; }
+.regime-banner.bearish { border-left: 4px solid #ef4444; }
+.regime-banner.caution { border-left: 4px solid #f59e0b; }
+.regime-banner.neutral { border-left: 4px solid #64748b; }
+
+.regime-metrics {
+    display: flex;
+    gap: 14px;
+    align-items: center;
+    flex-wrap: wrap;
+}
+
+.regime-metrics span {
+    color: #cbd5e1;
+}
+
+.positive { color: #22c55e !important; }
+.negative { color: #ef4444 !important; }
+
+.kpi-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
+    gap: 10px;
+    margin-bottom: 16px;
+}
+
+.kpi-card {
+    background: rgba(15, 23, 42, 0.82);
+    border: 1px solid rgba(148, 163, 184, 0.12);
+    border-radius: 12px;
+    padding: 14px 12px;
+}
+
+.kpi-card span {
+    display: block;
+    font-size: 24px;
+    font-weight: 800;
+}
+
+.kpi-card label {
+    color: #94a3b8;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin-top: 5px;
+    display: block;
+}
+
+.kpi-card.focus span { color: #38bdf8; }
+.kpi-card.potential span { color: #38bdf8; }
+.kpi-card.active span { color: #22c55e; }
+.kpi-card.extended span { color: #f59e0b; }
+.kpi-card.risk span { color: #ef4444; }
+
+.nav-tabs {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-bottom: 18px;
+}
+
+.nav-tabs a {
+    color: #cbd5e1;
+    text-decoration: none;
+    font-size: 12px;
+    padding: 7px 11px;
+    border-radius: 999px;
+    border: 1px solid rgba(148, 163, 184, 0.12);
+    background: rgba(15, 23, 42, 0.62);
+}
+
+.desk-section,
+.desk-table-section {
+    margin-bottom: 22px;
+}
+
+.section-header {
+    background: rgba(15, 23, 42, 0.86);
+    border: 1px solid rgba(148, 163, 184, 0.12);
+    border-radius: 12px;
+    padding: 13px 16px;
+    margin-bottom: 12px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+}
+
+.section-header h2 {
+    font-size: 15px;
+    letter-spacing: -0.01em;
+}
+
+.section-header p {
+    color: #94a3b8;
+    font-size: 12px;
+    margin-top: 3px;
+}
+
+.section-count {
+    min-width: 32px;
+    height: 26px;
+    padding: 0 9px;
+    border-radius: 999px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(148, 163, 184, 0.10);
+    color: #e2e8f0;
+    font-weight: 800;
+    font-size: 12px;
+}
+
+.cards-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(330px, 1fr));
+    gap: 12px;
+}
+
+.stock-card {
+    border-radius: 14px;
+    border: 1px solid rgba(148, 163, 184, 0.13);
+    border-top: 2px solid var(--accent);
+    background: rgba(15, 23, 42, 0.78);
+    padding: 14px;
+    box-shadow: 0 12px 30px rgba(0, 0, 0, 0.22);
+}
+
+.stock-card:hover {
+    border-color: rgba(148, 163, 184, 0.25);
+}
+
+.card-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 12px;
+}
+
+.symbol-row {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+    flex-wrap: wrap;
+}
+
+.symbol {
+    font-size: 22px;
+    font-weight: 850;
+    letter-spacing: -0.03em;
+}
+
+.sector,
+.tier {
+    font-size: 10px;
+    padding: 2px 6px;
+    border-radius: 999px;
+    border: 1px solid rgba(148, 163, 184, 0.18);
+    color: #94a3b8;
+}
+
+.bucket-label {
+    color: #94a3b8;
+    font-size: 11px;
+    margin-top: 4px;
+}
+
+.score-box {
+    font-size: 25px;
+    font-weight: 900;
+}
+
 .price-row {
-    display:flex; justify-content:space-between; align-items:end; margin-top:16px;
-    padding-bottom:14px; border-bottom:1px solid var(--border);
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    margin-top: 12px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid rgba(148, 163, 184, 0.10);
 }
-.price { font-size:22px; font-weight:900; }
-.source { color:var(--muted2); font-size:11px; margin-top:2px; }
-.change { font-size:17px; font-weight:900; }
-.badge-row { display:flex; flex-wrap:wrap; gap:7px; margin:13px 0; }
-.badge {
-    border-radius:999px; padding:5px 8px; font-size:10px; font-weight:900;
-    letter-spacing:.04em; border:1px solid transparent;
+
+.price {
+    font-size: 18px;
+    font-weight: 800;
 }
-.green { background:rgba(34,197,94,.12); color:#86efac; border-color:rgba(34,197,94,.25); }
-.red { background:rgba(239,68,68,.12); color:#fca5a5; border-color:rgba(239,68,68,.25); }
-.orange { background:rgba(245,158,11,.12); color:#fcd34d; border-color:rgba(245,158,11,.25); }
-.blue { background:rgba(56,189,248,.12); color:#7dd3fc; border-color:rgba(56,189,248,.25); }
-.muted { background:rgba(148,163,184,.10); color:#cbd5e1; border-color:rgba(148,163,184,.20); }
-.metrics { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; margin-bottom:13px; }
-.metric {
-    border:1px solid var(--border); background:rgba(8,13,20,.75); border-radius:10px;
-    padding:9px 10px; display:flex; justify-content:space-between; gap:8px; font-size:12px;
+
+.change {
+    font-size: 13px;
+    font-weight: 800;
 }
-.metric span { color:var(--muted); } .metric strong { color:var(--text); }
-.note {
-    border:1px solid rgba(56,189,248,.16); background:rgba(56,189,248,.06);
-    color:#dbeafe; border-radius:11px; padding:10px 11px; font-size:12px;
-    line-height:1.35; margin-bottom:12px;
+
+.catalyst-strip {
+    margin: 10px 0;
+    padding: 9px 10px;
+    border-radius: 9px;
+    border: 1px solid rgba(148, 163, 184, 0.14);
+    background: rgba(2, 6, 23, 0.52);
 }
-.tags { display:flex; flex-wrap:wrap; gap:6px; min-height:25px; }
+
+.catalyst-label {
+    font-size: 11px;
+    font-weight: 850;
+    letter-spacing: 0.02em;
+    line-height: 1.35;
+}
+
+.catalyst-headline {
+    font-size: 11px;
+    color: #cbd5e1;
+    margin-top: 5px;
+    line-height: 1.35;
+}
+
+.catalyst-source {
+    color: #94a3b8;
+    font-size: 10px;
+    margin-top: 5px;
+}
+
+.risk-flags {
+    color: #fca5a5;
+    font-size: 10px;
+    margin-top: 5px;
+}
+
+.catalyst-positive {
+    border-color: rgba(16, 185, 129, 0.35);
+    background: rgba(16, 185, 129, 0.08);
+    color: #34d399;
+}
+
+.catalyst-negative {
+    border-color: rgba(239, 68, 68, 0.40);
+    background: rgba(239, 68, 68, 0.08);
+    color: #f87171;
+}
+
+.catalyst-neutral {
+    border-color: rgba(59, 130, 246, 0.35);
+    background: rgba(59, 130, 246, 0.08);
+    color: #93c5fd;
+}
+
+.catalyst-none {
+    border-color: rgba(148, 163, 184, 0.16);
+    background: rgba(148, 163, 184, 0.05);
+    color: #94a3b8;
+}
+
+.metrics-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 6px;
+    margin-top: 10px;
+}
+
+.metrics-grid div {
+    background: rgba(2, 6, 23, 0.45);
+    border: 1px solid rgba(148, 163, 184, 0.10);
+    border-radius: 8px;
+    padding: 8px 7px;
+}
+
+.metrics-grid span {
+    display: block;
+    color: #94a3b8;
+    font-size: 10px;
+    margin-bottom: 3px;
+}
+
+.metrics-grid strong {
+    font-size: 11px;
+}
+
+.status-row {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+    margin-top: 10px;
+}
+
+.status-chip,
 .tag {
-    background:rgba(99,102,241,.11); color:#c4b5fd; border:1px solid rgba(99,102,241,.22);
-    border-radius:999px; padding:4px 8px; font-size:10px; font-weight:800;
+    background: rgba(59, 130, 246, 0.10);
+    color: #93c5fd;
+    border: 1px solid rgba(59, 130, 246, 0.20);
+    border-radius: 999px;
+    padding: 3px 8px;
+    font-size: 10px;
+    font-weight: 700;
 }
-.actions { display:flex; gap:8px; margin-top:14px; }
-.actions a {
-    flex:1; text-align:center; text-decoration:none; border:1px solid var(--border);
-    background:rgba(15,23,42,.78); color:var(--muted); border-radius:9px;
-    padding:8px; font-size:11px; font-weight:850;
+
+.risk-chip {
+    background: rgba(148, 163, 184, 0.08);
+    color: #cbd5e1;
+    border-color: rgba(148, 163, 184, 0.16);
 }
-.actions a:hover { color:var(--text); border-color:#334155; }
-.empty { border:1px dashed #334155; border-radius:14px; padding:28px; color:var(--muted); text-align:center; }
-.table-wrap { overflow-x:auto; border:1px solid var(--border); border-radius:14px; background:rgba(16,22,32,.72); }
-table { width:100%; border-collapse:collapse; font-size:12px; }
-th,td { padding:11px 12px; border-bottom:1px solid var(--border); text-align:left; white-space:nowrap; }
-th { color:var(--muted); font-size:10px; letter-spacing:.08em; text-transform:uppercase; background:rgba(15,23,42,.95); }
-td { color:#dbe4ef; } tr:hover td { background:rgba(30,41,59,.35); }
-.footer { color:var(--muted2); font-size:11px; text-align:center; margin:28px 0 10px; }
-@media (max-width:920px) {
-    .topbar-inner,.regime { flex-direction:column; align-items:flex-start; }
-    .tape { justify-content:flex-start; }
-    .kpis { grid-template-columns:repeat(2,1fr); }
-    .grid { grid-template-columns:1fr; }
+
+.interpretation {
+    margin-top: 10px;
+    background: rgba(56, 189, 248, 0.06);
+    border: 1px solid rgba(56, 189, 248, 0.10);
+    border-radius: 8px;
+    padding: 8px 9px;
+    color: #cbd5e1;
+    font-size: 11px;
+    line-height: 1.35;
+}
+
+.tags-row {
+    display: flex;
+    gap: 5px;
+    flex-wrap: wrap;
+    margin-top: 10px;
+}
+
+.mini-panel {
+    margin-top: 10px;
+    background: rgba(239, 68, 68, 0.06);
+    border: 1px solid rgba(239, 68, 68, 0.12);
+    border-radius: 8px;
+    padding: 8px 9px;
+}
+
+.mini-row {
+    display: flex;
+    justify-content: space-between;
+    color: #94a3b8;
+    font-size: 11px;
+    padding: 2px 0;
+}
+
+.mini-row strong {
+    color: #e5e7eb;
+}
+
+.card-actions {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 6px;
+    margin-top: 12px;
+}
+
+.card-actions a {
+    text-align: center;
+    color: #cbd5e1;
+    background: rgba(15, 23, 42, 0.9);
+    border: 1px solid rgba(148, 163, 184, 0.12);
+    border-radius: 7px;
+    padding: 7px 8px;
+    text-decoration: none;
+    font-size: 11px;
+}
+
+.card-actions a:hover {
+    background: rgba(30, 41, 59, 0.9);
+}
+
+.empty-section {
+    padding: 26px;
+    border-radius: 12px;
+    border: 1px dashed rgba(148, 163, 184, 0.18);
+    color: #94a3b8;
+    background: rgba(15, 23, 42, 0.5);
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+}
+
+.table-wrap {
+    overflow-x: auto;
+    border: 1px solid rgba(148, 163, 184, 0.12);
+    border-radius: 12px;
+    background: rgba(15, 23, 42, 0.72);
+}
+
+table {
+    width: 100%;
+    border-collapse: collapse;
+    min-width: 1100px;
+}
+
+th {
+    text-align: left;
+    color: #94a3b8;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    padding: 10px;
+    background: rgba(2, 6, 23, 0.55);
+}
+
+td {
+    padding: 9px 10px;
+    border-top: 1px solid rgba(148, 163, 184, 0.08);
+    font-size: 11px;
+    color: #cbd5e1;
+    vertical-align: top;
+}
+
+.footer-note {
+    color: #64748b;
+    font-size: 11px;
+    text-align: center;
+    margin-top: 22px;
+}
+
+@media (max-width: 760px) {
+    .header-inner {
+        align-items: flex-start;
+        flex-direction: column;
+    }
+
+    .cards-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .metrics-grid {
+        grid-template-columns: repeat(2, 1fr);
+    }
 }
 </style>
 </head>
 <body>
-<header class="topbar">
-    <div class="topbar-inner">
-        <div class="brand">
+
+<header class="header">
+    <div class="header-inner">
+        <div class="title">
             <h1>Elite Scanner — Pro Desk</h1>
-            <p>Potential movers first · Bucketed by setup quality · Updated 2026-05-08 18:29:57</p>
+            <p>Technical Potential Movers + Catalyst Confirmation + News Risk Filter</p>
         </div>
-        <div>
-            <div class="status">Afternoon</div>
-            <div class="time">NY 14:29:57</div>
+        <div class="header-meta">
+            <span class="status-pill status-green">Afternoon</span>
+            <span>NY: 2026-05-08 15:13</span>
+            <span>UTC: 2026-05-08 19:13</span>
         </div>
     </div>
 </header>
 
 <main class="container">
     
-    <div class="regime" style="--accent:#22c55e;">
+    <div class="regime-banner bullish">
         <div>
-            <div class="regime-title">🟢 Bullish (+0.8%)</div>
-            <div class="regime-sub">Bias: LONG FAVORED · Data: Yahoo + Alpaca IEX · Price Filter: $5–$80</div>
+            <strong>🟢 Bullish (+0.7%)</strong>
+            <span>Bias: LONG FAVORED · Data: Yahoo + Alpaca IEX + Alpaca News</span>
         </div>
-        <div class="tape">
-            <span>SPY <b class="positive">+0.85%</b></span>
-            <span>QQQ <b class="positive">+2.14%</b></span>
-            <span>IWM <b class="positive">+0.85%</b></span>
-            <span>VIX <b>17.4</b></span>
-            <span>IEX <b>24</b></span>
-            <span>Raw <b>192</b></span>
+        <div class="regime-metrics">
+            <span>SPY <b class="positive">+0.73%</b></span>
+            <span>QQQ <b class="positive">+2.18%</b></span>
+            <span>IWM <b class="positive">+0.63%</b></span>
+            <span>VIX <b>17.5</b></span>
         </div>
     </div>
     
-
-    <div class="kpis"><div class="kpi"><div style="color:#38bdf8;">10</div><span>Potential</span></div><div class="kpi"><div style="color:#22c55e;">10</div><span>Active Mom.</span></div><div class="kpi"><div style="color:#f59e0b;">3</div><span>Extended</span></div><div class="kpi"><div style="color:#ef4444;">1</div><span>High Risk</span></div><div class="kpi"><div style="color:#94a3b8;">192</div><span>Raw Universe</span></div><div class="kpi"><div style="color:#f8fafc;">67</div><span>Avg Score</span></div></div>
-
-    <nav class="nav">
-        <a href="#potential_mover">Potential Movers</a>
-        <a href="#active_momentum">Active Momentum</a>
-        <a href="#extended_chase_risk">Extended Risk</a>
-        <a href="#high_risk_extreme">High Risk</a>
-        <a href="#desk">Desk View</a>
-    </nav>
-
     
-    <section id="potential_mover" class="section">
-        <div class="section-head" style="--accent:#38bdf8;">
+    <div class="kpi-grid">
+        <div class="kpi-card focus"><span>10</span><label>Active Watchlist</label></div>
+        <div class="kpi-card potential"><span>10</span><label>Potential</label></div>
+        <div class="kpi-card active"><span>10</span><label>Active Momentum</label></div>
+        <div class="kpi-card extended"><span>2</span><label>Extended</label></div>
+        <div class="kpi-card risk"><span>2</span><label>High Risk</label></div>
+        <div class="kpi-card"><span>175</span><label>Raw Scored</label></div>
+        <div class="kpi-card"><span>69</span><label>Avg Score</label></div>
+    </div>
+    
+
+    <div class="nav-tabs">
+        <a href="#potential">Potential Movers</a>
+        <a href="#active">Active Momentum</a>
+        <a href="#extended">Extended Risk</a>
+        <a href="#risk">High Risk</a>
+        <a href="#desk">Desk View</a>
+    </div>
+
+    <div id="potential">
+    <section class="desk-section section-potential">
+        <div class="section-header">
             <div>
                 <h2>Primary Focus — Potential Movers</h2>
-                <p>Clean, earlier continuation setups. Review these first.</p>
+                <p>Cleanest technical setups. Review this section first.</p>
             </div>
-            <div class="count">10</div>
+            <span class="section-count">10</span>
         </div>
-        <div class="grid">
-    <article class="card potential" style="--accent:#38bdf8;">
+        <div class="cards-grid">
+            
+    <div class="stock-card bucket-potential" style="--accent:#38bdf8;">
         <div class="card-top">
             <div>
-                <div class="sym-row">
-                    <span class="symbol">GFS</span>
+                <div class="symbol-row">
+                    <span class="symbol">AVPT</span>
                     <span class="sector">Other</span>
-                    <span class="tier" style="color:#22c55e;">Tier 1</span>
+                    <span class="tier" style="color:#10b981;border-color:#10b981;">Tier 1</span>
                 </div>
-                <div class="bucket">POTENTIAL MOVER</div>
+                <div class="bucket-label">Potential Mover</div>
             </div>
-            <div class="score" style="color:#22c55e;">69<small>/100</small></div>
+            <div class="score-box" style="color:#10b981;">72</div>
         </div>
 
         <div class="price-row">
-            <div>
-                <div class="price">$75.11</div>
-                <div class="source">Yahoo + IEX</div>
-            </div>
-            <div class="change positive">+5.90%</div>
+            <div class="price">$11.32</div>
+            <div class="change positive">+9.74%</div>
         </div>
 
-        <div class="badge-row">
-            <span class="badge muted">NORMAL</span>
-            <span class="badge green">Above VWAP</span>
-            <span class="badge green">Near HOD</span>
-            <span class="badge blue">Tight Base</span>
-        </div>
-
-        <div class="metrics">
-            <div class="metric"><span>Liquidity</span><strong>$358M</strong></div>
-            <div class="metric"><span>ATR</span><strong>5.2%</strong></div>
-            <div class="metric"><span>VWAP Dist</span><strong>2.4%</strong></div>
-            <div class="metric"><span>From HOD</span><strong>-0.1%</strong></div>
+        <div class="catalyst-strip catalyst-none">
+            <div class="catalyst-label">⚪ Catalyst: No confirmed fresh news</div>
             
-        <div class="metric">
-            <span>Short</span>
-            <strong class="negative">29%</strong>
+            
+            
+        </div>
+
+        <div class="metrics-grid">
+            <div><span>Liquidity</span><strong>$20M</strong></div>
+            <div><span>ATR</span><strong>4.1%</strong></div>
+            <div><span>VWAP Dist</span><strong>+2.5%</strong></div>
+            <div><span>HOD</span><strong>Near HOD</strong></div>
+        </div>
+
+        <div class="status-row">
+            <span class="status-chip">Above VWAP</span>
+            <span class="status-chip">Near HOD</span>
+            <span class="status-chip risk-chip">NORMAL</span>
+        </div>
+
+        <div class="interpretation">Clean continuation candidate; confirm VWAP hold and breakout structure.</div>
+
+        <div class="tags-row"><span class="tag">Above VWAP</span><span class="tag">Upper range</span><span class="tag">Near HOD</span><span class="tag">Consolidating</span><span class="tag">ATR 4.1% (clean)</span></div>
+
+        
+        <div class="mini-panel">
+            <div class="mini-row"><span>Short %</span><strong>6%</strong></div>
+            <div class="mini-row"><span>Float</span><strong>146.3M</strong></div>
+            <div class="mini-row"><span>DTC</span><strong>7.0d</strong></div>
         </div>
         
+
+        <div class="card-actions">
+            <a href="https://www.tradingview.com/chart/?symbol=AVPT" target="_blank">Chart</a>
+            <a href="https://finance.yahoo.com/quote/AVPT" target="_blank">Yahoo</a>
+            <a href="https://stocktwits.com/symbol/AVPT" target="_blank">Twits</a>
         </div>
-
-        <div class="note">Clean continuation watch: tight consolidation near highs.</div>
-
-        <div class="tags"><span class="tag">Above VWAP</span><span class="tag">Upper range</span><span class="tag">Near HOD</span><span class="tag">Tight consolidation</span><span class="tag">$358M liq</span></div>
-
-        <div class="actions">
-            <a href="https://www.tradingview.com/chart/?symbol=GFS" target="_blank">Chart</a>
-            <a href="https://finance.yahoo.com/quote/GFS" target="_blank">Yahoo</a>
-            <a href="https://stocktwits.com/symbol/GFS" target="_blank">Twits</a>
-        </div>
-    </article>
+    </div>
     
-
-    <article class="card potential" style="--accent:#38bdf8;">
+    <div class="stock-card bucket-potential" style="--accent:#38bdf8;">
         <div class="card-top">
             <div>
-                <div class="sym-row">
+                <div class="symbol-row">
                     <span class="symbol">TECK</span>
-                    <span class="sector">Other</span>
-                    <span class="tier" style="color:#22c55e;">Tier 1</span>
+                    <span class="sector">Materials</span>
+                    <span class="tier" style="color:#10b981;border-color:#10b981;">Tier 1</span>
                 </div>
-                <div class="bucket">POTENTIAL MOVER</div>
+                <div class="bucket-label">Potential Mover</div>
             </div>
-            <div class="score" style="color:#22c55e;">69<small>/100</small></div>
+            <div class="score-box" style="color:#10b981;">69</div>
         </div>
 
         <div class="price-row">
-            <div>
-                <div class="price">$64.57</div>
-                <div class="source">Yahoo + IEX</div>
-            </div>
-            <div class="change positive">+6.27%</div>
+            <div class="price">$64.53</div>
+            <div class="change positive">+6.21%</div>
         </div>
 
-        <div class="badge-row">
-            <span class="badge muted">NORMAL</span>
-            <span class="badge green">Above VWAP</span>
-            <span class="badge green">Near HOD</span>
-            <span class="badge blue">Tight Base</span>
-        </div>
-
-        <div class="metrics">
-            <div class="metric"><span>Liquidity</span><strong>$197M</strong></div>
-            <div class="metric"><span>ATR</span><strong>4.0%</strong></div>
-            <div class="metric"><span>VWAP Dist</span><strong>1.1%</strong></div>
-            <div class="metric"><span>From HOD</span><strong>-0.1%</strong></div>
+        <div class="catalyst-strip catalyst-none">
+            <div class="catalyst-label">⚪ Catalyst: No confirmed fresh news</div>
+            
+            
             
         </div>
 
-        <div class="note">Clean continuation watch: tight consolidation near highs.</div>
+        <div class="metrics-grid">
+            <div><span>Liquidity</span><strong>$198M</strong></div>
+            <div><span>ATR</span><strong>4.0%</strong></div>
+            <div><span>VWAP Dist</span><strong>+0.9%</strong></div>
+            <div><span>HOD</span><strong>Near HOD</strong></div>
+        </div>
 
-        <div class="tags"><span class="tag">Above VWAP</span><span class="tag">Upper range</span><span class="tag">Near HOD</span><span class="tag">Tight consolidation</span><span class="tag">$197M liq</span></div>
+        <div class="status-row">
+            <span class="status-chip">Above VWAP</span>
+            <span class="status-chip">Near HOD</span>
+            <span class="status-chip risk-chip">NORMAL</span>
+        </div>
 
-        <div class="actions">
+        <div class="interpretation">Clean continuation candidate; confirm VWAP hold and breakout structure.</div>
+
+        <div class="tags-row"><span class="tag">Above VWAP</span><span class="tag">Upper range</span><span class="tag">Near HOD</span><span class="tag">Tight consolidation</span><span class="tag">$198M liq</span></div>
+
+        
+        <div class="mini-panel">
+            <div class="mini-row"><span>Short %</span><strong>0%</strong></div>
+            <div class="mini-row"><span>Float</span><strong>468.1M</strong></div>
+            <div class="mini-row"><span>DTC</span><strong>2.0d</strong></div>
+        </div>
+        
+
+        <div class="card-actions">
             <a href="https://www.tradingview.com/chart/?symbol=TECK" target="_blank">Chart</a>
             <a href="https://finance.yahoo.com/quote/TECK" target="_blank">Yahoo</a>
             <a href="https://stocktwits.com/symbol/TECK" target="_blank">Twits</a>
         </div>
-    </article>
+    </div>
     
-
-    <article class="card potential" style="--accent:#38bdf8;">
+    <div class="stock-card bucket-potential" style="--accent:#38bdf8;">
         <div class="card-top">
             <div>
-                <div class="sym-row">
-                    <span class="symbol">WRBY</span>
-                    <span class="sector">Other</span>
-                    <span class="tier" style="color:#22c55e;">Tier 1</span>
+                <div class="symbol-row">
+                    <span class="symbol">GFS</span>
+                    <span class="sector">Semis</span>
+                    <span class="tier" style="color:#10b981;border-color:#10b981;">Tier 1</span>
                 </div>
-                <div class="bucket">POTENTIAL MOVER</div>
+                <div class="bucket-label">Potential Mover</div>
             </div>
-            <div class="score" style="color:#22c55e;">66<small>/100</small></div>
+            <div class="score-box" style="color:#10b981;">69</div>
         </div>
 
         <div class="price-row">
-            <div>
-                <div class="price">$29.44</div>
-                <div class="source">Yahoo + IEX</div>
-            </div>
-            <div class="change positive">+8.24%</div>
+            <div class="price">$75.12</div>
+            <div class="change positive">+5.91%</div>
         </div>
 
-        <div class="badge-row">
-            <span class="badge muted">NORMAL</span>
-            <span class="badge green">Above VWAP</span>
-            <span class="badge green">Near HOD</span>
-            <span class="badge blue">Tight Base</span>
-        </div>
-
-        <div class="metrics">
-            <div class="metric"><span>Liquidity</span><strong>$73.8M</strong></div>
-            <div class="metric"><span>ATR</span><strong>6.5%</strong></div>
-            <div class="metric"><span>VWAP Dist</span><strong>2.6%</strong></div>
-            <div class="metric"><span>From HOD</span><strong>-0.4%</strong></div>
+        <div class="catalyst-strip catalyst-none">
+            <div class="catalyst-label">⚪ Catalyst: No confirmed fresh news</div>
+            
+            
             
         </div>
 
-        <div class="note">Clean continuation watch: tight consolidation near highs.</div>
-
-        <div class="tags"><span class="tag">Above VWAP</span><span class="tag">Upper range</span><span class="tag">Near HOD</span><span class="tag">Tight consolidation</span><span class="tag">$74M liq</span></div>
-
-        <div class="actions">
-            <a href="https://www.tradingview.com/chart/?symbol=WRBY" target="_blank">Chart</a>
-            <a href="https://finance.yahoo.com/quote/WRBY" target="_blank">Yahoo</a>
-            <a href="https://stocktwits.com/symbol/WRBY" target="_blank">Twits</a>
+        <div class="metrics-grid">
+            <div><span>Liquidity</span><strong>$359M</strong></div>
+            <div><span>ATR</span><strong>5.2%</strong></div>
+            <div><span>VWAP Dist</span><strong>+2.2%</strong></div>
+            <div><span>HOD</span><strong>Near HOD</strong></div>
         </div>
-    </article>
-    
 
-    <article class="card potential" style="--accent:#38bdf8;">
+        <div class="status-row">
+            <span class="status-chip">Above VWAP</span>
+            <span class="status-chip">Near HOD</span>
+            <span class="status-chip risk-chip">NORMAL</span>
+        </div>
+
+        <div class="interpretation">Clean continuation candidate; confirm VWAP hold and breakout structure.</div>
+
+        <div class="tags-row"><span class="tag">Above VWAP</span><span class="tag">Upper range</span><span class="tag">Near HOD</span><span class="tag">Tight consolidation</span><span class="tag">$359M liq</span></div>
+
+        
+        <div class="mini-panel">
+            <div class="mini-row"><span>Short %</span><strong>29%</strong></div>
+            <div class="mini-row"><span>Float</span><strong>124.6M</strong></div>
+            <div class="mini-row"><span>DTC</span><strong>3.7d</strong></div>
+        </div>
+        
+
+        <div class="card-actions">
+            <a href="https://www.tradingview.com/chart/?symbol=GFS" target="_blank">Chart</a>
+            <a href="https://finance.yahoo.com/quote/GFS" target="_blank">Yahoo</a>
+            <a href="https://stocktwits.com/symbol/GFS" target="_blank">Twits</a>
+        </div>
+    </div>
+    
+    <div class="stock-card bucket-potential" style="--accent:#38bdf8;">
         <div class="card-top">
             <div>
-                <div class="sym-row">
-                    <span class="symbol">AMKR</span>
-                    <span class="sector">Other</span>
-                    <span class="tier" style="color:#22c55e;">Tier 1</span>
-                </div>
-                <div class="bucket">POTENTIAL MOVER</div>
-            </div>
-            <div class="score" style="color:#22c55e;">66<small>/100</small></div>
-        </div>
-
-        <div class="price-row">
-            <div>
-                <div class="price">$76.12</div>
-                <div class="source">Yahoo + IEX</div>
-            </div>
-            <div class="change positive">+5.33%</div>
-        </div>
-
-        <div class="badge-row">
-            <span class="badge muted">NORMAL</span>
-            <span class="badge green">Above VWAP</span>
-            <span class="badge green">Near HOD</span>
-            <span class="badge blue">Tight Base</span>
-        </div>
-
-        <div class="metrics">
-            <div class="metric"><span>Liquidity</span><strong>$406M</strong></div>
-            <div class="metric"><span>ATR</span><strong>6.3%</strong></div>
-            <div class="metric"><span>VWAP Dist</span><strong>1.7%</strong></div>
-            <div class="metric"><span>From HOD</span><strong>-0.7%</strong></div>
-            
-        </div>
-
-        <div class="note">Clean continuation watch: tight consolidation near highs.</div>
-
-        <div class="tags"><span class="tag">Above VWAP</span><span class="tag">Upper range</span><span class="tag">Near HOD</span><span class="tag">Tight consolidation</span><span class="tag">$406M liq</span></div>
-
-        <div class="actions">
-            <a href="https://www.tradingview.com/chart/?symbol=AMKR" target="_blank">Chart</a>
-            <a href="https://finance.yahoo.com/quote/AMKR" target="_blank">Yahoo</a>
-            <a href="https://stocktwits.com/symbol/AMKR" target="_blank">Twits</a>
-        </div>
-    </article>
-    
-
-    <article class="card potential" style="--accent:#38bdf8;">
-        <div class="card-top">
-            <div>
-                <div class="sym-row">
+                <div class="symbol-row">
                     <span class="symbol">GEN</span>
-                    <span class="sector">Consumer</span>
-                    <span class="tier" style="color:#22c55e;">Tier 1</span>
+                    <span class="sector">Other</span>
+                    <span class="tier" style="color:#10b981;border-color:#10b981;">Tier 1</span>
                 </div>
-                <div class="bucket">POTENTIAL MOVER</div>
+                <div class="bucket-label">Potential Mover</div>
             </div>
-            <div class="score" style="color:#22c55e;">66<small>/100</small></div>
+            <div class="score-box" style="color:#10b981;">66</div>
         </div>
 
         <div class="price-row">
-            <div>
-                <div class="price">$22.30</div>
-                <div class="source">Yahoo + IEX</div>
-            </div>
-            <div class="change positive">+10.45%</div>
+            <div class="price">$22.30</div>
+            <div class="change positive">+10.43%</div>
         </div>
 
-        <div class="badge-row">
-            <span class="badge muted">NORMAL</span>
-            <span class="badge green">Above VWAP</span>
-            <span class="badge green">Near HOD</span>
-            <span class="badge blue">Tight Base</span>
-        </div>
-
-        <div class="metrics">
-            <div class="metric"><span>Liquidity</span><strong>$150M</strong></div>
-            <div class="metric"><span>ATR</span><strong>3.6%</strong></div>
-            <div class="metric"><span>VWAP Dist</span><strong>0.9%</strong></div>
-            <div class="metric"><span>From HOD</span><strong>-0.8%</strong></div>
+        <div class="catalyst-strip catalyst-none">
+            <div class="catalyst-label">⚪ Catalyst: No confirmed fresh news</div>
+            
+            
             
         </div>
 
-        <div class="note">Clean continuation watch: tight consolidation near highs.</div>
+        <div class="metrics-grid">
+            <div><span>Liquidity</span><strong>$151M</strong></div>
+            <div><span>ATR</span><strong>3.6%</strong></div>
+            <div><span>VWAP Dist</span><strong>+0.9%</strong></div>
+            <div><span>HOD</span><strong>Near HOD</strong></div>
+        </div>
 
-        <div class="tags"><span class="tag">Above VWAP</span><span class="tag">Upper range</span><span class="tag">Near HOD</span><span class="tag">Tight consolidation</span><span class="tag">Big move +10.5%</span></div>
+        <div class="status-row">
+            <span class="status-chip">Above VWAP</span>
+            <span class="status-chip">Near HOD</span>
+            <span class="status-chip risk-chip">NORMAL</span>
+        </div>
 
-        <div class="actions">
+        <div class="interpretation">Clean continuation candidate; confirm VWAP hold and breakout structure.</div>
+
+        <div class="tags-row"><span class="tag">Above VWAP</span><span class="tag">Upper range</span><span class="tag">Near HOD</span><span class="tag">Tight consolidation</span><span class="tag">Big move +10.4%</span></div>
+
+        
+        <div class="mini-panel">
+            <div class="mini-row"><span>Short %</span><strong>5%</strong></div>
+            <div class="mini-row"><span>Float</span><strong>461.4M</strong></div>
+            <div class="mini-row"><span>DTC</span><strong>3.1d</strong></div>
+        </div>
+        
+
+        <div class="card-actions">
             <a href="https://www.tradingview.com/chart/?symbol=GEN" target="_blank">Chart</a>
             <a href="https://finance.yahoo.com/quote/GEN" target="_blank">Yahoo</a>
             <a href="https://stocktwits.com/symbol/GEN" target="_blank">Twits</a>
         </div>
-    </article>
+    </div>
     
-
-    <article class="card potential" style="--accent:#38bdf8;">
+    <div class="stock-card bucket-potential" style="--accent:#38bdf8;">
         <div class="card-top">
             <div>
-                <div class="sym-row">
-                    <span class="symbol">AUR</span>
+                <div class="symbol-row">
+                    <span class="symbol">VSH</span>
                     <span class="sector">Other</span>
-                    <span class="tier" style="color:#38bdf8;">Tier 2</span>
+                    <span class="tier" style="color:#10b981;border-color:#10b981;">Tier 1</span>
                 </div>
-                <div class="bucket">POTENTIAL MOVER</div>
+                <div class="bucket-label">Potential Mover</div>
             </div>
-            <div class="score" style="color:#38bdf8;">64<small>/100</small></div>
+            <div class="score-box" style="color:#10b981;">65</div>
         </div>
 
         <div class="price-row">
-            <div>
-                <div class="price">$7.22</div>
-                <div class="source">Yahoo + IEX</div>
-            </div>
-            <div class="change positive">+1.12%</div>
+            <div class="price">$34.49</div>
+            <div class="change positive">+5.83%</div>
         </div>
 
-        <div class="badge-row">
-            <span class="badge muted">NORMAL</span>
-            <span class="badge green">Above VWAP</span>
-            <span class="badge green">Near HOD</span>
-            <span class="badge blue">Tight Base</span>
-        </div>
-
-        <div class="metrics">
-            <div class="metric"><span>Liquidity</span><strong>$190M</strong></div>
-            <div class="metric"><span>ATR</span><strong>6.5%</strong></div>
-            <div class="metric"><span>VWAP Dist</span><strong>2.6%</strong></div>
-            <div class="metric"><span>From HOD</span><strong>-0.1%</strong></div>
+        <div class="catalyst-strip catalyst-none">
+            <div class="catalyst-label">⚪ Catalyst: No confirmed fresh news</div>
             
-        <div class="metric">
-            <span>Short</span>
-            <strong class="negative">18%</strong>
+            
+            
+        </div>
+
+        <div class="metrics-grid">
+            <div><span>Liquidity</span><strong>$122M</strong></div>
+            <div><span>ATR</span><strong>4.3%</strong></div>
+            <div><span>VWAP Dist</span><strong>+1.3%</strong></div>
+            <div><span>HOD</span><strong>Near HOD</strong></div>
+        </div>
+
+        <div class="status-row">
+            <span class="status-chip">Above VWAP</span>
+            <span class="status-chip">Near HOD</span>
+            <span class="status-chip risk-chip">NORMAL</span>
+        </div>
+
+        <div class="interpretation">Clean continuation candidate; confirm VWAP hold and breakout structure.</div>
+
+        <div class="tags-row"><span class="tag">Above VWAP</span><span class="tag">Upper range</span><span class="tag">Near HOD</span><span class="tag">Tight consolidation</span><span class="tag">$122M liq</span></div>
+
+        
+        <div class="mini-panel">
+            <div class="mini-row"><span>Short %</span><strong>11%</strong></div>
+            <div class="mini-row"><span>Float</span><strong>113.0M</strong></div>
+            <div class="mini-row"><span>DTC</span><strong>6.3d</strong></div>
         </div>
         
+
+        <div class="card-actions">
+            <a href="https://www.tradingview.com/chart/?symbol=VSH" target="_blank">Chart</a>
+            <a href="https://finance.yahoo.com/quote/VSH" target="_blank">Yahoo</a>
+            <a href="https://stocktwits.com/symbol/VSH" target="_blank">Twits</a>
         </div>
-
-        <div class="note">Clean continuation watch: tight consolidation near highs.</div>
-
-        <div class="tags"><span class="tag">Above VWAP</span><span class="tag">Upper range</span><span class="tag">Near HOD</span><span class="tag">Tight consolidation</span><span class="tag">$191M liq</span></div>
-
-        <div class="actions">
-            <a href="https://www.tradingview.com/chart/?symbol=AUR" target="_blank">Chart</a>
-            <a href="https://finance.yahoo.com/quote/AUR" target="_blank">Yahoo</a>
-            <a href="https://stocktwits.com/symbol/AUR" target="_blank">Twits</a>
-        </div>
-    </article>
+    </div>
     
-
-    <article class="card potential" style="--accent:#38bdf8;">
+    <div class="stock-card bucket-potential" style="--accent:#38bdf8;">
         <div class="card-top">
             <div>
-                <div class="sym-row">
-                    <span class="symbol">COCO</span>
-                    <span class="sector">Other</span>
-                    <span class="tier" style="color:#38bdf8;">Tier 2</span>
+                <div class="symbol-row">
+                    <span class="symbol">AMKR</span>
+                    <span class="sector">Semis</span>
+                    <span class="tier" style="color:#38bdf8;border-color:#38bdf8;">Tier 2</span>
                 </div>
-                <div class="bucket">POTENTIAL MOVER</div>
+                <div class="bucket-label">Potential Mover</div>
             </div>
-            <div class="score" style="color:#38bdf8;">64<small>/100</small></div>
+            <div class="score-box" style="color:#38bdf8;">64</div>
         </div>
 
         <div class="price-row">
-            <div>
-                <div class="price">$72.89</div>
-                <div class="source">Yahoo + IEX</div>
-            </div>
-            <div class="change positive">+6.88%</div>
+            <div class="price">$76.36</div>
+            <div class="change positive">+5.67%</div>
         </div>
 
-        <div class="badge-row">
-            <span class="badge muted">NORMAL</span>
-            <span class="badge green">Above VWAP</span>
-            <span class="badge green">Near HOD</span>
-            <span class="badge blue">Tight Base</span>
-        </div>
-
-        <div class="metrics">
-            <div class="metric"><span>Liquidity</span><strong>$114M</strong></div>
-            <div class="metric"><span>ATR</span><strong>5.2%</strong></div>
-            <div class="metric"><span>VWAP Dist</span><strong>1.7%</strong></div>
-            <div class="metric"><span>From HOD</span><strong>0.0%</strong></div>
+        <div class="catalyst-strip catalyst-none">
+            <div class="catalyst-label">⚪ Catalyst: No confirmed fresh news</div>
+            
+            
             
         </div>
 
-        <div class="note">Clean continuation watch: tight consolidation near highs.</div>
+        <div class="metrics-grid">
+            <div><span>Liquidity</span><strong>$408M</strong></div>
+            <div><span>ATR</span><strong>6.3%</strong></div>
+            <div><span>VWAP Dist</span><strong>+1.7%</strong></div>
+            <div><span>HOD</span><strong>Near HOD</strong></div>
+        </div>
 
-        <div class="tags"><span class="tag">Above VWAP</span><span class="tag">Upper range</span><span class="tag">Near HOD</span><span class="tag">Tight consolidation</span><span class="tag">$114M liq</span></div>
+        <div class="status-row">
+            <span class="status-chip">Above VWAP</span>
+            <span class="status-chip">Near HOD</span>
+            <span class="status-chip risk-chip">NORMAL</span>
+        </div>
 
-        <div class="actions">
+        <div class="interpretation">Clean continuation candidate; confirm VWAP hold and breakout structure.</div>
+
+        <div class="tags-row"><span class="tag">Above VWAP</span><span class="tag">Upper range</span><span class="tag">Near HOD</span><span class="tag">Consolidating</span><span class="tag">$409M liq</span></div>
+
+        
+        <div class="mini-panel">
+            <div class="mini-row"><span>Short %</span><strong>14%</strong></div>
+            <div class="mini-row"><span>Float</span><strong>141.3M</strong></div>
+            <div class="mini-row"><span>DTC</span><strong>2.6d</strong></div>
+        </div>
+        
+
+        <div class="card-actions">
+            <a href="https://www.tradingview.com/chart/?symbol=AMKR" target="_blank">Chart</a>
+            <a href="https://finance.yahoo.com/quote/AMKR" target="_blank">Yahoo</a>
+            <a href="https://stocktwits.com/symbol/AMKR" target="_blank">Twits</a>
+        </div>
+    </div>
+    
+    <div class="stock-card bucket-potential" style="--accent:#38bdf8;">
+        <div class="card-top">
+            <div>
+                <div class="symbol-row">
+                    <span class="symbol">COCO</span>
+                    <span class="sector">Other</span>
+                    <span class="tier" style="color:#38bdf8;border-color:#38bdf8;">Tier 2</span>
+                </div>
+                <div class="bucket-label">Potential Mover</div>
+            </div>
+            <div class="score-box" style="color:#38bdf8;">64</div>
+        </div>
+
+        <div class="price-row">
+            <div class="price">$72.12</div>
+            <div class="change positive">+5.74%</div>
+        </div>
+
+        <div class="catalyst-strip catalyst-none">
+            <div class="catalyst-label">⚪ Catalyst: No confirmed fresh news</div>
+            
+            
+            
+        </div>
+
+        <div class="metrics-grid">
+            <div><span>Liquidity</span><strong>$114M</strong></div>
+            <div><span>ATR</span><strong>5.3%</strong></div>
+            <div><span>VWAP Dist</span><strong>+0.6%</strong></div>
+            <div><span>HOD</span><strong>Near HOD</strong></div>
+        </div>
+
+        <div class="status-row">
+            <span class="status-chip">Above VWAP</span>
+            <span class="status-chip">Near HOD</span>
+            <span class="status-chip risk-chip">NORMAL</span>
+        </div>
+
+        <div class="interpretation">Clean continuation candidate; confirm VWAP hold and breakout structure.</div>
+
+        <div class="tags-row"><span class="tag">Above VWAP</span><span class="tag">Upper range</span><span class="tag">Near HOD</span><span class="tag">Tight consolidation</span><span class="tag">$113M liq</span></div>
+
+        
+        <div class="mini-panel">
+            <div class="mini-row"><span>Short %</span><strong>14%</strong></div>
+            <div class="mini-row"><span>Float</span><strong>49.1M</strong></div>
+            <div class="mini-row"><span>DTC</span><strong>4.0d</strong></div>
+        </div>
+        
+
+        <div class="card-actions">
             <a href="https://www.tradingview.com/chart/?symbol=COCO" target="_blank">Chart</a>
             <a href="https://finance.yahoo.com/quote/COCO" target="_blank">Yahoo</a>
             <a href="https://stocktwits.com/symbol/COCO" target="_blank">Twits</a>
         </div>
-    </article>
-    
-
-    <article class="card potential" style="--accent:#38bdf8;">
-        <div class="card-top">
-            <div>
-                <div class="sym-row">
-                    <span class="symbol">HPQ</span>
-                    <span class="sector">Other</span>
-                    <span class="tier" style="color:#38bdf8;">Tier 2</span>
-                </div>
-                <div class="bucket">POTENTIAL MOVER</div>
-            </div>
-            <div class="score" style="color:#38bdf8;">63<small>/100</small></div>
-        </div>
-
-        <div class="price-row">
-            <div>
-                <div class="price">$22.46</div>
-                <div class="source">Yahoo + IEX</div>
-            </div>
-            <div class="change positive">+7.03%</div>
-        </div>
-
-        <div class="badge-row">
-            <span class="badge muted">NORMAL</span>
-            <span class="badge green">Above VWAP</span>
-            <span class="badge green">Near HOD</span>
-            <span class="badge blue">Tight Base</span>
-        </div>
-
-        <div class="metrics">
-            <div class="metric"><span>Liquidity</span><strong>$362M</strong></div>
-            <div class="metric"><span>ATR</span><strong>4.1%</strong></div>
-            <div class="metric"><span>VWAP Dist</span><strong>1.7%</strong></div>
-            <div class="metric"><span>From HOD</span><strong>-0.4%</strong></div>
-            
-        <div class="metric">
-            <span>Short</span>
-            <strong class="negative">15%</strong>
-        </div>
-        
-        </div>
-
-        <div class="note">Clean continuation watch: tight consolidation near highs.</div>
-
-        <div class="tags"><span class="tag">Above VWAP</span><span class="tag">Upper range</span><span class="tag">Near HOD</span><span class="tag">Tight consolidation</span><span class="tag">$362M liq</span></div>
-
-        <div class="actions">
-            <a href="https://www.tradingview.com/chart/?symbol=HPQ" target="_blank">Chart</a>
-            <a href="https://finance.yahoo.com/quote/HPQ" target="_blank">Yahoo</a>
-            <a href="https://stocktwits.com/symbol/HPQ" target="_blank">Twits</a>
-        </div>
-    </article>
-    
-
-    <article class="card potential" style="--accent:#38bdf8;">
-        <div class="card-top">
-            <div>
-                <div class="sym-row">
-                    <span class="symbol">IBRX</span>
-                    <span class="sector">Other</span>
-                    <span class="tier" style="color:#38bdf8;">Tier 2</span>
-                </div>
-                <div class="bucket">POTENTIAL MOVER</div>
-            </div>
-            <div class="score" style="color:#38bdf8;">62<small>/100</small></div>
-        </div>
-
-        <div class="price-row">
-            <div>
-                <div class="price">$8.49</div>
-                <div class="source">Yahoo + IEX</div>
-            </div>
-            <div class="change positive">+9.47%</div>
-        </div>
-
-        <div class="badge-row">
-            <span class="badge muted">NORMAL</span>
-            <span class="badge green">Above VWAP</span>
-            <span class="badge green">Near HOD</span>
-            <span class="badge blue">Consolidating</span>
-        </div>
-
-        <div class="metrics">
-            <div class="metric"><span>Liquidity</span><strong>$110M</strong></div>
-            <div class="metric"><span>ATR</span><strong>6.6%</strong></div>
-            <div class="metric"><span>VWAP Dist</span><strong>5.2%</strong></div>
-            <div class="metric"><span>From HOD</span><strong>-0.7%</strong></div>
-            
-        <div class="metric">
-            <span>Short</span>
-            <strong class="negative">36%</strong>
-        </div>
-        
-        </div>
-
-        <div class="note">Potential continuation candidate; monitor breakout from consolidation.</div>
-
-        <div class="tags"><span class="tag">Above VWAP extended</span><span class="tag">Upper range</span><span class="tag">Near HOD</span><span class="tag">Consolidating</span><span class="tag">$110M liq</span></div>
-
-        <div class="actions">
-            <a href="https://www.tradingview.com/chart/?symbol=IBRX" target="_blank">Chart</a>
-            <a href="https://finance.yahoo.com/quote/IBRX" target="_blank">Yahoo</a>
-            <a href="https://stocktwits.com/symbol/IBRX" target="_blank">Twits</a>
-        </div>
-    </article>
-    
-
-    <article class="card potential" style="--accent:#38bdf8;">
-        <div class="card-top">
-            <div>
-                <div class="sym-row">
-                    <span class="symbol">JOBY</span>
-                    <span class="sector">Other</span>
-                    <span class="tier" style="color:#38bdf8;">Tier 2</span>
-                </div>
-                <div class="bucket">POTENTIAL MOVER</div>
-            </div>
-            <div class="score" style="color:#38bdf8;">62<small>/100</small></div>
-        </div>
-
-        <div class="price-row">
-            <div>
-                <div class="price">$10.56</div>
-                <div class="source">Yahoo + IEX</div>
-            </div>
-            <div class="change positive">+5.50%</div>
-        </div>
-
-        <div class="badge-row">
-            <span class="badge muted">NORMAL</span>
-            <span class="badge green">Above VWAP</span>
-            <span class="badge green">Near HOD</span>
-            <span class="badge blue">Consolidating</span>
-        </div>
-
-        <div class="metrics">
-            <div class="metric"><span>Liquidity</span><strong>$314M</strong></div>
-            <div class="metric"><span>ATR</span><strong>6.7%</strong></div>
-            <div class="metric"><span>VWAP Dist</span><strong>3.4%</strong></div>
-            <div class="metric"><span>From HOD</span><strong>-0.1%</strong></div>
-            
-        </div>
-
-        <div class="note">Potential continuation candidate; monitor breakout from consolidation.</div>
-
-        <div class="tags"><span class="tag">Above VWAP</span><span class="tag">Upper range</span><span class="tag">Near HOD</span><span class="tag">Consolidating</span><span class="tag">$313M liq</span></div>
-
-        <div class="actions">
-            <a href="https://www.tradingview.com/chart/?symbol=JOBY" target="_blank">Chart</a>
-            <a href="https://finance.yahoo.com/quote/JOBY" target="_blank">Yahoo</a>
-            <a href="https://stocktwits.com/symbol/JOBY" target="_blank">Twits</a>
-        </div>
-    </article>
     </div>
-    </section>
     
-    <section id="active_momentum" class="section">
-        <div class="section-head" style="--accent:#22c55e;">
+    <div class="stock-card bucket-potential" style="--accent:#38bdf8;">
+        <div class="card-top">
+            <div>
+                <div class="symbol-row">
+                    <span class="symbol">GTX</span>
+                    <span class="sector">Other</span>
+                    <span class="tier" style="color:#38bdf8;border-color:#38bdf8;">Tier 2</span>
+                </div>
+                <div class="bucket-label">Potential Mover</div>
+            </div>
+            <div class="score-box" style="color:#38bdf8;">63</div>
+        </div>
+
+        <div class="price-row">
+            <div class="price">$29.02</div>
+            <div class="change positive">+7.36%</div>
+        </div>
+
+        <div class="catalyst-strip catalyst-none">
+            <div class="catalyst-label">⚪ Catalyst: No confirmed fresh news</div>
+            
+            
+            
+        </div>
+
+        <div class="metrics-grid">
+            <div><span>Liquidity</span><strong>$77M</strong></div>
+            <div><span>ATR</span><strong>4.3%</strong></div>
+            <div><span>VWAP Dist</span><strong>+1.6%</strong></div>
+            <div><span>HOD</span><strong>Near HOD</strong></div>
+        </div>
+
+        <div class="status-row">
+            <span class="status-chip">Above VWAP</span>
+            <span class="status-chip">Near HOD</span>
+            <span class="status-chip risk-chip">NORMAL</span>
+        </div>
+
+        <div class="interpretation">Clean continuation candidate; confirm VWAP hold and breakout structure.</div>
+
+        <div class="tags-row"><span class="tag">Above VWAP</span><span class="tag">Upper range</span><span class="tag">Near HOD</span><span class="tag">Tight consolidation</span><span class="tag">$77M liq</span></div>
+
+        
+        <div class="mini-panel">
+            <div class="mini-row"><span>Short %</span><strong>5%</strong></div>
+            <div class="mini-row"><span>Float</span><strong>170.5M</strong></div>
+            <div class="mini-row"><span>DTC</span><strong>4.7d</strong></div>
+        </div>
+        
+
+        <div class="card-actions">
+            <a href="https://www.tradingview.com/chart/?symbol=GTX" target="_blank">Chart</a>
+            <a href="https://finance.yahoo.com/quote/GTX" target="_blank">Yahoo</a>
+            <a href="https://stocktwits.com/symbol/GTX" target="_blank">Twits</a>
+        </div>
+    </div>
+    
+    <div class="stock-card bucket-potential" style="--accent:#38bdf8;">
+        <div class="card-top">
+            <div>
+                <div class="symbol-row">
+                    <span class="symbol">AUR</span>
+                    <span class="sector">Other</span>
+                    <span class="tier" style="color:#38bdf8;border-color:#38bdf8;">Tier 2</span>
+                </div>
+                <div class="bucket-label">Potential Mover</div>
+            </div>
+            <div class="score-box" style="color:#38bdf8;">62</div>
+        </div>
+
+        <div class="price-row">
+            <div class="price">$7.17</div>
+            <div class="change positive">+0.42%</div>
+        </div>
+
+        <div class="catalyst-strip catalyst-none">
+            <div class="catalyst-label">⚪ Catalyst: No confirmed fresh news</div>
+            
+            
+            
+        </div>
+
+        <div class="metrics-grid">
+            <div><span>Liquidity</span><strong>$190M</strong></div>
+            <div><span>ATR</span><strong>6.5%</strong></div>
+            <div><span>VWAP Dist</span><strong>+2.0%</strong></div>
+            <div><span>HOD</span><strong>Near HOD</strong></div>
+        </div>
+
+        <div class="status-row">
+            <span class="status-chip">Above VWAP</span>
+            <span class="status-chip">Near HOD</span>
+            <span class="status-chip risk-chip">NORMAL</span>
+        </div>
+
+        <div class="interpretation">Clean continuation candidate; confirm VWAP hold and breakout structure.</div>
+
+        <div class="tags-row"><span class="tag">Above VWAP</span><span class="tag">Upper range</span><span class="tag">Near HOD</span><span class="tag">Consolidating</span><span class="tag">$190M liq</span></div>
+
+        
+        <div class="mini-panel">
+            <div class="mini-row"><span>Short %</span><strong>18%</strong></div>
+            <div class="mini-row"><span>Float</span><strong>1251.3M</strong></div>
+            <div class="mini-row"><span>DTC</span><strong>10.8d</strong></div>
+        </div>
+        
+
+        <div class="card-actions">
+            <a href="https://www.tradingview.com/chart/?symbol=AUR" target="_blank">Chart</a>
+            <a href="https://finance.yahoo.com/quote/AUR" target="_blank">Yahoo</a>
+            <a href="https://stocktwits.com/symbol/AUR" target="_blank">Twits</a>
+        </div>
+    </div>
+    
+    <div class="stock-card bucket-potential" style="--accent:#38bdf8;">
+        <div class="card-top">
+            <div>
+                <div class="symbol-row">
+                    <span class="symbol">STM</span>
+                    <span class="sector">Other</span>
+                    <span class="tier" style="color:#38bdf8;border-color:#38bdf8;">Tier 2</span>
+                </div>
+                <div class="bucket-label">Potential Mover</div>
+            </div>
+            <div class="score-box" style="color:#38bdf8;">62</div>
+        </div>
+
+        <div class="price-row">
+            <div class="price">$59.05</div>
+            <div class="change positive">+5.64%</div>
+        </div>
+
+        <div class="catalyst-strip catalyst-none">
+            <div class="catalyst-label">⚪ Catalyst: No confirmed fresh news</div>
+            
+            
+            
+        </div>
+
+        <div class="metrics-grid">
+            <div><span>Liquidity</span><strong>$723M</strong></div>
+            <div><span>ATR</span><strong>4.3%</strong></div>
+            <div><span>VWAP Dist</span><strong>+1.1%</strong></div>
+            <div><span>HOD</span><strong>Near HOD</strong></div>
+        </div>
+
+        <div class="status-row">
+            <span class="status-chip">Above VWAP</span>
+            <span class="status-chip">Near HOD</span>
+            <span class="status-chip risk-chip">NORMAL</span>
+        </div>
+
+        <div class="interpretation">Clean continuation candidate; confirm VWAP hold and breakout structure.</div>
+
+        <div class="tags-row"><span class="tag">Above VWAP</span><span class="tag">Upper range</span><span class="tag">Near HOD</span><span class="tag">Consolidating</span><span class="tag">$723M liq</span></div>
+
+        
+        <div class="mini-panel">
+            <div class="mini-row"><span>Short %</span><strong>2%</strong></div>
+            <div class="mini-row"><span>Float</span><strong>637.6M</strong></div>
+            <div class="mini-row"><span>DTC</span><strong>1.3d</strong></div>
+        </div>
+        
+
+        <div class="card-actions">
+            <a href="https://www.tradingview.com/chart/?symbol=STM" target="_blank">Chart</a>
+            <a href="https://finance.yahoo.com/quote/STM" target="_blank">Yahoo</a>
+            <a href="https://stocktwits.com/symbol/STM" target="_blank">Twits</a>
+        </div>
+    </div>
+    
+        </div>
+    </section>
+    </div>
+    <div id="active">
+    <section class="desk-section section-active">
+        <div class="section-header">
             <div>
                 <h2>Active Momentum</h2>
-                <p>Already moving. Wait for controlled pullback or tight continuation.</p>
+                <p>Already moving. Wait for pullback or tight consolidation before entry.</p>
             </div>
-            <div class="count">10</div>
+            <span class="section-count">10</span>
         </div>
-        <div class="grid">
-    <article class="card active" style="--accent:#22c55e;">
+        <div class="cards-grid">
+            
+    <div class="stock-card bucket-active" style="--accent:#22c55e;">
         <div class="card-top">
             <div>
-                <div class="sym-row">
+                <div class="symbol-row">
                     <span class="symbol">WSC</span>
                     <span class="sector">Other</span>
-                    <span class="tier" style="color:#fbbf24;">Tier S</span>
+                    <span class="tier" style="color:#fbbf24;border-color:#fbbf24;">Tier S</span>
                 </div>
-                <div class="bucket">ACTIVE MOMENTUM</div>
+                <div class="bucket-label">Active Momentum</div>
             </div>
-            <div class="score" style="color:#fbbf24;">85<small>/100</small></div>
+            <div class="score-box" style="color:#fbbf24;">83</div>
         </div>
 
         <div class="price-row">
-            <div>
-                <div class="price">$27.96</div>
-                <div class="source">Yahoo + IEX</div>
-            </div>
-            <div class="change positive">+20.00%</div>
+            <div class="price">$28.00</div>
+            <div class="change positive">+20.19%</div>
         </div>
 
-        <div class="badge-row">
-            <span class="badge muted">NORMAL</span>
-            <span class="badge green">Above VWAP</span>
-            <span class="badge green">Near HOD</span>
-            <span class="badge blue">Tight Base</span>
-        </div>
-
-        <div class="metrics">
-            <div class="metric"><span>Liquidity</span><strong>$81.1M</strong></div>
-            <div class="metric"><span>ATR</span><strong>4.3%</strong></div>
-            <div class="metric"><span>VWAP Dist</span><strong>1.8%</strong></div>
-            <div class="metric"><span>From HOD</span><strong>-0.1%</strong></div>
+        <div class="catalyst-strip catalyst-neutral">
+            <div class="catalyst-label">📰 Catalyst: Fresh news — neutral/unclassified</div>
+            <div class="catalyst-headline">Monster Beverage, Westrock Coffee, Himax Technologies And Other Big Stocks Moving Higher On Friday</div>
+            <div class="catalyst-source">benzinga · 2026-05-08T14:15:26</div>
             
-        <div class="metric">
-            <span>Short</span>
-            <strong class="negative">23%</strong>
+        </div>
+
+        <div class="metrics-grid">
+            <div><span>Liquidity</span><strong>$83M</strong></div>
+            <div><span>ATR</span><strong>4.3%</strong></div>
+            <div><span>VWAP Dist</span><strong>+1.7%</strong></div>
+            <div><span>HOD</span><strong>Near HOD</strong></div>
+        </div>
+
+        <div class="status-row">
+            <span class="status-chip">Above VWAP</span>
+            <span class="status-chip">Near HOD</span>
+            <span class="status-chip risk-chip">NORMAL</span>
+        </div>
+
+        <div class="interpretation">Already moving; wait for pullback or tight consolidation.</div>
+
+        <div class="tags-row"><span class="tag">📰 Fresh news</span><span class="tag">Above VWAP</span><span class="tag">Upper range</span><span class="tag">Near HOD</span><span class="tag">Consolidating</span></div>
+
+        
+        <div class="mini-panel">
+            <div class="mini-row"><span>Short %</span><strong>23%</strong></div>
+            <div class="mini-row"><span>Float</span><strong>175.4M</strong></div>
+            <div class="mini-row"><span>DTC</span><strong>12.6d</strong></div>
         </div>
         
-        </div>
 
-        <div class="note">Momentum is active; avoid chasing. Prefer pullback or tight continuation.</div>
-
-        <div class="tags"><span class="tag">Above VWAP</span><span class="tag">Upper range</span><span class="tag">Near HOD</span><span class="tag">Tight consolidation</span><span class="tag">Major move +20.0%</span></div>
-
-        <div class="actions">
+        <div class="card-actions">
             <a href="https://www.tradingview.com/chart/?symbol=WSC" target="_blank">Chart</a>
             <a href="https://finance.yahoo.com/quote/WSC" target="_blank">Yahoo</a>
             <a href="https://stocktwits.com/symbol/WSC" target="_blank">Twits</a>
         </div>
-    </article>
+    </div>
     
-
-    <article class="card active" style="--accent:#22c55e;">
+    <div class="stock-card bucket-active" style="--accent:#22c55e;">
         <div class="card-top">
             <div>
-                <div class="sym-row">
-                    <span class="symbol">DXYZ</span>
-                    <span class="sector">Other</span>
-                    <span class="tier" style="color:#22c55e;">Tier 1</span>
-                </div>
-                <div class="bucket">ACTIVE MOMENTUM</div>
-            </div>
-            <div class="score" style="color:#22c55e;">77<small>/100</small></div>
-        </div>
-
-        <div class="price-row">
-            <div>
-                <div class="price">$54.42</div>
-                <div class="source">Yahoo + IEX</div>
-            </div>
-            <div class="change positive">+20.94%</div>
-        </div>
-
-        <div class="badge-row">
-            <span class="badge muted">NORMAL</span>
-            <span class="badge green">Above VWAP</span>
-            <span class="badge green">Near HOD</span>
-            
-        </div>
-
-        <div class="metrics">
-            <div class="metric"><span>Liquidity</span><strong>$119M</strong></div>
-            <div class="metric"><span>ATR</span><strong>5.8%</strong></div>
-            <div class="metric"><span>VWAP Dist</span><strong>7.4%</strong></div>
-            <div class="metric"><span>From HOD</span><strong>-0.4%</strong></div>
-            
-        </div>
-
-        <div class="note">Momentum is active; avoid chasing. Prefer pullback or tight continuation.</div>
-
-        <div class="tags"><span class="tag">Above VWAP extended</span><span class="tag">Upper range</span><span class="tag">Near HOD</span><span class="tag">Major move +20.9%</span><span class="tag">$119M liq</span></div>
-
-        <div class="actions">
-            <a href="https://www.tradingview.com/chart/?symbol=DXYZ" target="_blank">Chart</a>
-            <a href="https://finance.yahoo.com/quote/DXYZ" target="_blank">Yahoo</a>
-            <a href="https://stocktwits.com/symbol/DXYZ" target="_blank">Twits</a>
-        </div>
-    </article>
-    
-
-    <article class="card active" style="--accent:#22c55e;">
-        <div class="card-top">
-            <div>
-                <div class="sym-row">
+                <div class="symbol-row">
                     <span class="symbol">FROG</span>
-                    <span class="sector">Software</span>
-                    <span class="tier" style="color:#22c55e;">Tier 1</span>
+                    <span class="sector">Other</span>
+                    <span class="tier" style="color:#10b981;border-color:#10b981;">Tier 1</span>
                 </div>
-                <div class="bucket">ACTIVE MOMENTUM</div>
+                <div class="bucket-label">Active Momentum</div>
             </div>
-            <div class="score" style="color:#22c55e;">77<small>/100</small></div>
+            <div class="score-box" style="color:#10b981;">78</div>
         </div>
 
         <div class="price-row">
-            <div>
-                <div class="price">$70.89</div>
-                <div class="source">Yahoo + IEX</div>
-            </div>
-            <div class="change positive">+24.32%</div>
+            <div class="price">$70.58</div>
+            <div class="change positive">+23.79%</div>
         </div>
 
-        <div class="badge-row">
-            <span class="badge muted">NORMAL</span>
-            <span class="badge green">Above VWAP</span>
-            <span class="badge muted">HOD —</span>
-            <span class="badge blue">Tight Base</span>
-        </div>
-
-        <div class="metrics">
-            <div class="metric"><span>Liquidity</span><strong>$184M</strong></div>
-            <div class="metric"><span>ATR</span><strong>5.0%</strong></div>
-            <div class="metric"><span>VWAP Dist</span><strong>4.2%</strong></div>
-            <div class="metric"><span>From HOD</span><strong>-1.5%</strong></div>
+        <div class="catalyst-strip catalyst-neutral">
+            <div class="catalyst-label">📰 Catalyst: Fresh news — neutral/unclassified</div>
+            <div class="catalyst-headline">Nasdaq Tops 29,000 Records, Micron Soars 13%: Stock Market Today</div>
+            <div class="catalyst-source">benzinga · 2026-05-08T17:36:32</div>
             
         </div>
 
-        <div class="note">Momentum is active; avoid chasing. Prefer pullback or tight continuation.</div>
+        <div class="metrics-grid">
+            <div><span>Liquidity</span><strong>$185M</strong></div>
+            <div><span>ATR</span><strong>5.0%</strong></div>
+            <div><span>VWAP Dist</span><strong>+3.6%</strong></div>
+            <div><span>HOD</span><strong>Not HOD</strong></div>
+        </div>
 
-        <div class="tags"><span class="tag">Above VWAP extended</span><span class="tag">Upper range</span><span class="tag">Tight consolidation</span><span class="tag">Major move +24.3%</span><span class="tag">$185M liq</span></div>
+        <div class="status-row">
+            <span class="status-chip">Above VWAP</span>
+            <span class="status-chip">Not HOD</span>
+            <span class="status-chip risk-chip">NORMAL</span>
+        </div>
 
-        <div class="actions">
+        <div class="interpretation">Already moving; wait for pullback or tight consolidation.</div>
+
+        <div class="tags-row"><span class="tag">📰 Fresh news</span><span class="tag">Above VWAP</span><span class="tag">Upper range</span><span class="tag">Consolidating</span><span class="tag">Major move +23.8%</span></div>
+
+        
+        <div class="mini-panel">
+            <div class="mini-row"><span>Short %</span><strong>6%</strong></div>
+            <div class="mini-row"><span>Float</span><strong>105.2M</strong></div>
+            <div class="mini-row"><span>DTC</span><strong>1.9d</strong></div>
+        </div>
+        
+
+        <div class="card-actions">
             <a href="https://www.tradingview.com/chart/?symbol=FROG" target="_blank">Chart</a>
             <a href="https://finance.yahoo.com/quote/FROG" target="_blank">Yahoo</a>
             <a href="https://stocktwits.com/symbol/FROG" target="_blank">Twits</a>
         </div>
-    </article>
+    </div>
     
-
-    <article class="card active" style="--accent:#22c55e;">
+    <div class="stock-card bucket-active" style="--accent:#22c55e;">
         <div class="card-top">
             <div>
-                <div class="sym-row">
-                    <span class="symbol">PENG</span>
-                    <span class="sector">Semis</span>
-                    <span class="tier" style="color:#22c55e;">Tier 1</span>
-                </div>
-                <div class="bucket">ACTIVE MOMENTUM</div>
-            </div>
-            <div class="score" style="color:#22c55e;">72<small>/100</small></div>
-        </div>
-
-        <div class="price-row">
-            <div>
-                <div class="price">$44.15</div>
-                <div class="source">Yahoo + IEX</div>
-            </div>
-            <div class="change positive">+13.26%</div>
-        </div>
-
-        <div class="badge-row">
-            <span class="badge muted">NORMAL</span>
-            <span class="badge green">Above VWAP</span>
-            <span class="badge green">Near HOD</span>
-            <span class="badge blue">Consolidating</span>
-        </div>
-
-        <div class="metrics">
-            <div class="metric"><span>Liquidity</span><strong>$99.0M</strong></div>
-            <div class="metric"><span>ATR</span><strong>5.7%</strong></div>
-            <div class="metric"><span>VWAP Dist</span><strong>2.5%</strong></div>
-            <div class="metric"><span>From HOD</span><strong>-0.2%</strong></div>
-            
-        <div class="metric">
-            <span>Short</span>
-            <strong class="negative">24%</strong>
-        </div>
-        
-        </div>
-
-        <div class="note">Momentum is active; avoid chasing. Prefer pullback or tight continuation.</div>
-
-        <div class="tags"><span class="tag">Above VWAP</span><span class="tag">Upper range</span><span class="tag">Near HOD</span><span class="tag">Consolidating</span><span class="tag">Big move +13.3%</span></div>
-
-        <div class="actions">
-            <a href="https://www.tradingview.com/chart/?symbol=PENG" target="_blank">Chart</a>
-            <a href="https://finance.yahoo.com/quote/PENG" target="_blank">Yahoo</a>
-            <a href="https://stocktwits.com/symbol/PENG" target="_blank">Twits</a>
-        </div>
-    </article>
-    
-
-    <article class="card active" style="--accent:#22c55e;">
-        <div class="card-top">
-            <div>
-                <div class="sym-row">
-                    <span class="symbol">QURE</span>
+                <div class="symbol-row">
+                    <span class="symbol">DBX</span>
                     <span class="sector">Other</span>
-                    <span class="tier" style="color:#22c55e;">Tier 1</span>
+                    <span class="tier" style="color:#10b981;border-color:#10b981;">Tier 1</span>
                 </div>
-                <div class="bucket">ACTIVE MOMENTUM</div>
+                <div class="bucket-label">Active Momentum</div>
             </div>
-            <div class="score" style="color:#22c55e;">69<small>/100</small></div>
+            <div class="score-box" style="color:#10b981;">74</div>
         </div>
 
         <div class="price-row">
-            <div>
-                <div class="price">$27.64</div>
-                <div class="source">Yahoo + IEX</div>
-            </div>
-            <div class="change positive">+14.43%</div>
+            <div class="price">$28.88</div>
+            <div class="change positive">+14.92%</div>
         </div>
 
-        <div class="badge-row">
-            <span class="badge muted">NORMAL</span>
-            <span class="badge green">Above VWAP</span>
-            <span class="badge muted">HOD —</span>
+        <div class="catalyst-strip catalyst-neutral">
+            <div class="catalyst-label">📰 Catalyst: Fresh news — neutral/unclassified</div>
+            <div class="catalyst-headline">Nasdaq Tops 29,000 Records, Micron Soars 13%: Stock Market Today</div>
+            <div class="catalyst-source">benzinga · 2026-05-08T17:36:32</div>
             
         </div>
 
-        <div class="metrics">
-            <div class="metric"><span>Liquidity</span><strong>$51.5M</strong></div>
-            <div class="metric"><span>ATR</span><strong>6.8%</strong></div>
-            <div class="metric"><span>VWAP Dist</span><strong>3.5%</strong></div>
-            <div class="metric"><span>From HOD</span><strong>-6.1%</strong></div>
-            
-        <div class="metric">
-            <span>Short</span>
-            <strong class="negative">18%</strong>
+        <div class="metrics-grid">
+            <div><span>Liquidity</span><strong>$100M</strong></div>
+            <div><span>ATR</span><strong>3.4%</strong></div>
+            <div><span>VWAP Dist</span><strong>+2.7%</strong></div>
+            <div><span>HOD</span><strong>Near HOD</strong></div>
+        </div>
+
+        <div class="status-row">
+            <span class="status-chip">Above VWAP</span>
+            <span class="status-chip">Near HOD</span>
+            <span class="status-chip risk-chip">NORMAL</span>
+        </div>
+
+        <div class="interpretation">Already moving; wait for pullback or tight consolidation.</div>
+
+        <div class="tags-row"><span class="tag">📰 Fresh news</span><span class="tag">Above VWAP</span><span class="tag">Upper range</span><span class="tag">Near HOD</span><span class="tag">Consolidating</span></div>
+
+        
+        <div class="mini-panel">
+            <div class="mini-row"><span>Short %</span><strong>25%</strong></div>
+            <div class="mini-row"><span>Float</span><strong>151.7M</strong></div>
+            <div class="mini-row"><span>DTC</span><strong>7.5d</strong></div>
         </div>
         
+
+        <div class="card-actions">
+            <a href="https://www.tradingview.com/chart/?symbol=DBX" target="_blank">Chart</a>
+            <a href="https://finance.yahoo.com/quote/DBX" target="_blank">Yahoo</a>
+            <a href="https://stocktwits.com/symbol/DBX" target="_blank">Twits</a>
+        </div>
+    </div>
+    
+    <div class="stock-card bucket-active" style="--accent:#22c55e;">
+        <div class="card-top">
+            <div>
+                <div class="symbol-row">
+                    <span class="symbol">PGNY</span>
+                    <span class="sector">Other</span>
+                    <span class="tier" style="color:#10b981;border-color:#10b981;">Tier 1</span>
+                </div>
+                <div class="bucket-label">Active Momentum</div>
+            </div>
+            <div class="score-box" style="color:#10b981;">72</div>
         </div>
 
-        <div class="note">Momentum is active; avoid chasing. Prefer pullback or tight continuation.</div>
+        <div class="price-row">
+            <div class="price">$23.18</div>
+            <div class="change positive">+21.01%</div>
+        </div>
 
-        <div class="tags"><span class="tag">Above VWAP</span><span class="tag">Big move +14.4%</span><span class="tag">$51M liq</span><span class="tag">ATR 6.8% (clean)</span><span class="tag">Clean price</span></div>
+        <div class="catalyst-strip catalyst-neutral">
+            <div class="catalyst-label">📰 Catalyst: Fresh news — neutral/unclassified</div>
+            <div class="catalyst-headline">12 Health Care Stocks Moving In Friday&#x27;s Pre-Market Session</div>
+            <div class="catalyst-source">benzinga · 2026-05-08T12:05:56</div>
+            
+        </div>
 
-        <div class="actions">
+        <div class="metrics-grid">
+            <div><span>Liquidity</span><strong>$35M</strong></div>
+            <div><span>ATR</span><strong>3.7%</strong></div>
+            <div><span>VWAP Dist</span><strong>+2.7%</strong></div>
+            <div><span>HOD</span><strong>Near HOD</strong></div>
+        </div>
+
+        <div class="status-row">
+            <span class="status-chip">Above VWAP</span>
+            <span class="status-chip">Near HOD</span>
+            <span class="status-chip risk-chip">NORMAL</span>
+        </div>
+
+        <div class="interpretation">Already moving; wait for pullback or tight consolidation.</div>
+
+        <div class="tags-row"><span class="tag">📰 Fresh news</span><span class="tag">Above VWAP</span><span class="tag">Upper range</span><span class="tag">Near HOD</span><span class="tag">Consolidating</span></div>
+
+        
+        <div class="mini-panel">
+            <div class="mini-row"><span>Short %</span><strong>10%</strong></div>
+            <div class="mini-row"><span>Float</span><strong>75.0M</strong></div>
+            <div class="mini-row"><span>DTC</span><strong>4.2d</strong></div>
+        </div>
+        
+
+        <div class="card-actions">
+            <a href="https://www.tradingview.com/chart/?symbol=PGNY" target="_blank">Chart</a>
+            <a href="https://finance.yahoo.com/quote/PGNY" target="_blank">Yahoo</a>
+            <a href="https://stocktwits.com/symbol/PGNY" target="_blank">Twits</a>
+        </div>
+    </div>
+    
+    <div class="stock-card bucket-active" style="--accent:#22c55e;">
+        <div class="card-top">
+            <div>
+                <div class="symbol-row">
+                    <span class="symbol">QURE</span>
+                    <span class="sector">Biotech</span>
+                    <span class="tier" style="color:#10b981;border-color:#10b981;">Tier 1</span>
+                </div>
+                <div class="bucket-label">Active Momentum</div>
+            </div>
+            <div class="score-box" style="color:#10b981;">71</div>
+        </div>
+
+        <div class="price-row">
+            <div class="price">$27.38</div>
+            <div class="change positive">+13.37%</div>
+        </div>
+
+        <div class="catalyst-strip catalyst-none">
+            <div class="catalyst-label">⚪ Catalyst: No confirmed fresh news</div>
+            
+            
+            
+        </div>
+
+        <div class="metrics-grid">
+            <div><span>Liquidity</span><strong>$52M</strong></div>
+            <div><span>ATR</span><strong>6.9%</strong></div>
+            <div><span>VWAP Dist</span><strong>+2.1%</strong></div>
+            <div><span>HOD</span><strong>Not HOD</strong></div>
+        </div>
+
+        <div class="status-row">
+            <span class="status-chip">Above VWAP</span>
+            <span class="status-chip">Not HOD</span>
+            <span class="status-chip risk-chip">NORMAL</span>
+        </div>
+
+        <div class="interpretation">Already moving; wait for pullback or tight consolidation.</div>
+
+        <div class="tags-row"><span class="tag">Above VWAP</span><span class="tag">Consolidating</span><span class="tag">Big move +13.4%</span><span class="tag">$52M liq</span><span class="tag">ATR 6.9% (clean)</span></div>
+
+        
+        <div class="mini-panel">
+            <div class="mini-row"><span>Short %</span><strong>18%</strong></div>
+            <div class="mini-row"><span>Float</span><strong>49.3M</strong></div>
+            <div class="mini-row"><span>DTC</span><strong>6.2d</strong></div>
+        </div>
+        
+
+        <div class="card-actions">
             <a href="https://www.tradingview.com/chart/?symbol=QURE" target="_blank">Chart</a>
             <a href="https://finance.yahoo.com/quote/QURE" target="_blank">Yahoo</a>
             <a href="https://stocktwits.com/symbol/QURE" target="_blank">Twits</a>
         </div>
-    </article>
+    </div>
     
-
-    <article class="card active" style="--accent:#22c55e;">
+    <div class="stock-card bucket-active" style="--accent:#22c55e;">
         <div class="card-top">
             <div>
-                <div class="sym-row">
-                    <span class="symbol">EOSE</span>
+                <div class="symbol-row">
+                    <span class="symbol">LUNR</span>
+                    <span class="sector">Space</span>
+                    <span class="tier" style="color:#10b981;border-color:#10b981;">Tier 1</span>
+                </div>
+                <div class="bucket-label">Active Momentum</div>
+            </div>
+            <div class="score-box" style="color:#10b981;">70</div>
+        </div>
+
+        <div class="price-row">
+            <div class="price">$29.22</div>
+            <div class="change positive">+21.19%</div>
+        </div>
+
+        <div class="catalyst-strip catalyst-positive">
+            <div class="catalyst-label">🟢 Catalyst: Positive catalyst: record revenue</div>
+            <div class="catalyst-headline">Space Earnings Heat Up: Rocket Lab Tops $200M, Firefly Hits Record Revenue, Redwire Backlog Surges</div>
+            <div class="catalyst-source">benzinga · 2026-05-08T17:40:10</div>
+            
+        </div>
+
+        <div class="metrics-grid">
+            <div><span>Liquidity</span><strong>$377M</strong></div>
+            <div><span>ATR</span><strong>9.1%</strong></div>
+            <div><span>VWAP Dist</span><strong>+5.6%</strong></div>
+            <div><span>HOD</span><strong>Near HOD</strong></div>
+        </div>
+
+        <div class="status-row">
+            <span class="status-chip">Above VWAP</span>
+            <span class="status-chip">Near HOD</span>
+            <span class="status-chip risk-chip">NORMAL</span>
+        </div>
+
+        <div class="interpretation">Already moving; wait for pullback or tight consolidation.</div>
+
+        <div class="tags-row"><span class="tag">🟢 Positive catalyst: record revenue</span><span class="tag">Above VWAP extended</span><span class="tag">Upper range</span><span class="tag">Near HOD</span><span class="tag">Consolidating</span></div>
+
+        
+        <div class="mini-panel">
+            <div class="mini-row"><span>Short %</span><strong>24%</strong></div>
+            <div class="mini-row"><span>Float</span><strong>129.3M</strong></div>
+            <div class="mini-row"><span>DTC</span><strong>1.9d</strong></div>
+        </div>
+        
+
+        <div class="card-actions">
+            <a href="https://www.tradingview.com/chart/?symbol=LUNR" target="_blank">Chart</a>
+            <a href="https://finance.yahoo.com/quote/LUNR" target="_blank">Yahoo</a>
+            <a href="https://stocktwits.com/symbol/LUNR" target="_blank">Twits</a>
+        </div>
+    </div>
+    
+    <div class="stock-card bucket-active" style="--accent:#22c55e;">
+        <div class="card-top">
+            <div>
+                <div class="symbol-row">
+                    <span class="symbol">DXYZ</span>
                     <span class="sector">Other</span>
-                    <span class="tier" style="color:#22c55e;">Tier 1</span>
+                    <span class="tier" style="color:#10b981;border-color:#10b981;">Tier 1</span>
                 </div>
-                <div class="bucket">ACTIVE MOMENTUM</div>
+                <div class="bucket-label">Active Momentum</div>
             </div>
-            <div class="score" style="color:#22c55e;">69<small>/100</small></div>
+            <div class="score-box" style="color:#10b981;">69</div>
         </div>
 
         <div class="price-row">
-            <div>
-                <div class="price">$7.82</div>
-                <div class="source">Yahoo + IEX</div>
-            </div>
-            <div class="change positive">+22.88%</div>
+            <div class="price">$53.73</div>
+            <div class="change positive">+19.40%</div>
         </div>
 
-        <div class="badge-row">
-            <span class="badge muted">NORMAL</span>
-            <span class="badge green">Above VWAP</span>
-            <span class="badge green">Near HOD</span>
+        <div class="catalyst-strip catalyst-none">
+            <div class="catalyst-label">⚪ Catalyst: No confirmed fresh news</div>
+            
+            
             
         </div>
 
-        <div class="metrics">
-            <div class="metric"><span>Liquidity</span><strong>$190M</strong></div>
-            <div class="metric"><span>ATR</span><strong>8.2%</strong></div>
-            <div class="metric"><span>VWAP Dist</span><strong>3.6%</strong></div>
-            <div class="metric"><span>From HOD</span><strong>-0.8%</strong></div>
-            
-        <div class="metric">
-            <span>Short</span>
-            <strong class="negative">31%</strong>
+        <div class="metrics-grid">
+            <div><span>Liquidity</span><strong>$119M</strong></div>
+            <div><span>ATR</span><strong>5.9%</strong></div>
+            <div><span>VWAP Dist</span><strong>+5.1%</strong></div>
+            <div><span>HOD</span><strong>Not HOD</strong></div>
         </div>
+
+        <div class="status-row">
+            <span class="status-chip">Above VWAP</span>
+            <span class="status-chip">Not HOD</span>
+            <span class="status-chip risk-chip">NORMAL</span>
+        </div>
+
+        <div class="interpretation">Already moving; wait for pullback or tight consolidation.</div>
+
+        <div class="tags-row"><span class="tag">Above VWAP extended</span><span class="tag">Upper range</span><span class="tag">Big move +19.4%</span><span class="tag">$119M liq</span><span class="tag">ATR 5.9% (clean)</span></div>
+
         
+
+        <div class="card-actions">
+            <a href="https://www.tradingview.com/chart/?symbol=DXYZ" target="_blank">Chart</a>
+            <a href="https://finance.yahoo.com/quote/DXYZ" target="_blank">Yahoo</a>
+            <a href="https://stocktwits.com/symbol/DXYZ" target="_blank">Twits</a>
         </div>
-
-        <div class="note">Momentum is active; avoid chasing. Prefer pullback or tight continuation.</div>
-
-        <div class="tags"><span class="tag">Above VWAP</span><span class="tag">Upper range</span><span class="tag">Near HOD</span><span class="tag">Major move +22.9%</span><span class="tag">$190M liq</span></div>
-
-        <div class="actions">
-            <a href="https://www.tradingview.com/chart/?symbol=EOSE" target="_blank">Chart</a>
-            <a href="https://finance.yahoo.com/quote/EOSE" target="_blank">Yahoo</a>
-            <a href="https://stocktwits.com/symbol/EOSE" target="_blank">Twits</a>
-        </div>
-    </article>
+    </div>
     
-
-    <article class="card active" style="--accent:#22c55e;">
+    <div class="stock-card bucket-active" style="--accent:#22c55e;">
         <div class="card-top">
             <div>
-                <div class="sym-row">
-                    <span class="symbol">GRPN</span>
-                    <span class="sector">Retail</span>
-                    <span class="tier" style="color:#22c55e;">Tier 1</span>
+                <div class="symbol-row">
+                    <span class="symbol">CALY</span>
+                    <span class="sector">Other</span>
+                    <span class="tier" style="color:#10b981;border-color:#10b981;">Tier 1</span>
                 </div>
-                <div class="bucket">ACTIVE MOMENTUM</div>
+                <div class="bucket-label">Active Momentum</div>
             </div>
-            <div class="score" style="color:#22c55e;">66<small>/100</small></div>
+            <div class="score-box" style="color:#10b981;">69</div>
         </div>
 
         <div class="price-row">
-            <div>
-                <div class="price">$18.28</div>
-                <div class="source">Yahoo + IEX</div>
-            </div>
-            <div class="change positive">+18.24%</div>
+            <div class="price">$17.49</div>
+            <div class="change positive">+18.42%</div>
         </div>
 
-        <div class="badge-row">
-            <span class="badge muted">NORMAL</span>
-            <span class="badge green">Above VWAP</span>
-            <span class="badge muted">HOD —</span>
+        <div class="catalyst-strip catalyst-neutral">
+            <div class="catalyst-label">📰 Catalyst: Fresh news — neutral/unclassified</div>
+            <div class="catalyst-headline">Monster Beverage, Westrock Coffee, Himax Technologies And Other Big Stocks Moving Higher On Friday</div>
+            <div class="catalyst-source">benzinga · 2026-05-08T14:15:26</div>
             
         </div>
 
-        <div class="metrics">
-            <div class="metric"><span>Liquidity</span><strong>$46.6M</strong></div>
-            <div class="metric"><span>ATR</span><strong>8.8%</strong></div>
-            <div class="metric"><span>VWAP Dist</span><strong>0.6%</strong></div>
-            <div class="metric"><span>From HOD</span><strong>-3.7%</strong></div>
-            
-        <div class="metric">
-            <span>Short</span>
-            <strong class="negative">59%</strong>
+        <div class="metrics-grid">
+            <div><span>Liquidity</span><strong>$50M</strong></div>
+            <div><span>ATR</span><strong>3.9%</strong></div>
+            <div><span>VWAP Dist</span><strong>+1.8%</strong></div>
+            <div><span>HOD</span><strong>Not HOD</strong></div>
+        </div>
+
+        <div class="status-row">
+            <span class="status-chip">Above VWAP</span>
+            <span class="status-chip">Not HOD</span>
+            <span class="status-chip risk-chip">NORMAL</span>
+        </div>
+
+        <div class="interpretation">Already moving; wait for pullback or tight consolidation.</div>
+
+        <div class="tags-row"><span class="tag">📰 Fresh news</span><span class="tag">Above VWAP</span><span class="tag">Upper range</span><span class="tag">Consolidating</span><span class="tag">Big move +18.4%</span></div>
+
+        
+        <div class="mini-panel">
+            <div class="mini-row"><span>Short %</span><strong>4%</strong></div>
+            <div class="mini-row"><span>Float</span><strong>148.8M</strong></div>
+            <div class="mini-row"><span>DTC</span><strong>2.5d</strong></div>
         </div>
         
+
+        <div class="card-actions">
+            <a href="https://www.tradingview.com/chart/?symbol=CALY" target="_blank">Chart</a>
+            <a href="https://finance.yahoo.com/quote/CALY" target="_blank">Yahoo</a>
+            <a href="https://stocktwits.com/symbol/CALY" target="_blank">Twits</a>
         </div>
-
-        <div class="note">Momentum is active; avoid chasing. Prefer pullback or tight continuation.</div>
-
-        <div class="tags"><span class="tag">Above VWAP</span><span class="tag">Big move +18.2%</span><span class="tag">Clean price</span><span class="tag">SI 59%</span><span class="tag">DTC 9.1d</span></div>
-
-        <div class="actions">
-            <a href="https://www.tradingview.com/chart/?symbol=GRPN" target="_blank">Chart</a>
-            <a href="https://finance.yahoo.com/quote/GRPN" target="_blank">Yahoo</a>
-            <a href="https://stocktwits.com/symbol/GRPN" target="_blank">Twits</a>
-        </div>
-    </article>
+    </div>
     
-
-    <article class="card active" style="--accent:#22c55e;">
+    <div class="stock-card bucket-active" style="--accent:#22c55e;">
         <div class="card-top">
             <div>
-                <div class="sym-row">
+                <div class="symbol-row">
                     <span class="symbol">CSIQ</span>
                     <span class="sector">Other</span>
-                    <span class="tier" style="color:#22c55e;">Tier 1</span>
+                    <span class="tier" style="color:#10b981;border-color:#10b981;">Tier 1</span>
                 </div>
-                <div class="bucket">ACTIVE MOMENTUM</div>
+                <div class="bucket-label">Active Momentum</div>
             </div>
-            <div class="score" style="color:#22c55e;">66<small>/100</small></div>
+            <div class="score-box" style="color:#10b981;">68</div>
         </div>
 
         <div class="price-row">
-            <div>
-                <div class="price">$20.22</div>
-                <div class="source">Yahoo + IEX</div>
-            </div>
-            <div class="change positive">+14.37%</div>
+            <div class="price">$20.32</div>
+            <div class="change positive">+14.93%</div>
         </div>
 
-        <div class="badge-row">
-            <span class="badge muted">NORMAL</span>
-            <span class="badge green">Above VWAP</span>
-            <span class="badge green">Near HOD</span>
+        <div class="catalyst-strip catalyst-none">
+            <div class="catalyst-label">⚪ Catalyst: No confirmed fresh news</div>
+            
+            
             
         </div>
 
-        <div class="metrics">
-            <div class="metric"><span>Liquidity</span><strong>$58.5M</strong></div>
-            <div class="metric"><span>ATR</span><strong>6.5%</strong></div>
-            <div class="metric"><span>VWAP Dist</span><strong>5.0%</strong></div>
-            <div class="metric"><span>From HOD</span><strong>0.0%</strong></div>
-            
-        <div class="metric">
-            <span>Short</span>
-            <strong class="negative">27%</strong>
+        <div class="metrics-grid">
+            <div><span>Liquidity</span><strong>$59M</strong></div>
+            <div><span>ATR</span><strong>6.5%</strong></div>
+            <div><span>VWAP Dist</span><strong>+4.3%</strong></div>
+            <div><span>HOD</span><strong>Near HOD</strong></div>
+        </div>
+
+        <div class="status-row">
+            <span class="status-chip">Above VWAP</span>
+            <span class="status-chip">Near HOD</span>
+            <span class="status-chip risk-chip">NORMAL</span>
+        </div>
+
+        <div class="interpretation">Already moving; wait for pullback or tight consolidation.</div>
+
+        <div class="tags-row"><span class="tag">Above VWAP extended</span><span class="tag">Upper range</span><span class="tag">Near HOD</span><span class="tag">Consolidating</span><span class="tag">Big move +14.9%</span></div>
+
+        
+        <div class="mini-panel">
+            <div class="mini-row"><span>Short %</span><strong>27%</strong></div>
+            <div class="mini-row"><span>Float</span><strong>47.4M</strong></div>
+            <div class="mini-row"><span>DTC</span><strong>5.4d</strong></div>
         </div>
         
-        </div>
 
-        <div class="note">Momentum is active; avoid chasing. Prefer pullback or tight continuation.</div>
-
-        <div class="tags"><span class="tag">Above VWAP extended</span><span class="tag">Upper range</span><span class="tag">Near HOD</span><span class="tag">Big move +14.4%</span><span class="tag">$58M liq</span></div>
-
-        <div class="actions">
+        <div class="card-actions">
             <a href="https://www.tradingview.com/chart/?symbol=CSIQ" target="_blank">Chart</a>
             <a href="https://finance.yahoo.com/quote/CSIQ" target="_blank">Yahoo</a>
             <a href="https://stocktwits.com/symbol/CSIQ" target="_blank">Twits</a>
         </div>
-    </article>
     </div>
-    </section>
     
-    <section id="extended_chase_risk" class="section">
-        <div class="section-head" style="--accent:#f59e0b;">
-            <div>
-                <h2>Extended / Chase Risk</h2>
-                <p>Strong movers but stretched. Avoid chasing without a reset.</p>
-            </div>
-            <div class="count">3</div>
-        </div>
-        <div class="grid">
-    <article class="card extended" style="--accent:#f59e0b;">
+    <div class="stock-card bucket-active" style="--accent:#22c55e;">
         <div class="card-top">
             <div>
-                <div class="sym-row">
-                    <span class="symbol">FLNC</span>
+                <div class="symbol-row">
+                    <span class="symbol">EOSE</span>
                     <span class="sector">Other</span>
-                    <span class="tier" style="color:#22c55e;">Tier 1</span>
+                    <span class="tier" style="color:#10b981;border-color:#10b981;">Tier 1</span>
                 </div>
-                <div class="bucket">EXTENDED CHASE RISK</div>
+                <div class="bucket-label">Active Momentum</div>
             </div>
-            <div class="score" style="color:#22c55e;">72<small>/100</small></div>
+            <div class="score-box" style="color:#10b981;">65</div>
         </div>
 
         <div class="price-row">
-            <div>
-                <div class="price">$25.01</div>
-                <div class="source">Yahoo + IEX</div>
-            </div>
-            <div class="change positive">+31.84%</div>
+            <div class="price">$7.75</div>
+            <div class="change positive">+21.93%</div>
         </div>
 
-        <div class="badge-row">
-            <span class="badge orange">EXTENDED</span>
-            <span class="badge red">Below VWAP</span>
-            <span class="badge muted">HOD —</span>
-            <span class="badge blue">Consolidating</span>
-        </div>
-
-        <div class="metrics">
-            <div class="metric"><span>Liquidity</span><strong>$217M</strong></div>
-            <div class="metric"><span>ATR</span><strong>7.4%</strong></div>
-            <div class="metric"><span>VWAP Dist</span><strong>-0.0%</strong></div>
-            <div class="metric"><span>From HOD</span><strong>-7.2%</strong></div>
+        <div class="catalyst-strip catalyst-none">
+            <div class="catalyst-label">⚪ Catalyst: No confirmed fresh news</div>
             
-        <div class="metric">
-            <span>Short</span>
-            <strong class="negative">37%</strong>
+            
+            
+        </div>
+
+        <div class="metrics-grid">
+            <div><span>Liquidity</span><strong>$190M</strong></div>
+            <div><span>ATR</span><strong>8.2%</strong></div>
+            <div><span>VWAP Dist</span><strong>+2.5%</strong></div>
+            <div><span>HOD</span><strong>Not HOD</strong></div>
+        </div>
+
+        <div class="status-row">
+            <span class="status-chip">Above VWAP</span>
+            <span class="status-chip">Not HOD</span>
+            <span class="status-chip risk-chip">NORMAL</span>
+        </div>
+
+        <div class="interpretation">Already moving; wait for pullback or tight consolidation.</div>
+
+        <div class="tags-row"><span class="tag">Above VWAP</span><span class="tag">Upper range</span><span class="tag">Major move +21.9%</span><span class="tag">$190M liq</span><span class="tag">Lower-price tradable</span></div>
+
+        
+        <div class="mini-panel">
+            <div class="mini-row"><span>Short %</span><strong>31%</strong></div>
+            <div class="mini-row"><span>Float</span><strong>334.9M</strong></div>
+            <div class="mini-row"><span>DTC</span><strong>4.4d</strong></div>
         </div>
         
+
+        <div class="card-actions">
+            <a href="https://www.tradingview.com/chart/?symbol=EOSE" target="_blank">Chart</a>
+            <a href="https://finance.yahoo.com/quote/EOSE" target="_blank">Yahoo</a>
+            <a href="https://stocktwits.com/symbol/EOSE" target="_blank">Twits</a>
+        </div>
+    </div>
+    
+        </div>
+    </section>
+    </div>
+    <div id="extended">
+    <section class="desk-section section-extended">
+        <div class="section-header">
+            <div>
+                <h2>Extended / Chase Risk</h2>
+                <p>Already stretched. Avoid chasing; use only as monitor list.</p>
+            </div>
+            <span class="section-count">2</span>
+        </div>
+        <div class="cards-grid">
+            
+    <div class="stock-card bucket-extended" style="--accent:#f59e0b;">
+        <div class="card-top">
+            <div>
+                <div class="symbol-row">
+                    <span class="symbol">FLNC</span>
+                    <span class="sector">Other</span>
+                    <span class="tier" style="color:#10b981;border-color:#10b981;">Tier 1</span>
+                </div>
+                <div class="bucket-label">Extended / Chase Risk</div>
+            </div>
+            <div class="score-box" style="color:#10b981;">67</div>
         </div>
 
-        <div class="note">Already extended. Watch only unless it resets near VWAP or forms a new base.</div>
+        <div class="price-row">
+            <div class="price">$24.34</div>
+            <div class="change positive">+28.31%</div>
+        </div>
 
-        <div class="tags"><span class="tag">Consolidating</span><span class="tag">⚠️ EXTENDED</span><span class="tag">Major move +31.8%</span><span class="tag">Vol surge 6.7x</span><span class="tag">RVOL 4.2x</span></div>
+        <div class="catalyst-strip catalyst-neutral">
+            <div class="catalyst-label">📰 Catalyst: Fresh news — neutral/unclassified</div>
+            <div class="catalyst-headline">12 Industrials Stocks Moving In Friday&#x27;s Intraday Session</div>
+            <div class="catalyst-source">benzinga · 2026-05-08T17:05:46</div>
+            
+        </div>
 
-        <div class="actions">
+        <div class="metrics-grid">
+            <div><span>Liquidity</span><strong>$213M</strong></div>
+            <div><span>ATR</span><strong>7.6%</strong></div>
+            <div><span>VWAP Dist</span><strong>-2.4%</strong></div>
+            <div><span>HOD</span><strong>Not HOD</strong></div>
+        </div>
+
+        <div class="status-row">
+            <span class="status-chip">Below/Unknown</span>
+            <span class="status-chip">Not HOD</span>
+            <span class="status-chip risk-chip">EXTENDED</span>
+        </div>
+
+        <div class="interpretation">Extended move; avoid chasing unless structure becomes exceptional.</div>
+
+        <div class="tags-row"><span class="tag">📰 Fresh news</span><span class="tag">⚠️ EXTENDED</span><span class="tag">Major move +28.3%</span><span class="tag">Vol surge 6.8x</span><span class="tag">RVOL 4.3x</span></div>
+
+        
+        <div class="mini-panel">
+            <div class="mini-row"><span>Short %</span><strong>37%</strong></div>
+            <div class="mini-row"><span>Float</span><strong>97.3M</strong></div>
+            <div class="mini-row"><span>DTC</span><strong>6.8d</strong></div>
+        </div>
+        
+
+        <div class="card-actions">
             <a href="https://www.tradingview.com/chart/?symbol=FLNC" target="_blank">Chart</a>
             <a href="https://finance.yahoo.com/quote/FLNC" target="_blank">Yahoo</a>
             <a href="https://stocktwits.com/symbol/FLNC" target="_blank">Twits</a>
         </div>
-    </article>
+    </div>
     
-
-    <article class="card extended" style="--accent:#f59e0b;">
+    <div class="stock-card bucket-extended" style="--accent:#f59e0b;">
         <div class="card-top">
             <div>
-                <div class="sym-row">
-                    <span class="symbol">RXT</span>
-                    <span class="sector">Other</span>
-                    <span class="tier" style="color:#38bdf8;">Tier 2</span>
-                </div>
-                <div class="bucket">EXTENDED CHASE RISK</div>
-            </div>
-            <div class="score" style="color:#38bdf8;">64<small>/100</small></div>
-        </div>
-
-        <div class="price-row">
-            <div>
-                <div class="price">$5.10</div>
-                <div class="source">Yahoo + IEX</div>
-            </div>
-            <div class="change positive">+44.95%</div>
-        </div>
-
-        <div class="badge-row">
-            <span class="badge orange">EXTENDED</span>
-            <span class="badge green">Above VWAP</span>
-            <span class="badge muted">HOD —</span>
-            
-        </div>
-
-        <div class="metrics">
-            <div class="metric"><span>Liquidity</span><strong>$114M</strong></div>
-            <div class="metric"><span>ATR</span><strong>10.7%</strong></div>
-            <div class="metric"><span>VWAP Dist</span><strong>0.5%</strong></div>
-            <div class="metric"><span>From HOD</span><strong>-14.5%</strong></div>
-            
-        <div class="metric">
-            <span>Short</span>
-            <strong class="negative">20%</strong>
-        </div>
-        
-        </div>
-
-        <div class="note">Already extended. Watch only unless it resets near VWAP or forms a new base.</div>
-
-        <div class="tags"><span class="tag">Above VWAP</span><span class="tag">⚠️ EXTENDED</span><span class="tag">Major move +44.9%</span><span class="tag">Vol surge 15.8x</span><span class="tag">RVOL 5.9x</span></div>
-
-        <div class="actions">
-            <a href="https://www.tradingview.com/chart/?symbol=RXT" target="_blank">Chart</a>
-            <a href="https://finance.yahoo.com/quote/RXT" target="_blank">Yahoo</a>
-            <a href="https://stocktwits.com/symbol/RXT" target="_blank">Twits</a>
-        </div>
-    </article>
-    
-
-    <article class="card extended" style="--accent:#f59e0b;">
-        <div class="card-top">
-            <div>
-                <div class="sym-row">
+                <div class="symbol-row">
                     <span class="symbol">AMN</span>
                     <span class="sector">Other</span>
-                    <span class="tier" style="color:#38bdf8;">Tier 2</span>
+                    <span class="tier" style="color:#38bdf8;border-color:#38bdf8;">Tier 2</span>
                 </div>
-                <div class="bucket">EXTENDED CHASE RISK</div>
+                <div class="bucket-label">Extended / Chase Risk</div>
             </div>
-            <div class="score" style="color:#38bdf8;">54<small>/100</small></div>
+            <div class="score-box" style="color:#38bdf8;">56</div>
         </div>
 
         <div class="price-row">
-            <div>
-                <div class="price">$28.27</div>
-                <div class="source">Yahoo + IEX</div>
-            </div>
-            <div class="change positive">+25.92%</div>
+            <div class="price">$28.81</div>
+            <div class="change positive">+28.33%</div>
         </div>
 
-        <div class="badge-row">
-            <span class="badge orange">EXTENDED</span>
-            <span class="badge green">Above VWAP</span>
-            <span class="badge green">Near HOD</span>
+        <div class="catalyst-strip catalyst-neutral">
+            <div class="catalyst-label">📰 Catalyst: Fresh news — neutral/unclassified</div>
+            <div class="catalyst-headline">12 Health Care Stocks Moving In Thursday&#x27;s After-Market Session</div>
+            <div class="catalyst-source">benzinga · 2026-05-07T21:05:51</div>
             
         </div>
 
-        <div class="metrics">
-            <div class="metric"><span>Liquidity</span><strong>$23.9M</strong></div>
-            <div class="metric"><span>ATR</span><strong>4.6%</strong></div>
-            <div class="metric"><span>VWAP Dist</span><strong>6.8%</strong></div>
-            <div class="metric"><span>From HOD</span><strong>0.0%</strong></div>
-            
+        <div class="metrics-grid">
+            <div><span>Liquidity</span><strong>$25M</strong></div>
+            <div><span>ATR</span><strong>4.7%</strong></div>
+            <div><span>VWAP Dist</span><strong>+7.6%</strong></div>
+            <div><span>HOD</span><strong>Near HOD</strong></div>
         </div>
 
-        <div class="note">Already extended. Watch only unless it resets near VWAP or forms a new base.</div>
+        <div class="status-row">
+            <span class="status-chip">Above VWAP</span>
+            <span class="status-chip">Near HOD</span>
+            <span class="status-chip risk-chip">EXTENDED</span>
+        </div>
 
-        <div class="tags"><span class="tag">Above VWAP extended</span><span class="tag">Upper range</span><span class="tag">Near HOD</span><span class="tag">⚠️ EXTENDED</span><span class="tag">Major move +25.9%</span></div>
+        <div class="interpretation">Extended move; avoid chasing unless structure becomes exceptional.</div>
 
-        <div class="actions">
+        <div class="tags-row"><span class="tag">📰 Fresh news</span><span class="tag">Above VWAP extended</span><span class="tag">Upper range</span><span class="tag">Near HOD</span><span class="tag">⚠️ EXTENDED</span></div>
+
+        
+        <div class="mini-panel">
+            <div class="mini-row"><span>Short %</span><strong>7%</strong></div>
+            <div class="mini-row"><span>Float</span><strong>36.2M</strong></div>
+            <div class="mini-row"><span>DTC</span><strong>2.9d</strong></div>
+        </div>
+        
+
+        <div class="card-actions">
             <a href="https://www.tradingview.com/chart/?symbol=AMN" target="_blank">Chart</a>
             <a href="https://finance.yahoo.com/quote/AMN" target="_blank">Yahoo</a>
             <a href="https://stocktwits.com/symbol/AMN" target="_blank">Twits</a>
         </div>
-    </article>
     </div>
-    </section>
     
-    <section id="high_risk_extreme" class="section">
-        <div class="section-head" style="--accent:#ef4444;">
+        </div>
+    </section>
+    </div>
+    <div id="risk">
+    <section class="desk-section section-risk">
+        <div class="section-header">
             <div>
                 <h2>High Risk / Extreme</h2>
-                <p>Parabolic or high-risk names. Watch-only unless using special rules.</p>
+                <p>Volatile or news-risk names. Monitor only unless intentionally trading high-risk momentum.</p>
             </div>
-            <div class="count">1</div>
+            <span class="section-count">2</span>
         </div>
-        <div class="grid">
-    <article class="card highrisk" style="--accent:#ef4444;">
+        <div class="cards-grid">
+            
+    <div class="stock-card bucket-risk" style="--accent:#ef4444;">
         <div class="card-top">
             <div>
-                <div class="sym-row">
+                <div class="symbol-row">
                     <span class="symbol">INOD</span>
                     <span class="sector">Other</span>
-                    <span class="tier" style="color:#38bdf8;">Tier 2</span>
+                    <span class="tier" style="color:#38bdf8;border-color:#38bdf8;">Tier 2</span>
                 </div>
-                <div class="bucket">HIGH RISK EXTREME</div>
+                <div class="bucket-label">High Risk / Extreme</div>
             </div>
-            <div class="score" style="color:#38bdf8;">64<small>/100</small></div>
+            <div class="score-box" style="color:#38bdf8;">62</div>
         </div>
 
         <div class="price-row">
-            <div>
-                <div class="price">$86.37</div>
-                <div class="source">Yahoo + IEX</div>
-            </div>
-            <div class="change positive">+89.24%</div>
+            <div class="price">$83.96</div>
+            <div class="change positive">+83.96%</div>
         </div>
 
-        <div class="badge-row">
-            <span class="badge red">HIGH RISK</span>
-            <span class="badge green">Above VWAP</span>
-            <span class="badge muted">HOD —</span>
+        <div class="catalyst-strip catalyst-neutral">
+            <div class="catalyst-label">📰 Catalyst: Fresh news — neutral/unclassified</div>
+            <div class="catalyst-headline">Nasdaq Tops 29,000 Records, Micron Soars 13%: Stock Market Today</div>
+            <div class="catalyst-source">benzinga · 2026-05-08T17:36:32</div>
             
         </div>
 
-        <div class="metrics">
-            <div class="metric"><span>Liquidity</span><strong>$162M</strong></div>
-            <div class="metric"><span>ATR</span><strong>6.8%</strong></div>
-            <div class="metric"><span>VWAP Dist</span><strong>1.8%</strong></div>
-            <div class="metric"><span>From HOD</span><strong>-5.8%</strong></div>
-            
-        <div class="metric">
-            <span>Short</span>
-            <strong class="negative">17%</strong>
+        <div class="metrics-grid">
+            <div><span>Liquidity</span><strong>$161M</strong></div>
+            <div><span>ATR</span><strong>7.0%</strong></div>
+            <div><span>VWAP Dist</span><strong>-1.7%</strong></div>
+            <div><span>HOD</span><strong>Not HOD</strong></div>
+        </div>
+
+        <div class="status-row">
+            <span class="status-chip">Below/Unknown</span>
+            <span class="status-chip">Not HOD</span>
+            <span class="status-chip risk-chip">HIGH_RISK</span>
+        </div>
+
+        <div class="interpretation">High-risk mover; monitor only unless deliberately trading momentum.</div>
+
+        <div class="tags-row"><span class="tag">📰 Fresh news</span><span class="tag">⚠️ HIGH RISK</span><span class="tag">Major move +84.0%</span><span class="tag">Vol surge 7.1x</span><span class="tag">RVOL 9.3x</span></div>
+
+        
+        <div class="mini-panel">
+            <div class="mini-row"><span>Short %</span><strong>17%</strong></div>
+            <div class="mini-row"><span>Float</span><strong>31.3M</strong></div>
+            <div class="mini-row"><span>DTC</span><strong>5.6d</strong></div>
         </div>
         
-        </div>
 
-        <div class="note">Extreme mover. Do not treat as a primary entry setup.</div>
-
-        <div class="tags"><span class="tag">Above VWAP</span><span class="tag">⚠️ HIGH RISK</span><span class="tag">Major move +89.2%</span><span class="tag">Vol surge 6.9x</span><span class="tag">RVOL 9.1x</span></div>
-
-        <div class="actions">
+        <div class="card-actions">
             <a href="https://www.tradingview.com/chart/?symbol=INOD" target="_blank">Chart</a>
             <a href="https://finance.yahoo.com/quote/INOD" target="_blank">Yahoo</a>
             <a href="https://stocktwits.com/symbol/INOD" target="_blank">Twits</a>
         </div>
-    </article>
     </div>
+    
+    <div class="stock-card bucket-risk" style="--accent:#ef4444;">
+        <div class="card-top">
+            <div>
+                <div class="symbol-row">
+                    <span class="symbol">RXT</span>
+                    <span class="sector">Other</span>
+                    <span class="tier" style="color:#38bdf8;border-color:#38bdf8;">Tier 2</span>
+                </div>
+                <div class="bucket-label">High Risk / Extreme</div>
+            </div>
+            <div class="score-box" style="color:#38bdf8;">58</div>
+        </div>
+
+        <div class="price-row">
+            <div class="price">$5.62</div>
+            <div class="change positive">+59.79%</div>
+        </div>
+
+        <div class="catalyst-strip catalyst-neutral">
+            <div class="catalyst-label">📰 Catalyst: Fresh news — neutral/unclassified</div>
+            <div class="catalyst-headline">12 Information Technology Stocks Moving In Friday&#x27;s Intraday Session</div>
+            <div class="catalyst-source">benzinga · 2026-05-08T17:05:40</div>
+            
+        </div>
+
+        <div class="metrics-grid">
+            <div><span>Liquidity</span><strong>$128M</strong></div>
+            <div><span>ATR</span><strong>9.7%</strong></div>
+            <div><span>VWAP Dist</span><strong>+9.8%</strong></div>
+            <div><span>HOD</span><strong>Not HOD</strong></div>
+        </div>
+
+        <div class="status-row">
+            <span class="status-chip">Above VWAP</span>
+            <span class="status-chip">Not HOD</span>
+            <span class="status-chip risk-chip">HIGH_RISK</span>
+        </div>
+
+        <div class="interpretation">High-risk mover; monitor only unless deliberately trading momentum.</div>
+
+        <div class="tags-row"><span class="tag">📰 Fresh news</span><span class="tag">Above VWAP extended</span><span class="tag">Upper range</span><span class="tag">Far above VWAP</span><span class="tag">⚠️ HIGH RISK</span></div>
+
+        
+        <div class="mini-panel">
+            <div class="mini-row"><span>Short %</span><strong>20%</strong></div>
+            <div class="mini-row"><span>Float</span><strong>109.9M</strong></div>
+            <div class="mini-row"><span>DTC</span><strong>2.8d</strong></div>
+        </div>
+        
+
+        <div class="card-actions">
+            <a href="https://www.tradingview.com/chart/?symbol=RXT" target="_blank">Chart</a>
+            <a href="https://finance.yahoo.com/quote/RXT" target="_blank">Yahoo</a>
+            <a href="https://stocktwits.com/symbol/RXT" target="_blank">Twits</a>
+        </div>
+    </div>
+    
+        </div>
     </section>
-    
-    
-    <section id="desk" class="section">
-        <div class="section-head">
+    </div>
+    <div id="desk">
+    <section class="desk-table-section">
+        <div class="section-header">
             <div>
                 <h2>Desk View</h2>
-                <p>Compact comparison table for fast manual review.</p>
+                <p>Compact comparison table for the full active review list.</p>
             </div>
         </div>
         <div class="table-wrap">
             <table>
                 <thead>
                     <tr>
-                        <th>Ticker</th><th>Score</th><th>Bucket</th><th>Price</th>
-                        <th>% Chg</th><th>Liq</th><th>ATR</th><th>VWAP</th><th>Risk</th><th>Notes</th>
+                        <th>Ticker</th>
+                        <th>Score</th>
+                        <th>Tier</th>
+                        <th>Bucket</th>
+                        <th>Price</th>
+                        <th>% Chg</th>
+                        <th>Liq</th>
+                        <th>ATR</th>
+                        <th>VWAP</th>
+                        <th>Risk</th>
+                        <th>Catalyst</th>
+                        <th>Headline</th>
                     </tr>
                 </thead>
                 <tbody>
+                    
         <tr>
-            <td><strong>GFS</strong></td>
-            <td>69</td>
-            <td>POTENTIAL MOVER</td>
-            <td>$75.11</td>
-            <td class="positive">+5.90%</td>
-            <td>$358M</td>
-            <td>5.2%</td>
+            <td><strong>AVPT</strong></td>
+            <td>72</td>
+            <td>1</td>
+            <td>Potential Mover</td>
+            <td>$11.32</td>
+            <td class="positive">+9.74%</td>
+            <td>$20M</td>
+            <td>4.1%</td>
             <td>Above</td>
             <td>NORMAL</td>
-            <td>Above VWAP, Upper range</td>
+            <td>No confirmed fresh news</td>
+            <td>—</td>
         </tr>
         
         <tr>
             <td><strong>TECK</strong></td>
             <td>69</td>
-            <td>POTENTIAL MOVER</td>
-            <td>$64.57</td>
-            <td class="positive">+6.27%</td>
-            <td>$197M</td>
+            <td>1</td>
+            <td>Potential Mover</td>
+            <td>$64.53</td>
+            <td class="positive">+6.21%</td>
+            <td>$198M</td>
             <td>4.0%</td>
             <td>Above</td>
             <td>NORMAL</td>
-            <td>Above VWAP, Upper range</td>
+            <td>No confirmed fresh news</td>
+            <td>—</td>
         </tr>
         
         <tr>
-            <td><strong>WRBY</strong></td>
-            <td>66</td>
-            <td>POTENTIAL MOVER</td>
-            <td>$29.44</td>
-            <td class="positive">+8.24%</td>
-            <td>$73.8M</td>
-            <td>6.5%</td>
+            <td><strong>GFS</strong></td>
+            <td>69</td>
+            <td>1</td>
+            <td>Potential Mover</td>
+            <td>$75.12</td>
+            <td class="positive">+5.91%</td>
+            <td>$359M</td>
+            <td>5.2%</td>
             <td>Above</td>
             <td>NORMAL</td>
-            <td>Above VWAP, Upper range</td>
-        </tr>
-        
-        <tr>
-            <td><strong>AMKR</strong></td>
-            <td>66</td>
-            <td>POTENTIAL MOVER</td>
-            <td>$76.12</td>
-            <td class="positive">+5.33%</td>
-            <td>$406M</td>
-            <td>6.3%</td>
-            <td>Above</td>
-            <td>NORMAL</td>
-            <td>Above VWAP, Upper range</td>
+            <td>No confirmed fresh news</td>
+            <td>—</td>
         </tr>
         
         <tr>
             <td><strong>GEN</strong></td>
             <td>66</td>
-            <td>POTENTIAL MOVER</td>
+            <td>1</td>
+            <td>Potential Mover</td>
             <td>$22.30</td>
-            <td class="positive">+10.45%</td>
-            <td>$150M</td>
+            <td class="positive">+10.43%</td>
+            <td>$151M</td>
             <td>3.6%</td>
             <td>Above</td>
             <td>NORMAL</td>
-            <td>Above VWAP, Upper range</td>
+            <td>No confirmed fresh news</td>
+            <td>—</td>
         </tr>
         
         <tr>
-            <td><strong>AUR</strong></td>
-            <td>64</td>
-            <td>POTENTIAL MOVER</td>
-            <td>$7.22</td>
-            <td class="positive">+1.12%</td>
-            <td>$190M</td>
-            <td>6.5%</td>
+            <td><strong>VSH</strong></td>
+            <td>65</td>
+            <td>1</td>
+            <td>Potential Mover</td>
+            <td>$34.49</td>
+            <td class="positive">+5.83%</td>
+            <td>$122M</td>
+            <td>4.3%</td>
             <td>Above</td>
             <td>NORMAL</td>
-            <td>Above VWAP, Upper range</td>
+            <td>No confirmed fresh news</td>
+            <td>—</td>
+        </tr>
+        
+        <tr>
+            <td><strong>AMKR</strong></td>
+            <td>64</td>
+            <td>2</td>
+            <td>Potential Mover</td>
+            <td>$76.36</td>
+            <td class="positive">+5.67%</td>
+            <td>$408M</td>
+            <td>6.3%</td>
+            <td>Above</td>
+            <td>NORMAL</td>
+            <td>No confirmed fresh news</td>
+            <td>—</td>
         </tr>
         
         <tr>
             <td><strong>COCO</strong></td>
             <td>64</td>
-            <td>POTENTIAL MOVER</td>
-            <td>$72.89</td>
-            <td class="positive">+6.88%</td>
+            <td>2</td>
+            <td>Potential Mover</td>
+            <td>$72.12</td>
+            <td class="positive">+5.74%</td>
             <td>$114M</td>
-            <td>5.2%</td>
+            <td>5.3%</td>
             <td>Above</td>
             <td>NORMAL</td>
-            <td>Above VWAP, Upper range</td>
+            <td>No confirmed fresh news</td>
+            <td>—</td>
         </tr>
         
         <tr>
-            <td><strong>HPQ</strong></td>
+            <td><strong>GTX</strong></td>
             <td>63</td>
-            <td>POTENTIAL MOVER</td>
-            <td>$22.46</td>
-            <td class="positive">+7.03%</td>
-            <td>$362M</td>
-            <td>4.1%</td>
+            <td>2</td>
+            <td>Potential Mover</td>
+            <td>$29.02</td>
+            <td class="positive">+7.36%</td>
+            <td>$77M</td>
+            <td>4.3%</td>
             <td>Above</td>
             <td>NORMAL</td>
-            <td>Above VWAP, Upper range</td>
+            <td>No confirmed fresh news</td>
+            <td>—</td>
         </tr>
         
         <tr>
-            <td><strong>IBRX</strong></td>
+            <td><strong>AUR</strong></td>
             <td>62</td>
-            <td>POTENTIAL MOVER</td>
-            <td>$8.49</td>
-            <td class="positive">+9.47%</td>
-            <td>$110M</td>
-            <td>6.6%</td>
+            <td>2</td>
+            <td>Potential Mover</td>
+            <td>$7.17</td>
+            <td class="positive">+0.42%</td>
+            <td>$190M</td>
+            <td>6.5%</td>
             <td>Above</td>
             <td>NORMAL</td>
-            <td>Above VWAP extended, Upper range</td>
+            <td>No confirmed fresh news</td>
+            <td>—</td>
         </tr>
         
         <tr>
-            <td><strong>JOBY</strong></td>
+            <td><strong>STM</strong></td>
             <td>62</td>
-            <td>POTENTIAL MOVER</td>
-            <td>$10.56</td>
-            <td class="positive">+5.50%</td>
-            <td>$314M</td>
-            <td>6.7%</td>
+            <td>2</td>
+            <td>Potential Mover</td>
+            <td>$59.05</td>
+            <td class="positive">+5.64%</td>
+            <td>$723M</td>
+            <td>4.3%</td>
             <td>Above</td>
             <td>NORMAL</td>
-            <td>Above VWAP, Upper range</td>
+            <td>No confirmed fresh news</td>
+            <td>—</td>
         </tr>
         
         <tr>
             <td><strong>WSC</strong></td>
-            <td>85</td>
-            <td>ACTIVE MOMENTUM</td>
-            <td>$27.96</td>
-            <td class="positive">+20.00%</td>
-            <td>$81.1M</td>
+            <td>83</td>
+            <td>S</td>
+            <td>Active Momentum</td>
+            <td>$28.00</td>
+            <td class="positive">+20.19%</td>
+            <td>$83M</td>
             <td>4.3%</td>
             <td>Above</td>
             <td>NORMAL</td>
-            <td>Above VWAP, Upper range</td>
-        </tr>
-        
-        <tr>
-            <td><strong>DXYZ</strong></td>
-            <td>77</td>
-            <td>ACTIVE MOMENTUM</td>
-            <td>$54.42</td>
-            <td class="positive">+20.94%</td>
-            <td>$119M</td>
-            <td>5.8%</td>
-            <td>Above</td>
-            <td>NORMAL</td>
-            <td>Above VWAP extended, Upper range</td>
+            <td>Fresh news — neutral/unclassified</td>
+            <td>Monster Beverage, Westrock Coffee, Himax Technologies And Other Big Stocks Moving Hig</td>
         </tr>
         
         <tr>
             <td><strong>FROG</strong></td>
-            <td>77</td>
-            <td>ACTIVE MOMENTUM</td>
-            <td>$70.89</td>
-            <td class="positive">+24.32%</td>
-            <td>$184M</td>
+            <td>78</td>
+            <td>1</td>
+            <td>Active Momentum</td>
+            <td>$70.58</td>
+            <td class="positive">+23.79%</td>
+            <td>$185M</td>
             <td>5.0%</td>
             <td>Above</td>
             <td>NORMAL</td>
-            <td>Above VWAP extended, Upper range</td>
+            <td>Fresh news — neutral/unclassified</td>
+            <td>Nasdaq Tops 29,000 Records, Micron Soars 13%: Stock Market Today</td>
         </tr>
         
         <tr>
-            <td><strong>PENG</strong></td>
-            <td>72</td>
-            <td>ACTIVE MOMENTUM</td>
-            <td>$44.15</td>
-            <td class="positive">+13.26%</td>
-            <td>$99.0M</td>
-            <td>5.7%</td>
+            <td><strong>DBX</strong></td>
+            <td>74</td>
+            <td>1</td>
+            <td>Active Momentum</td>
+            <td>$28.88</td>
+            <td class="positive">+14.92%</td>
+            <td>$100M</td>
+            <td>3.4%</td>
             <td>Above</td>
             <td>NORMAL</td>
-            <td>Above VWAP, Upper range</td>
-        </tr>
-        
-        <tr>
-            <td><strong>QURE</strong></td>
-            <td>69</td>
-            <td>ACTIVE MOMENTUM</td>
-            <td>$27.64</td>
-            <td class="positive">+14.43%</td>
-            <td>$51.5M</td>
-            <td>6.8%</td>
-            <td>Above</td>
-            <td>NORMAL</td>
-            <td>Above VWAP, Big move +14.4%</td>
-        </tr>
-        
-        <tr>
-            <td><strong>EOSE</strong></td>
-            <td>69</td>
-            <td>ACTIVE MOMENTUM</td>
-            <td>$7.82</td>
-            <td class="positive">+22.88%</td>
-            <td>$190M</td>
-            <td>8.2%</td>
-            <td>Above</td>
-            <td>NORMAL</td>
-            <td>Above VWAP, Upper range</td>
-        </tr>
-        
-        <tr>
-            <td><strong>GRPN</strong></td>
-            <td>66</td>
-            <td>ACTIVE MOMENTUM</td>
-            <td>$18.28</td>
-            <td class="positive">+18.24%</td>
-            <td>$46.6M</td>
-            <td>8.8%</td>
-            <td>Above</td>
-            <td>NORMAL</td>
-            <td>Above VWAP, Big move +18.2%</td>
-        </tr>
-        
-        <tr>
-            <td><strong>CSIQ</strong></td>
-            <td>66</td>
-            <td>ACTIVE MOMENTUM</td>
-            <td>$20.22</td>
-            <td class="positive">+14.37%</td>
-            <td>$58.5M</td>
-            <td>6.5%</td>
-            <td>Above</td>
-            <td>NORMAL</td>
-            <td>Above VWAP extended, Upper range</td>
+            <td>Fresh news — neutral/unclassified</td>
+            <td>Nasdaq Tops 29,000 Records, Micron Soars 13%: Stock Market Today</td>
         </tr>
         
         <tr>
             <td><strong>PGNY</strong></td>
-            <td>66</td>
-            <td>ACTIVE MOMENTUM</td>
-            <td>$23.16</td>
-            <td class="positive">+20.90%</td>
-            <td>$34.7M</td>
+            <td>72</td>
+            <td>1</td>
+            <td>Active Momentum</td>
+            <td>$23.18</td>
+            <td class="positive">+21.01%</td>
+            <td>$35M</td>
             <td>3.7%</td>
             <td>Above</td>
             <td>NORMAL</td>
-            <td>Above VWAP, Upper range</td>
+            <td>Fresh news — neutral/unclassified</td>
+            <td>12 Health Care Stocks Moving In Friday&#x27;s Pre-Market Session</td>
         </tr>
         
         <tr>
-            <td><strong>MRVI</strong></td>
-            <td>66</td>
-            <td>ACTIVE MOMENTUM</td>
-            <td>$4.86</td>
-            <td class="positive">+23.38%</td>
-            <td>$11.6M</td>
-            <td>5.3%</td>
+            <td><strong>QURE</strong></td>
+            <td>71</td>
+            <td>1</td>
+            <td>Active Momentum</td>
+            <td>$27.38</td>
+            <td class="positive">+13.37%</td>
+            <td>$52M</td>
+            <td>6.9%</td>
             <td>Above</td>
             <td>NORMAL</td>
-            <td>Above VWAP, Upper range</td>
+            <td>No confirmed fresh news</td>
+            <td>—</td>
+        </tr>
+        
+        <tr>
+            <td><strong>LUNR</strong></td>
+            <td>70</td>
+            <td>1</td>
+            <td>Active Momentum</td>
+            <td>$29.22</td>
+            <td class="positive">+21.19%</td>
+            <td>$377M</td>
+            <td>9.1%</td>
+            <td>Above</td>
+            <td>NORMAL</td>
+            <td>Positive catalyst: record revenue</td>
+            <td>Space Earnings Heat Up: Rocket Lab Tops $200M, Firefly Hits Record Revenue, Redwire B</td>
+        </tr>
+        
+        <tr>
+            <td><strong>DXYZ</strong></td>
+            <td>69</td>
+            <td>1</td>
+            <td>Active Momentum</td>
+            <td>$53.73</td>
+            <td class="positive">+19.40%</td>
+            <td>$119M</td>
+            <td>5.9%</td>
+            <td>Above</td>
+            <td>NORMAL</td>
+            <td>No confirmed fresh news</td>
+            <td>—</td>
+        </tr>
+        
+        <tr>
+            <td><strong>CALY</strong></td>
+            <td>69</td>
+            <td>1</td>
+            <td>Active Momentum</td>
+            <td>$17.49</td>
+            <td class="positive">+18.42%</td>
+            <td>$50M</td>
+            <td>3.9%</td>
+            <td>Above</td>
+            <td>NORMAL</td>
+            <td>Fresh news — neutral/unclassified</td>
+            <td>Monster Beverage, Westrock Coffee, Himax Technologies And Other Big Stocks Moving Hig</td>
+        </tr>
+        
+        <tr>
+            <td><strong>CSIQ</strong></td>
+            <td>68</td>
+            <td>1</td>
+            <td>Active Momentum</td>
+            <td>$20.32</td>
+            <td class="positive">+14.93%</td>
+            <td>$59M</td>
+            <td>6.5%</td>
+            <td>Above</td>
+            <td>NORMAL</td>
+            <td>No confirmed fresh news</td>
+            <td>—</td>
+        </tr>
+        
+        <tr>
+            <td><strong>EOSE</strong></td>
+            <td>65</td>
+            <td>1</td>
+            <td>Active Momentum</td>
+            <td>$7.75</td>
+            <td class="positive">+21.93%</td>
+            <td>$190M</td>
+            <td>8.2%</td>
+            <td>Above</td>
+            <td>NORMAL</td>
+            <td>No confirmed fresh news</td>
+            <td>—</td>
         </tr>
         
         <tr>
             <td><strong>FLNC</strong></td>
-            <td>72</td>
-            <td>EXTENDED CHASE RISK</td>
-            <td>$25.01</td>
-            <td class="positive">+31.84%</td>
-            <td>$217M</td>
-            <td>7.4%</td>
-            <td>Below</td>
+            <td>67</td>
+            <td>1</td>
+            <td>Extended / Chase Risk</td>
+            <td>$24.34</td>
+            <td class="positive">+28.31%</td>
+            <td>$213M</td>
+            <td>7.6%</td>
+            <td>Below/NA</td>
             <td>EXTENDED</td>
-            <td>Consolidating, ⚠️ EXTENDED</td>
-        </tr>
-        
-        <tr>
-            <td><strong>RXT</strong></td>
-            <td>64</td>
-            <td>EXTENDED CHASE RISK</td>
-            <td>$5.10</td>
-            <td class="positive">+44.95%</td>
-            <td>$114M</td>
-            <td>10.7%</td>
-            <td>Above</td>
-            <td>EXTENDED</td>
-            <td>Above VWAP, ⚠️ EXTENDED</td>
+            <td>Fresh news — neutral/unclassified</td>
+            <td>12 Industrials Stocks Moving In Friday&#x27;s Intraday Session</td>
         </tr>
         
         <tr>
             <td><strong>AMN</strong></td>
-            <td>54</td>
-            <td>EXTENDED CHASE RISK</td>
-            <td>$28.27</td>
-            <td class="positive">+25.92%</td>
-            <td>$23.9M</td>
-            <td>4.6%</td>
+            <td>56</td>
+            <td>2</td>
+            <td>Extended / Chase Risk</td>
+            <td>$28.81</td>
+            <td class="positive">+28.33%</td>
+            <td>$25M</td>
+            <td>4.7%</td>
             <td>Above</td>
             <td>EXTENDED</td>
-            <td>Above VWAP extended, Upper range</td>
+            <td>Fresh news — neutral/unclassified</td>
+            <td>12 Health Care Stocks Moving In Thursday&#x27;s After-Market Session</td>
         </tr>
         
         <tr>
             <td><strong>INOD</strong></td>
-            <td>64</td>
-            <td>HIGH RISK EXTREME</td>
-            <td>$86.37</td>
-            <td class="positive">+89.24%</td>
-            <td>$162M</td>
-            <td>6.8%</td>
+            <td>62</td>
+            <td>2</td>
+            <td>High Risk / Extreme</td>
+            <td>$83.96</td>
+            <td class="positive">+83.96%</td>
+            <td>$161M</td>
+            <td>7.0%</td>
+            <td>Below/NA</td>
+            <td>HIGH_RISK</td>
+            <td>Fresh news — neutral/unclassified</td>
+            <td>Nasdaq Tops 29,000 Records, Micron Soars 13%: Stock Market Today</td>
+        </tr>
+        
+        <tr>
+            <td><strong>RXT</strong></td>
+            <td>58</td>
+            <td>2</td>
+            <td>High Risk / Extreme</td>
+            <td>$5.62</td>
+            <td class="positive">+59.79%</td>
+            <td>$128M</td>
+            <td>9.7%</td>
             <td>Above</td>
             <td>HIGH_RISK</td>
-            <td>Above VWAP, ⚠️ HIGH RISK</td>
+            <td>Fresh news — neutral/unclassified</td>
+            <td>12 Information Technology Stocks Moving In Friday&#x27;s Intraday Session</td>
         </tr>
-        </tbody>
+        
+                </tbody>
             </table>
         </div>
     </section>
-    
+    </div>
 
-    <div class="footer">
-        Data note: Alpaca Free uses IEX-only, non-consolidated data. Volume and VWAP are useful proxies, not full SIP market data.
+    <div class="footer-note">
+        Data note: Alpaca IEX volume is non-consolidated. Confirm liquidity, spread, VWAP, and news manually before trade execution.
     </div>
 </main>
+
 </body>
 </html>
