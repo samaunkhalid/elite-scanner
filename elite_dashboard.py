@@ -13,17 +13,15 @@ Inputs:
   - elite_watchlist.json
   - market_regime.json
 
-Features:
-  - Professional bucketed display
+Display:
+  - Price top-right
+  - Smaller score badge
   - Company name under ticker
-  - Price top-right, smaller score badge
-  - Sector / stock-vs-sector context
+  - Real sector / ETF / vs-sector context
   - Sector leadership snapshot
-  - Catalyst strip on every card
+  - Catalyst strip
   - Meaning-based tag colors
-  - Desk View table
-  - Market regime banner
-  - Last scan/build time + market status
+  - Last scan time and market status
 """
 
 import json
@@ -41,77 +39,19 @@ except Exception:
 
 
 # ==============================================================
-# FALLBACK SECTOR MAPPING
-# ==============================================================
-
-SECTORS = {
-    "RIOT": "Crypto", "MARA": "Crypto", "CLSK": "Crypto", "HUT": "Crypto",
-    "BITF": "Crypto", "CIFR": "Crypto", "CORZ": "Crypto", "BTBT": "Crypto",
-    "IREN": "Crypto", "MSTR": "Crypto", "COIN": "Crypto",
-
-    "SOUN": "AI", "AI": "AI", "BBAI": "AI", "IONQ": "Quantum",
-    "RGTI": "Quantum", "ARQQ": "Quantum", "PLTR": "AI", "NVDA": "Semiconductors",
-    "SMCI": "Semiconductors",
-
-    "AMD": "Semiconductors", "INTC": "Semiconductors", "WOLF": "Semiconductors",
-    "LSCC": "Semiconductors", "MU": "Semiconductors", "QCOM": "Semiconductors",
-    "ARM": "Semiconductors", "SMTC": "Semiconductors", "MRVL": "Semiconductors",
-    "AVGO": "Semiconductors", "TSM": "Semiconductors", "GFS": "Semiconductors",
-    "AMKR": "Semiconductors", "STM": "Semiconductors",
-
-    "TSLA": "Automobiles", "RIVN": "Automobiles", "NIO": "Automobiles",
-    "XPEV": "Automobiles", "LCID": "Automobiles", "LI": "Automobiles",
-    "QS": "EV", "CHPT": "EV", "PLUG": "Energy", "FCEL": "Energy",
-    "BE": "Energy", "BLNK": "EV", "EVGO": "EV", "RUN": "Solar",
-    "CSIQ": "Solar", "ENPH": "Solar", "SEDG": "Solar",
-
-    "RKLB": "Aerospace & Defense", "ASTS": "Aerospace & Defense",
-    "LUNR": "Aerospace & Defense", "JOBY": "Automobiles",
-    "ACHR": "Automobiles", "KTOS": "Aerospace & Defense",
-    "LMT": "Aerospace & Defense", "RTX": "Aerospace & Defense",
-
-    "HIMS": "Healthcare", "CRSP": "Biotechnology", "BNGO": "Biotechnology",
-    "VKTX": "Biotechnology", "MDGL": "Biotechnology", "VRDN": "Biotechnology",
-    "CYTK": "Biotechnology", "IOVA": "Biotechnology", "SAVA": "Biotechnology",
-    "MRNA": "Biotechnology", "NVAX": "Biotechnology", "QURE": "Biotechnology",
-
-    "GME": "Retail", "AMC": "Meme", "BBBY": "Meme", "BB": "Meme", "NOK": "Technology",
-    "HOOD": "Financial Services", "SOFI": "Financial Services", "AFRM": "Financial Services",
-    "UPST": "Financial Services", "NU": "Financial Services",
-
-    "RDDT": "Communication Services", "PINS": "Communication Services",
-    "SNAP": "Communication Services", "RBLX": "Gaming", "ROKU": "Communication Services",
-    "DKNG": "Gaming", "NFLX": "Communication Services",
-
-    "NET": "Software", "CRWD": "Software", "ZS": "Software", "PANW": "Software",
-    "OKTA": "Software", "DBX": "Software", "FROG": "Software",
-
-    "DVN": "Energy", "CTRA": "Energy", "XOM": "Energy", "CVX": "Energy",
-    "TECK": "Basic Materials",
-
-    "CCL": "Travel", "ABNB": "Travel", "CART": "Retail", "CAVA": "Consumer Cyclical",
-    "CELH": "Consumer Defensive", "SHOP": "E-Commerce",
-
-    "AAPL": "Technology", "MSFT": "Technology", "GOOGL": "Communication Services",
-    "META": "Communication Services", "AMZN": "Consumer Cyclical",
-}
-
-
-def get_sector(symbol):
-    return SECTORS.get(str(symbol).upper(), "Unknown")
-
-
-# ==============================================================
 # SAFE HELPERS
 # ==============================================================
 
 def safe_str(value, default=""):
     if value is None:
         return default
-    if isinstance(value, float) and pd.isna(value):
-        return default
+    try:
+        if isinstance(value, float) and pd.isna(value):
+            return default
+    except Exception:
+        pass
     text = str(value)
-    if text.lower() in ["nan", "none"]:
+    if text.lower() in ["nan", "none", "nat"]:
         return default
     return text
 
@@ -145,13 +85,6 @@ def truthy(value):
         return value
     text = safe_str(value).lower()
     return text in ["true", "1", "yes", "y"]
-
-
-def shorten(value, max_len=58):
-    text = safe_str(value)
-    if len(text) <= max_len:
-        return text
-    return text[:max_len - 1].rstrip() + "…"
 
 
 def load_csv_records(path, limit=None):
@@ -248,6 +181,19 @@ def get_bucket_meta(bucket):
     return mapping.get(bucket, mapping["MONITOR"])
 
 
+def get_sector_status_class(status):
+    status = safe_str(status, "UNKNOWN").upper()
+    if status == "LEADING":
+        return "sector-leading"
+    if status == "IMPROVING":
+        return "sector-improving"
+    if status == "WEAK":
+        return "sector-weak"
+    if status == "UNKNOWN":
+        return "sector-unknown"
+    return "sector-neutral"
+
+
 def get_catalyst_meta(stock):
     catalyst_label = safe_str(stock.get("catalyst_label"), "No confirmed fresh news")
     catalyst_sentiment = safe_str(stock.get("catalyst_sentiment"), "NONE").upper()
@@ -282,19 +228,6 @@ def get_catalyst_meta(stock):
     }
 
 
-def get_sector_status_class(status):
-    status = safe_str(status).upper()
-    if status == "LEADING":
-        return "sector-leading"
-    if status == "IMPROVING":
-        return "sector-improving"
-    if status == "WEAK":
-        return "sector-weak"
-    if status == "UNKNOWN":
-        return "sector-unknown"
-    return "sector-neutral"
-
-
 def format_money_m(value):
     val = safe_float(value, 0)
     if val >= 1000:
@@ -304,59 +237,153 @@ def format_money_m(value):
     return "—"
 
 
-def classify_tag(tag):
+def get_tag_class(tag):
+    """
+    Meaning-based tag classes:
+    tag-tech     = technical setup
+    tag-positive = constructive strength / sector / catalyst
+    tag-caution  = extension / big move / chase risk
+    tag-squeeze  = short interest / RVOL / float mechanics
+    tag-risk     = negative/risk
+    tag-neutral  = neutral context
+    """
     t = safe_str(tag).lower()
 
     risk_words = [
-        "risk", "high risk", "offering", "downgrade", "dilution", "investigation",
-        "bankruptcy", "delisting", "reverse split", "news_risk"
+        "high risk", "news_risk", "offering", "downgrade", "investigation",
+        "bankruptcy", "delisting", "reverse split", "dilution", "lawsuit",
+        "negative", "misses", "cuts guidance", "guidance cut", "sec risk"
     ]
-    caution_words = [
-        "extended", "big move", "major move", "far above", "gap", "high atr",
-        "vol surge", "rvol"
-    ]
-    squeeze_words = [
-        "si ", "short", "dtc", "float"
-    ]
-    positive_words = [
-        "positive catalyst", "sector leading", "sector supportive", "rs strong",
-        "rs positive", "accumulating", "near 52wh", "record revenue", "upgrade"
-    ]
-    technical_words = [
-        "above vwap", "near hod", "upper range", "tight consolidation",
-        "consolidating", "ema", "near 20d high", "vwap"
-    ]
-    neutral_words = [
-        "clean price", "lower-price", "atr", "liq", "insider"
-    ]
-
     if any(w in t for w in risk_words):
         return "tag-risk"
+
+    caution_words = [
+        "extended", "major move", "big move", "far above vwap", "above vwap extended",
+        "gap", "high atr", "volatile", "chase", "extreme", "failed"
+    ]
     if any(w in t for w in caution_words):
         return "tag-caution"
+
+    squeeze_words = [
+        "si ", "short", "dtc", "days to cover", "float", "squeeze",
+        "rvol", "vol surge", "volume surge"
+    ]
     if any(w in t for w in squeeze_words):
         return "tag-squeeze"
+
+    positive_words = [
+        "sector leading", "sector supportive", "vs sector", "rs strong", "rs positive",
+        "positive catalyst", "upgrade", "record revenue", "beats", "raises guidance",
+        "accumulating", "near 52wh", "upper range", "near hod", "tight consolidation"
+    ]
     if any(w in t for w in positive_words):
         return "tag-positive"
-    if any(w in t for w in technical_words):
+
+    tech_words = [
+        "above vwap", "consolidating", "ema stack", "near 20d high", "breakout",
+        "vwap", "hod"
+    ]
+    if any(w in t for w in tech_words):
         return "tag-tech"
-    if any(w in t for w in neutral_words):
-        return "tag-neutral"
+
     return "tag-neutral"
 
 
-def build_tags(stock, max_tags=4):
-    tags = safe_str(stock.get("tags"), "")
-    if not tags:
-        return ""
+def build_tags(stock, max_tags=5):
+    """
+    Build visible tags with category diversity.
+    This prevents every card from showing only blue technical tags.
+    """
+    raw_tags = safe_str(stock.get("tags"), "")
+    parts = [p.strip() for p in raw_tags.split(" · ") if p.strip()]
 
-    parts = [p.strip() for p in tags.split(" · ") if p.strip()]
+    # Add synthetic, useful context tags so sector/catalyst/risk can be visible.
+    sector_status = safe_str(stock.get("sector_status"), "").upper()
+    stock_vs_sector = safe_float(stock.get("stock_vs_sector_pct"), 0)
+    catalyst_sentiment = safe_str(stock.get("catalyst_sentiment"), "").upper()
+    risk_category = safe_str(stock.get("risk_category"), "")
+
+    synthetic = []
+
+    if sector_status == "LEADING":
+        synthetic.append("Sector leading")
+    elif sector_status == "IMPROVING":
+        synthetic.append("Sector supportive")
+    elif sector_status == "WEAK":
+        synthetic.append("Sector weak")
+
+    if stock_vs_sector >= 1:
+        synthetic.append(f"Vs sector +{stock_vs_sector:.1f}%")
+    elif stock_vs_sector <= -1:
+        synthetic.append(f"Vs sector {stock_vs_sector:.1f}%")
+
+    if catalyst_sentiment == "POSITIVE":
+        synthetic.append("Positive catalyst")
+    elif catalyst_sentiment == "NEGATIVE":
+        synthetic.append("Negative catalyst")
+
+    if risk_category and risk_category not in ["NORMAL", ""]:
+        synthetic.append(risk_category.replace("_", " "))
+
+    # Keep order but avoid duplicates.
+    seen = set()
+    combined = []
+    for tag in synthetic + parts:
+        key = safe_str(tag).lower()
+        if key and key not in seen:
+            seen.add(key)
+            combined.append(tag)
+
+    # Category-diverse selection.
+    buckets = {
+        "tag-risk": [],
+        "tag-caution": [],
+        "tag-positive": [],
+        "tag-squeeze": [],
+        "tag-tech": [],
+        "tag-neutral": [],
+    }
+
+    for tag in combined:
+        buckets[get_tag_class(tag)].append(tag)
+
+    selected = []
+
+    # Priority: risk/caution first, then positives, then one or two technicals, then squeeze/neutral.
+    priority = [
+        ("tag-risk", 1),
+        ("tag-caution", 1),
+        ("tag-positive", 2),
+        ("tag-tech", 2),
+        ("tag-squeeze", 1),
+        ("tag-neutral", 1),
+    ]
+
+    for cls, limit in priority:
+        for tag in buckets[cls][:limit]:
+            if len(selected) < max_tags:
+                selected.append((tag, cls))
+
+    # Fill remaining slots from original order if needed.
+    if len(selected) < max_tags:
+        selected_keys = {safe_str(t[0]).lower() for t in selected}
+        for tag in combined:
+            if len(selected) >= max_tags:
+                break
+            key = safe_str(tag).lower()
+            if key not in selected_keys:
+                selected.append((tag, get_tag_class(tag)))
+                selected_keys.add(key)
+
     html_parts = []
-
-    for tag in parts[:max_tags]:
-        html_parts.append(f'<span class="tag {classify_tag(tag)}">{esc(tag)}</span>')
+    for tag, tag_class in selected[:max_tags]:
+        html_parts.append(f'<span class="tag {tag_class}">{esc(tag)}</span>')
 
     return "".join(html_parts)
+
+
+def status_chip(label, cls="status-neutral"):
+    return f'<span class="status-chip {cls}">{esc(label)}</span>'
 
 
 def build_card(stock):
@@ -368,21 +395,16 @@ def build_card(stock):
     bucket = safe_str(stock.get("setup_bucket"), "MONITOR")
     risk = safe_str(stock.get("risk_category"), "NORMAL")
 
-    company_name = safe_str(stock.get("company_name"), "")
-    if not company_name or company_name.upper() == symbol:
-        company_name = ""
-
-    sector = safe_str(stock.get("sector"), "")
-    if not sector or sector == "Unknown":
-        sector = get_sector(symbol)
-
-    sector_etf = safe_str(stock.get("sector_etf"), "SPY")
-    sector_status = safe_str(stock.get("sector_status"), "UNKNOWN").upper()
-    sector_change = safe_float(stock.get("sector_change_pct"), 0)
-    stock_vs_sector = safe_float(stock.get("stock_vs_sector_pct"), 0)
-
     bucket_meta = get_bucket_meta(bucket)
     catalyst = get_catalyst_meta(stock)
+
+    company_name = safe_str(stock.get("company_name"), symbol)
+    sector = safe_str(stock.get("sector"), "Unknown")
+    sector_etf = safe_str(stock.get("sector_etf"), "SPY")
+    sector_status = safe_str(stock.get("sector_status"), "UNKNOWN").upper()
+    sector_status_class = get_sector_status_class(sector_status)
+    sector_change = safe_float(stock.get("sector_change_pct"), 0)
+    stock_vs_sector = safe_float(stock.get("stock_vs_sector_pct"), 0)
 
     tier_color = get_tier_color(tier)
     change_class = "positive" if change_pct >= 0 else "negative"
@@ -400,6 +422,11 @@ def build_card(stock):
 
     vwap_text = "Above VWAP" if above_vwap else "Below/Unknown"
     hod_text = "Near HOD" if near_hod else "Not HOD"
+
+    # More color variety in status row.
+    vwap_cls = "status-tech" if above_vwap else "status-neutral"
+    hod_cls = "status-positive" if near_hod else "status-neutral"
+    risk_cls = "status-risk" if risk not in ["NORMAL", "", "—"] else "status-neutral"
 
     tags_html = build_tags(stock)
 
@@ -431,10 +458,6 @@ def build_card(stock):
         </div>
         """
 
-    company_line = ""
-    if company_name:
-        company_line = f'<div class="company-name">{esc(shorten(company_name, 58))}</div>'
-
     return f"""
     <div class="stock-card {bucket_meta['class']}" style="--accent:{bucket_meta['accent']};">
         <div class="card-top">
@@ -444,7 +467,7 @@ def build_card(stock):
                     <span class="sector-chip">{esc(sector)}</span>
                     <span class="tier" style="color:{tier_color};border-color:{tier_color};">Tier {esc(tier)}</span>
                 </div>
-                {company_line}
+                <div class="company-name">{esc(company_name)}</div>
             </div>
             <div class="price-box">
                 <div class="price">${price:.2f}</div>
@@ -455,7 +478,7 @@ def build_card(stock):
         <div class="score-risk-row">
             <span class="score-pill">Score {score}/100</span>
             <span class="risk-pill">{esc(risk)}</span>
-            <span class="sector-status-pill {get_sector_status_class(sector_status)}">{esc(sector_status)}</span>
+            <span class="sector-status-pill {sector_status_class}">{esc(sector_status)}</span>
         </div>
 
         <div class="sector-strip">
@@ -479,9 +502,9 @@ def build_card(stock):
         </div>
 
         <div class="status-row">
-            <span class="status-chip status-tech">{esc(vwap_text)}</span>
-            <span class="status-chip status-tech">{esc(hod_text)}</span>
-            <span class="status-chip status-neutral">{esc(bucket_meta['label'])}</span>
+            {status_chip(vwap_text, vwap_cls)}
+            {status_chip(hod_text, hod_cls)}
+            {status_chip(risk, risk_cls)}
         </div>
 
         <div class="interpretation">{esc(bucket_meta['interpretation'])}</div>
@@ -563,63 +586,88 @@ def build_regime_html(regime):
     """
 
 
-def build_sector_snapshot(raw, active_watchlist):
+def build_kpi_row(potential, active, extended, highrisk, raw, active_watchlist):
+    total_focus = len(active_watchlist)
+    avg_score = 0
+
+    if active_watchlist:
+        avg_score = sum(safe_float(s.get("score"), 0) for s in active_watchlist) / len(active_watchlist)
+
+    return f"""
+    <div class="kpi-grid">
+        <div class="kpi-card focus"><span>{total_focus}</span><label>Active Watchlist</label></div>
+        <div class="kpi-card potential"><span>{len(potential)}</span><label>Potential</label></div>
+        <div class="kpi-card active"><span>{len(active)}</span><label>Active Momentum</label></div>
+        <div class="kpi-card extended"><span>{len(extended)}</span><label>Extended</label></div>
+        <div class="kpi-card risk"><span>{len(highrisk)}</span><label>High Risk</label></div>
+        <div class="kpi-card"><span>{len(raw)}</span><label>Raw Scored</label></div>
+        <div class="kpi-card"><span>{avg_score:.0f}</span><label>Avg Score</label></div>
+    </div>
+    """
+
+
+def build_sector_snapshot(raw, focus_rows, regime):
     if not raw:
         return ""
 
-    active_symbols = {safe_str(s.get("symbol")).upper() for s in active_watchlist}
-    grouped = {}
+    rows_by_sector = {}
 
-    for row in raw:
-        sector = safe_str(row.get("sector"), "")
-        if not sector or sector == "Unknown":
-            sector = get_sector(row.get("symbol"))
-
+    for stock in raw:
+        sector = safe_str(stock.get("sector"), "Unknown")
         if not sector or sector == "Unknown":
             continue
 
-        etf = safe_str(row.get("sector_etf"), "SPY")
-        sector_chg = safe_float(row.get("sector_change_pct"), 0)
-        sector_vs_spy = safe_float(row.get("sector_vs_spy_pct"), 0)
-        status = safe_str(row.get("sector_status"), "UNKNOWN").upper()
-        symbol = safe_str(row.get("symbol")).upper()
+        etf = safe_str(stock.get("sector_etf"), "SPY")
+        sector_change = safe_float(stock.get("sector_change_pct"), 0)
+        sector_vs_spy = safe_float(stock.get("sector_vs_spy_pct"), 0)
+        sector_status = safe_str(stock.get("sector_status"), "UNKNOWN").upper()
 
-        if sector not in grouped:
-            grouped[sector] = {
+        if sector not in rows_by_sector:
+            rows_by_sector[sector] = {
                 "sector": sector,
                 "etf": etf,
-                "sector_change": sector_chg,
+                "sector_change": sector_change,
                 "sector_vs_spy": sector_vs_spy,
-                "status": status,
+                "sector_status": sector_status,
                 "count": 0,
-                "active_names": [],
+                "focus": [],
             }
 
-        grouped[sector]["count"] += 1
-        if symbol in active_symbols and len(grouped[sector]["active_names"]) < 4:
-            grouped[sector]["active_names"].append(symbol)
+        rows_by_sector[sector]["count"] += 1
 
-    if not grouped:
+    focus_symbols = set()
+    for stock in focus_rows:
+        sym = safe_str(stock.get("symbol"), "").upper()
+        if not sym:
+            continue
+        focus_symbols.add(sym)
+
+        sector = safe_str(stock.get("sector"), "Unknown")
+        if sector in rows_by_sector and sym not in rows_by_sector[sector]["focus"]:
+            rows_by_sector[sector]["focus"].append(sym)
+
+    rows = list(rows_by_sector.values())
+    rows.sort(key=lambda x: (x["sector_vs_spy"], x["sector_change"], x["count"]), reverse=True)
+    rows = rows[:8]
+
+    if not rows:
         return ""
 
-    rows = sorted(
-        grouped.values(),
-        key=lambda x: (x["sector_vs_spy"], x["sector_change"], x["count"]),
-        reverse=True,
-    )[:8]
+    html_rows = ""
 
-    row_html = ""
-    for item in rows:
-        names = ", ".join(item["active_names"]) if item["active_names"] else "—"
-        row_html += f"""
+    for r in rows:
+        status_class = get_sector_status_class(r["sector_status"])
+        focus_text = ", ".join(r["focus"][:4]) if r["focus"] else "—"
+
+        html_rows += f"""
         <tr>
-            <td><strong>{esc(item['sector'])}</strong></td>
-            <td>{esc(item['etf'])}</td>
-            <td class="{'positive' if item['sector_change'] >= 0 else 'negative'}">{item['sector_change']:+.2f}%</td>
-            <td class="{'positive' if item['sector_vs_spy'] >= 0 else 'negative'}">{item['sector_vs_spy']:+.2f}%</td>
-            <td><span class="sector-status-pill {get_sector_status_class(item['status'])}">{esc(item['status'])}</span></td>
-            <td>{item['count']}</td>
-            <td>{esc(names)}</td>
+            <td><strong>{esc(r['sector'])}</strong></td>
+            <td>{esc(r['etf'])}</td>
+            <td class="{'positive' if r['sector_change'] >= 0 else 'negative'}">{r['sector_change']:+.2f}%</td>
+            <td class="{'positive' if r['sector_vs_spy'] >= 0 else 'negative'}">{r['sector_vs_spy']:+.2f}%</td>
+            <td><span class="sector-status-pill {status_class}">{esc(r['sector_status'])}</span></td>
+            <td>{r['count']}</td>
+            <td>{esc(focus_text)}</td>
         </tr>
         """
 
@@ -644,30 +692,10 @@ def build_sector_snapshot(raw, active_watchlist):
                         <th>Active Focus</th>
                     </tr>
                 </thead>
-                <tbody>{row_html}</tbody>
+                <tbody>{html_rows}</tbody>
             </table>
         </div>
     </section>
-    """
-
-
-def build_kpi_row(potential, active, extended, highrisk, raw, active_watchlist):
-    total_focus = len(active_watchlist)
-    avg_score = 0
-
-    if active_watchlist:
-        avg_score = sum(safe_float(s.get("score"), 0) for s in active_watchlist) / len(active_watchlist)
-
-    return f"""
-    <div class="kpi-grid">
-        <div class="kpi-card focus"><span>{total_focus}</span><label>Active Watchlist</label></div>
-        <div class="kpi-card potential"><span>{len(potential)}</span><label>Potential</label></div>
-        <div class="kpi-card active"><span>{len(active)}</span><label>Active Momentum</label></div>
-        <div class="kpi-card extended"><span>{len(extended)}</span><label>Extended</label></div>
-        <div class="kpi-card risk"><span>{len(highrisk)}</span><label>High Risk</label></div>
-        <div class="kpi-card"><span>{len(raw)}</span><label>Raw Scored</label></div>
-        <div class="kpi-card"><span>{avg_score:.0f}</span><label>Avg Score</label></div>
-    </div>
     """
 
 
@@ -679,7 +707,6 @@ def build_desk_table(rows):
 
     for stock in rows[:40]:
         symbol = safe_str(stock.get("symbol"), "—").upper()
-        company = shorten(safe_str(stock.get("company_name"), ""), 42)
         score = safe_int(stock.get("score"), 0)
         tier = safe_str(stock.get("tier"), "—")
         bucket = get_bucket_meta(safe_str(stock.get("setup_bucket"), "MONITOR"))["label"]
@@ -689,27 +716,25 @@ def build_desk_table(rows):
         atr = safe_float(stock.get("atr_pct"), 0)
         vwap = "Above" if truthy(stock.get("above_vwap")) else "Below/NA"
         risk = safe_str(stock.get("risk_category"), "NORMAL")
-        sector = safe_str(stock.get("sector"), get_sector(symbol))
+        sector = safe_str(stock.get("sector"), "Unknown")
         sector_status = safe_str(stock.get("sector_status"), "UNKNOWN")
-        vs_sector = safe_float(stock.get("stock_vs_sector_pct"), 0)
+        stock_vs_sector = safe_float(stock.get("stock_vs_sector_pct"), 0)
         catalyst = get_catalyst_meta(stock)
         headline = catalyst["headline"][:85] if catalyst["headline"] else "—"
 
         html_rows += f"""
         <tr>
-            <td><strong>{esc(symbol)}</strong><br><small>{esc(company)}</small></td>
+            <td><strong>{esc(symbol)}</strong><br><small>{esc(sector)}</small></td>
             <td>{score}</td>
             <td>{esc(tier)}</td>
             <td>{esc(bucket)}</td>
             <td>${price:.2f}</td>
             <td class="{'positive' if chg >= 0 else 'negative'}">{chg:+.2f}%</td>
-            <td>{esc(sector)}</td>
-            <td><span class="sector-status-pill {get_sector_status_class(sector_status)}">{esc(sector_status)}</span></td>
-            <td class="{'positive' if vs_sector >= 0 else 'negative'}">{vs_sector:+.2f}%</td>
             <td>{liq}</td>
             <td>{atr:.1f}%</td>
             <td>{esc(vwap)}</td>
             <td>{esc(risk)}</td>
+            <td>{esc(sector_status)}<br><small>{stock_vs_sector:+.2f}% vs sector</small></td>
             <td>{esc(catalyst['label'])}</td>
             <td>{esc(headline)}</td>
         </tr>
@@ -733,20 +758,16 @@ def build_desk_table(rows):
                         <th>Bucket</th>
                         <th>Price</th>
                         <th>% Chg</th>
-                        <th>Sector</th>
-                        <th>Status</th>
-                        <th>Vs Sector</th>
                         <th>Liq</th>
                         <th>ATR</th>
                         <th>VWAP</th>
                         <th>Risk</th>
+                        <th>Sector</th>
                         <th>Catalyst</th>
                         <th>Headline</th>
                     </tr>
                 </thead>
-                <tbody>
-                    {html_rows}
-                </tbody>
+                <tbody>{html_rows}</tbody>
             </table>
         </div>
     </section>
@@ -765,16 +786,19 @@ def get_times():
 
 
 def get_market_status(now_ny):
-    weekday = now_ny.weekday()
     minutes = now_ny.hour * 60 + now_ny.minute
+    weekday = now_ny.weekday()
 
     if weekday >= 5:
         return "CLOSED", "status-gray"
-    if 4 * 60 <= minutes < 9 * 60 + 30:
+
+    if minutes < 4 * 60:
+        return "CLOSED", "status-gray"
+    if minutes < 9 * 60 + 30:
         return "PRE-MARKET", "status-blue"
-    if 9 * 60 + 30 <= minutes < 16 * 60:
+    if minutes < 16 * 60:
         return "OPEN", "status-green"
-    if 16 * 60 <= minutes < 20 * 60:
+    if minutes < 20 * 60:
         return "AFTER-HOURS", "status-yellow"
     return "CLOSED", "status-gray"
 
@@ -785,11 +809,18 @@ def get_market_status(now_ny):
 
 def build_dashboard(potential, active, extended, highrisk, raw, active_watchlist, regime):
     now_utc, now_ny = get_times()
-    market_status, status_class = get_market_status(now_ny)
+    status, status_class = get_market_status(now_ny)
 
     regime_html = build_regime_html(regime)
-    sector_snapshot = build_sector_snapshot(raw, active_watchlist)
     kpi_html = build_kpi_row(potential, active, extended, highrisk, raw, active_watchlist)
+
+    focus_rows = []
+    focus_rows.extend(potential[:10])
+    focus_rows.extend(active[:10])
+    focus_rows.extend(extended[:10])
+    focus_rows.extend(highrisk[:10])
+
+    sector_snapshot = build_sector_snapshot(raw, focus_rows, regime)
 
     potential_section = build_section(
         "Primary Focus — Potential Movers",
@@ -823,13 +854,7 @@ def build_dashboard(potential, active, extended, highrisk, raw, active_watchlist
         max_cards=10,
     )
 
-    desk_rows = []
-    desk_rows.extend(potential[:10])
-    desk_rows.extend(active[:10])
-    desk_rows.extend(extended[:10])
-    desk_rows.extend(highrisk[:10])
-
-    desk_table = build_desk_table(desk_rows)
+    desk_table = build_desk_table(focus_rows)
 
     page = Template("""<!DOCTYPE html>
 <html lang="en">
@@ -1253,9 +1278,9 @@ body {
 }
 
 .catalyst-neutral {
-    border-color: rgba(59, 130, 246, 0.25);
-    background: rgba(59, 130, 246, 0.06);
-    color: #93c5fd;
+    border-color: rgba(148, 163, 184, 0.18);
+    background: rgba(148, 163, 184, 0.06);
+    color: #cbd5e1;
 }
 
 .catalyst-none {
@@ -1317,16 +1342,17 @@ body {
     border-color: rgba(59, 130, 246, 0.20);
 }
 
+.status-positive,
 .tag-positive {
-    background: rgba(16, 185, 129, 0.09);
+    background: rgba(16, 185, 129, 0.10);
     color: #86efac;
-    border-color: rgba(16, 185, 129, 0.22);
+    border-color: rgba(16, 185, 129, 0.24);
 }
 
 .tag-caution {
     background: rgba(245, 158, 11, 0.10);
     color: #fbbf24;
-    border-color: rgba(245, 158, 11, 0.22);
+    border-color: rgba(245, 158, 11, 0.24);
 }
 
 .tag-squeeze {
@@ -1335,6 +1361,7 @@ body {
     border-color: rgba(168, 85, 247, 0.25);
 }
 
+.status-risk,
 .tag-risk {
     background: rgba(239, 68, 68, 0.10);
     color: #fca5a5;
@@ -1500,8 +1527,8 @@ td small {
             <p>Technical Potential Movers + Catalyst Confirmation + Sector Context</p>
         </div>
         <div class="header-meta">
-            <span class="scan-pill">Last Scan: $scan_time</span>
-            <span class="status-pill $status_class">Market: $market_status</span>
+            <span class="scan-pill">Last Scan: $ny_time ET</span>
+            <span class="status-pill $status_class">Market: $status</span>
         </div>
     </div>
 </header>
@@ -1526,7 +1553,7 @@ td small {
     <div id="desk">$desk_table</div>
 
     <div class="footer-note">
-        Data note: This page updates only when GitHub Actions runs. Browser refresh reloads the latest saved dashboard; it does not rescan the market. Alpaca IEX volume is non-consolidated. Confirm liquidity, spread, VWAP, and news manually before trade execution.
+        Static dashboard. Data updates only when GitHub Actions runs and rebuilds dashboard.html. Alpaca IEX volume is non-consolidated; confirm spread, liquidity, VWAP, and news manually before execution.
     </div>
 </main>
 
@@ -1534,9 +1561,10 @@ td small {
 </html>""")
 
     return page.safe_substitute(
-        market_status=market_status,
+        status=status,
         status_class=status_class,
-        scan_time=now_ny.strftime("%Y-%m-%d %H:%M ET"),
+        ny_time=now_ny.strftime("%Y-%m-%d %H:%M"),
+        utc_time=now_utc.strftime("%Y-%m-%d %H:%M"),
         regime_html=regime_html,
         sector_snapshot=sector_snapshot,
         kpi_html=kpi_html,
@@ -1567,7 +1595,7 @@ def main():
     if not active_watchlist:
         active_watchlist = load_json_records("elite_watchlist.json")
 
-    # Fallback if bucket files do not exist yet
+    # Fallback if bucket files do not exist yet.
     if not potential and not active and active_watchlist:
         potential = [
             s for s in active_watchlist
