@@ -1,437 +1,636 @@
+"""
+ELITE SCANNER DASHBOARD — PRO DESK VERSION
+==========================================
+Reads scanner outputs and builds dashboard.html.
 
-'''
-ELITE SCANNER DASHBOARD — PRO DESK VIEW
-=======================================
-Professional hedge-fund-style dashboard for the Elite Scanner.
-
-Reads scanner output:
-  - market_regime.json
+Inputs:
   - potential_movers.csv
   - active_momentum.csv
   - extended_movers.csv
   - high_risk_movers.csv
+  - elite_watchlist.csv
   - elite_watchlist_raw.csv
+  - elite_watchlist.json
+  - market_regime.json
 
-Writes:
-  - dashboard.html
-'''
+Features:
+  - Professional bucketed display
+  - Catalyst strip on every card
+  - News headline/risk flags
+  - Desk View table
+  - Market regime banner
+"""
 
-import csv
 import json
 import os
-from datetime import datetime
-from zoneinfo import ZoneInfo
+import html
+from datetime import datetime, timezone
+from string import Template
+
+import pandas as pd
+
+try:
+    from zoneinfo import ZoneInfo
+except Exception:
+    ZoneInfo = None
 
 
 # ==============================================================
-# BASIC HELPERS
+# SECTOR MAPPING
 # ==============================================================
 
 SECTORS = {
-    "AMD": "Semis", "INTC": "Semis", "QCOM": "Semis", "NVDA": "Semis",
-    "HIMX": "Semis", "MKSI": "Semis", "FORM": "Semis", "PENG": "Semis",
-    "RKLB": "Space", "ASTS": "Space", "LUNR": "Space",
-    "CORZ": "Crypto", "IREN": "Crypto", "MARA": "Crypto", "RIOT": "Crypto",
-    "COIN": "Crypto", "MSTR": "Crypto",
-    "CYTK": "Biotech", "MIRM": "Biotech", "NVAX": "Biotech", "MRNA": "Biotech",
-    "GRPN": "Retail", "ARLO": "Consumer", "MNST": "Consumer", "GEN": "Consumer",
-    "FTNT": "Cyber", "PANW": "Cyber", "CRWD": "Cyber", "NET": "Cyber",
-    "DOCN": "Software", "DBX": "Software", "FROG": "Software",
-    "CPAY": "Fintech", "HOOD": "Fintech", "SOFI": "Fintech", "AFRM": "Fintech",
+    "RIOT": "Crypto", "MARA": "Crypto", "CLSK": "Crypto", "HUT": "Crypto",
+    "BITF": "Crypto", "CIFR": "Crypto", "CORZ": "Crypto", "BTBT": "Crypto",
+    "IREN": "Crypto", "MSTR": "Crypto", "COIN": "Crypto",
+
+    "SOUN": "AI", "AI": "AI", "BBAI": "AI", "IONQ": "Quantum",
+    "RGTI": "Quantum", "ARQQ": "Quantum", "PLTR": "AI", "NVDA": "AI",
+    "SMCI": "AI",
+
+    "AMD": "Semis", "INTC": "Semis", "WOLF": "Semis", "LSCC": "Semis",
+    "MU": "Semis", "QCOM": "Semis", "ARM": "Semis", "SMTC": "Semis",
+    "MRVL": "Semis", "AVGO": "Semis", "TSM": "Semis", "GFS": "Semis",
+    "AMKR": "Semis",
+
+    "TSLA": "EV", "RIVN": "EV", "NIO": "EV", "XPEV": "EV", "LCID": "EV",
+    "LI": "EV", "QS": "EV", "CHPT": "EV", "PLUG": "EV", "FCEL": "EV",
+    "BE": "EV", "BLNK": "EV", "EVGO": "EV", "RUN": "Solar",
+
+    "RKLB": "Space", "ASTS": "Space", "LUNR": "Space", "JOBY": "Mobility",
+    "ACHR": "Mobility", "KTOS": "Defense", "LMT": "Defense", "RTX": "Defense",
+
+    "HIMS": "Biotech", "CRSP": "Biotech", "BNGO": "Biotech", "VKTX": "Biotech",
+    "MDGL": "Biotech", "VRDN": "Biotech", "CYTK": "Biotech", "IOVA": "Biotech",
+    "SAVA": "Biotech", "MRNA": "Biotech", "NVAX": "Biotech", "QURE": "Biotech",
+
+    "GME": "Retail", "AMC": "Meme", "BBBY": "Meme", "BB": "Meme", "NOK": "Meme",
+    "HOOD": "Fintech", "SOFI": "Fintech", "AFRM": "Fintech", "UPST": "Fintech",
+    "NU": "Fintech",
+
+    "RDDT": "Social", "PINS": "Social", "SNAP": "Social", "RBLX": "Gaming",
+    "ROKU": "Streaming", "DKNG": "Gaming", "NFLX": "Streaming",
+
+    "NET": "Cyber", "CRWD": "Cyber", "ZS": "Cyber", "PANW": "Cyber", "OKTA": "Cyber",
+
+    "DVN": "Energy", "CTRA": "Energy", "XOM": "Energy", "CVX": "Energy",
+    "TECK": "Materials",
+
+    "CCL": "Travel", "ABNB": "Travel", "CART": "Retail", "CAVA": "Consumer",
+    "CELH": "Consumer", "SHOP": "E-Commerce",
+
+    "AAPL": "Tech", "MSFT": "Tech", "GOOGL": "Tech", "META": "Tech", "AMZN": "Tech",
 }
 
 
-def sector(symbol):
+def get_sector(symbol):
     return SECTORS.get(str(symbol).upper(), "Other")
 
 
-def fnum(value, default=0.0):
+# ==============================================================
+# SAFE HELPERS
+# ==============================================================
+
+def safe_str(value, default=""):
     if value is None:
         return default
-    if isinstance(value, (int, float)):
-        return float(value)
-    value = str(value).strip()
-    if value in ("", "—", "None", "nan", "NaN"):
+    if isinstance(value, float) and pd.isna(value):
         return default
+    text = str(value)
+    if text.lower() in ["nan", "none"]:
+        return default
+    return text
+
+
+def safe_float(value, default=0.0):
     try:
+        if value is None:
+            return default
+        if isinstance(value, str) and value.strip() in ["", "—", "nan", "None"]:
+            return default
+        if pd.isna(value):
+            return default
         return float(value)
     except Exception:
         return default
 
 
-def fbool(value):
+def safe_int(value, default=0):
+    try:
+        return int(float(value))
+    except Exception:
+        return default
+
+
+def esc(value):
+    return html.escape(safe_str(value))
+
+
+def truthy(value):
     if isinstance(value, bool):
         return value
-    return str(value).strip().lower() in ("true", "1", "yes", "y")
+    text = safe_str(value).lower()
+    return text in ["true", "1", "yes", "y"]
 
 
-def money_m(value):
-    value = fnum(value)
-    if value >= 1000:
-        return f"${value/1000:.1f}B"
-    if value >= 100:
-        return f"${value:.0f}M"
-    if value > 0:
-        return f"${value:.1f}M"
-    return "—"
-
-
-def pct(value, digits=2):
-    value = fnum(value)
-    sign = "+" if value >= 0 else ""
-    return f"{sign}{value:.{digits}f}%"
-
-
-def clean_row(row):
-    out = dict(row)
-    numeric = [
-        "price", "live_price", "change_pct", "score", "base_score", "catalyst",
-        "momentum", "execution", "squeeze", "strength", "technical", "participation",
-        "social", "short_pct", "float_M", "days_to_cover", "atr_pct", "dollar_vol_M",
-        "market_cap_B", "intraday_score", "vwap", "vwap_dist_pct", "hod", "lod",
-        "from_hod_pct", "range_position", "recent_range_pct", "intraday_volume",
-        "bar_count",
-    ]
-    for key in numeric:
-        if key in out:
-            out[key] = fnum(out.get(key))
-    for key in ["above_vwap", "near_hod", "is_earnings_reaction"]:
-        if key in out:
-            out[key] = fbool(out.get(key))
-    out["symbol"] = str(out.get("symbol", "")).upper().strip()
-    out["tier"] = str(out.get("tier", "—")).strip()
-    out["setup_bucket"] = str(out.get("setup_bucket", "MONITOR")).strip()
-    out["risk_category"] = str(out.get("risk_category", "NORMAL")).strip()
-    out["tags"] = str(out.get("tags", "") or "")
-    return out
-
-
-def read_csv(path):
+def load_csv_records(path, limit=None):
     if not os.path.exists(path):
         return []
-    with open(path, "r", encoding="utf-8", newline="") as f:
-        return [clean_row(r) for r in csv.DictReader(f) if r.get("symbol")]
+
+    try:
+        df = pd.read_csv(path)
+        df = df.fillna("")
+        if limit:
+            df = df.head(limit)
+        return df.to_dict("records")
+    except Exception as e:
+        print(f"  ⚠ Failed to load {path}: {e}")
+        return []
 
 
-def read_json(path):
+def load_json_records(path):
     if not os.path.exists(path):
-        return {}
+        return []
+
     try:
         with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, list):
+            return data
+        return []
+    except Exception as e:
+        print(f"  ⚠ Failed to load {path}: {e}")
+        return []
+
+
+def load_regime():
+    if not os.path.exists("market_regime.json"):
+        return None
+
+    try:
+        with open("market_regime.json", "r", encoding="utf-8") as f:
             return json.load(f)
     except Exception:
-        return {}
+        return None
 
 
-def load_data():
+# ==============================================================
+# DISPLAY LOGIC
+# ==============================================================
+
+def get_tier_color(tier):
+    tier = safe_str(tier)
     return {
-        "potential": read_csv("potential_movers.csv"),
-        "active": read_csv("active_momentum.csv"),
-        "extended": read_csv("extended_movers.csv"),
-        "highrisk": read_csv("high_risk_movers.csv"),
-        "raw": read_csv("elite_watchlist_raw.csv"),
-        "regime": read_json("market_regime.json"),
+        "S": "#fbbf24",
+        "1": "#10b981",
+        "2": "#38bdf8",
+        "3": "#94a3b8",
+    }.get(tier, "#64748b")
+
+
+def get_bucket_meta(bucket):
+    bucket = safe_str(bucket)
+
+    mapping = {
+        "POTENTIAL_MOVER": {
+            "label": "Potential Mover",
+            "class": "bucket-potential",
+            "accent": "#38bdf8",
+            "interpretation": "Clean continuation candidate; confirm VWAP hold and breakout structure.",
+        },
+        "ACTIVE_MOMENTUM": {
+            "label": "Active Momentum",
+            "class": "bucket-active",
+            "accent": "#22c55e",
+            "interpretation": "Already moving; wait for pullback or tight consolidation.",
+        },
+        "EXTENDED_CHASE_RISK": {
+            "label": "Extended / Chase Risk",
+            "class": "bucket-extended",
+            "accent": "#f59e0b",
+            "interpretation": "Extended move; avoid chasing unless structure becomes exceptional.",
+        },
+        "HIGH_RISK_EXTREME": {
+            "label": "High Risk / Extreme",
+            "class": "bucket-risk",
+            "accent": "#ef4444",
+            "interpretation": "High-risk mover; monitor only unless deliberately trading momentum.",
+        },
+        "MONITOR": {
+            "label": "Monitor",
+            "class": "bucket-monitor",
+            "accent": "#94a3b8",
+            "interpretation": "Watchlist candidate; not primary until structure improves.",
+        },
+    }
+
+    return mapping.get(bucket, mapping["MONITOR"])
+
+
+def get_catalyst_meta(stock):
+    catalyst_label = safe_str(stock.get("catalyst_label"), "No confirmed fresh news")
+    catalyst_sentiment = safe_str(stock.get("catalyst_sentiment"), "NONE").upper()
+    catalyst_headline = safe_str(stock.get("catalyst_headline"), "")
+    catalyst_source = safe_str(stock.get("catalyst_source"), "")
+    catalyst_time = safe_str(stock.get("catalyst_time"), "")
+    risk_flags = safe_str(stock.get("risk_flags"), "")
+
+    if catalyst_sentiment == "POSITIVE":
+        catalyst_class = "catalyst-positive"
+        icon = "🟢"
+    elif catalyst_sentiment == "NEGATIVE":
+        catalyst_class = "catalyst-negative"
+        icon = "🔴"
+    elif catalyst_sentiment == "NEUTRAL":
+        catalyst_class = "catalyst-neutral"
+        icon = "📰"
+    else:
+        catalyst_class = "catalyst-none"
+        icon = "⚪"
+        catalyst_label = catalyst_label or "No confirmed fresh news"
+
+    return {
+        "label": catalyst_label,
+        "sentiment": catalyst_sentiment,
+        "headline": catalyst_headline,
+        "source": catalyst_source,
+        "time": catalyst_time,
+        "risk_flags": risk_flags,
+        "class": catalyst_class,
+        "icon": icon,
     }
 
 
-def score_color(score):
-    score = fnum(score)
-    if score >= 80:
-        return "#fbbf24"
-    if score >= 65:
-        return "#22c55e"
-    if score >= 50:
-        return "#38bdf8"
-    if score >= 35:
-        return "#94a3b8"
-    return "#64748b"
+def format_money_m(value):
+    val = safe_float(value, 0)
+    if val >= 1000:
+        return f"${val / 1000:.1f}B"
+    if val > 0:
+        return f"${val:.0f}M"
+    return "—"
 
 
-def bucket_info(bucket):
-    return {
-        "POTENTIAL_MOVER": ("Primary Focus — Potential Movers", "Clean, earlier continuation setups. Review these first.", "#38bdf8", "potential"),
-        "ACTIVE_MOMENTUM": ("Active Momentum", "Already moving. Wait for controlled pullback or tight continuation.", "#22c55e", "active"),
-        "EXTENDED_CHASE_RISK": ("Extended / Chase Risk", "Strong movers but stretched. Avoid chasing without a reset.", "#f59e0b", "extended"),
-        "HIGH_RISK_EXTREME": ("High Risk / Extreme", "Parabolic or high-risk names. Watch-only unless using special rules.", "#ef4444", "highrisk"),
-    }.get(bucket, (bucket.replace("_", " ").title(), "", "#94a3b8", "monitor"))
-
-
-def tag_list(stock, limit=5):
-    tags = stock.get("tags", "")
+def build_tags(stock, max_tags=5):
+    tags = safe_str(stock.get("tags"), "")
     if not tags:
-        return []
-    return [t.strip() for t in tags.split(" · ") if t.strip()][:limit]
+        return ""
 
+    parts = [p.strip() for p in tags.split(" · ") if p.strip()]
+    html_parts = []
 
-def risk_badge(stock):
-    risk = stock.get("risk_category", "NORMAL")
-    if risk == "EXTENDED":
-        return '<span class="badge orange">EXTENDED</span>'
-    if risk in ("HIGH_RISK", "EXTREME_MOVE"):
-        return '<span class="badge red">HIGH RISK</span>'
-    return '<span class="badge muted">NORMAL</span>'
+    for tag in parts[:max_tags]:
+        html_parts.append(f'<span class="tag">{esc(tag)}</span>')
 
+    return "".join(html_parts)
 
-def vwap_badge(stock):
-    if "above_vwap" not in stock:
-        return '<span class="badge muted">VWAP —</span>'
-    if stock.get("above_vwap"):
-        dist = fnum(stock.get("vwap_dist_pct"))
-        if dist > 8:
-            return f'<span class="badge orange">VWAP +{dist:.1f}%</span>'
-        return '<span class="badge green">Above VWAP</span>'
-    return '<span class="badge red">Below VWAP</span>'
-
-
-def interpretation(stock):
-    bucket = stock.get("setup_bucket")
-    tags = stock.get("tags", "")
-    if bucket == "POTENTIAL_MOVER":
-        if "Tight consolidation" in tags:
-            return "Clean continuation watch: tight consolidation near highs."
-        if "Consolidating" in tags:
-            return "Potential continuation candidate; monitor breakout from consolidation."
-        return "Potential mover with supportive intraday structure."
-    if bucket == "ACTIVE_MOMENTUM":
-        return "Momentum is active; avoid chasing. Prefer pullback or tight continuation."
-    if bucket == "EXTENDED_CHASE_RISK":
-        return "Already extended. Watch only unless it resets near VWAP or forms a new base."
-    if bucket == "HIGH_RISK_EXTREME":
-        return "Extreme mover. Do not treat as a primary entry setup."
-    return "Monitor for structure improvement."
-
-
-# ==============================================================
-# HTML COMPONENTS
-# ==============================================================
 
 def build_card(stock):
-    symbol = stock.get("symbol", "—")
-    score = fnum(stock.get("score"))
-    price = fnum(stock.get("live_price")) or fnum(stock.get("price"))
-    change = fnum(stock.get("change_pct"))
-    bucket = stock.get("setup_bucket", "MONITOR")
-    _, _, accent, css_class = bucket_info(bucket)
-    change_class = "positive" if change >= 0 else "negative"
+    symbol = safe_str(stock.get("symbol"), "—").upper()
+    tier = safe_str(stock.get("tier"), "—")
+    score = safe_int(stock.get("score"), 0)
+    price = safe_float(stock.get("price"), 0)
+    change_pct = safe_float(stock.get("change_pct"), 0)
+    bucket = safe_str(stock.get("setup_bucket"), "MONITOR")
+    risk = safe_str(stock.get("risk_category"), "NORMAL")
 
-    near_hod = '<span class="badge green">Near HOD</span>' if stock.get("near_hod") else '<span class="badge muted">HOD —</span>'
-    base_badge = ""
-    if "Tight consolidation" in stock.get("tags", ""):
-        base_badge = '<span class="badge blue">Tight Base</span>'
-    elif "Consolidating" in stock.get("tags", ""):
-        base_badge = '<span class="badge blue">Consolidating</span>'
+    bucket_meta = get_bucket_meta(bucket)
+    catalyst = get_catalyst_meta(stock)
 
-    tags_html = "".join(f'<span class="tag">{t}</span>' for t in tag_list(stock, 5))
+    sector = get_sector(symbol)
+    tier_color = get_tier_color(tier)
+    change_class = "positive" if change_pct >= 0 else "negative"
+    change_sign = "+" if change_pct >= 0 else ""
 
-    short_metric = ""
-    if fnum(stock.get("short_pct")) >= 15:
-        short_metric = f'''
-        <div class="metric">
-            <span>Short</span>
-            <strong class="negative">{fnum(stock.get("short_pct")):.0f}%</strong>
+    dollar_vol = format_money_m(stock.get("dollar_vol_M"))
+    atr = safe_float(stock.get("atr_pct"), 0)
+    vwap_dist = safe_float(stock.get("vwap_dist_pct"), 0)
+    short_pct = safe_float(stock.get("short_pct"), 0)
+    float_m = safe_float(stock.get("float_M"), 0)
+    days_to_cover = safe_float(stock.get("days_to_cover"), 0)
+
+    above_vwap = truthy(stock.get("above_vwap"))
+    near_hod = truthy(stock.get("near_hod"))
+
+    vwap_text = "Above VWAP" if above_vwap else "Below/Unknown"
+    hod_text = "Near HOD" if near_hod else "Not HOD"
+
+    tags_html = build_tags(stock)
+
+    headline = catalyst["headline"]
+    headline_html = ""
+    if headline:
+        headline_html = f'<div class="catalyst-headline">{esc(headline[:150])}</div>'
+
+    risk_flags_html = ""
+    if catalyst["risk_flags"]:
+        risk_flags_html = f'<div class="risk-flags">Risk flags: {esc(catalyst["risk_flags"])}</div>'
+
+    catalyst_source_line = ""
+    if catalyst["source"] or catalyst["time"]:
+        catalyst_source_line = (
+            f'<div class="catalyst-source">'
+            f'{esc(catalyst["source"])}'
+            f'{(" · " + esc(catalyst["time"][:19])) if catalyst["time"] else ""}'
+            f'</div>'
+        )
+
+    squeeze_html = ""
+    if short_pct >= 15 or float_m > 0 or days_to_cover >= 3:
+        squeeze_html = f"""
+        <div class="mini-panel">
+            <div class="mini-row"><span>Short %</span><strong>{short_pct:.0f}%</strong></div>
+            <div class="mini-row"><span>Float</span><strong>{float_m:.1f}M</strong></div>
+            <div class="mini-row"><span>DTC</span><strong>{days_to_cover:.1f}d</strong></div>
         </div>
-        '''
+        """
 
-    return f'''
-    <article class="card {css_class}" style="--accent:{accent};">
+    return f"""
+    <div class="stock-card {bucket_meta['class']}" style="--accent:{bucket_meta['accent']};">
         <div class="card-top">
             <div>
-                <div class="sym-row">
-                    <span class="symbol">{symbol}</span>
-                    <span class="sector">{sector(symbol)}</span>
-                    <span class="tier" style="color:{score_color(score)};">Tier {stock.get("tier", "—")}</span>
+                <div class="symbol-row">
+                    <span class="symbol">{esc(symbol)}</span>
+                    <span class="sector">{esc(sector)}</span>
+                    <span class="tier" style="color:{tier_color};border-color:{tier_color};">Tier {esc(tier)}</span>
                 </div>
-                <div class="bucket">{bucket.replace("_", " ")}</div>
+                <div class="bucket-label">{esc(bucket_meta['label'])}</div>
             </div>
-            <div class="score" style="color:{score_color(score)};">{score:.0f}<small>/100</small></div>
+            <div class="score-box" style="color:{tier_color};">{score}</div>
         </div>
 
         <div class="price-row">
+            <div class="price">${price:.2f}</div>
+            <div class="change {change_class}">{change_sign}{change_pct:.2f}%</div>
+        </div>
+
+        <div class="catalyst-strip {catalyst['class']}">
+            <div class="catalyst-label">{catalyst['icon']} Catalyst: {esc(catalyst['label'])}</div>
+            {headline_html}
+            {catalyst_source_line}
+            {risk_flags_html}
+        </div>
+
+        <div class="metrics-grid">
+            <div><span>Liquidity</span><strong>{dollar_vol}</strong></div>
+            <div><span>ATR</span><strong>{atr:.1f}%</strong></div>
+            <div><span>VWAP Dist</span><strong>{vwap_dist:+.1f}%</strong></div>
+            <div><span>HOD</span><strong>{esc(hod_text)}</strong></div>
+        </div>
+
+        <div class="status-row">
+            <span class="status-chip">{esc(vwap_text)}</span>
+            <span class="status-chip">{esc(hod_text)}</span>
+            <span class="status-chip risk-chip">{esc(risk)}</span>
+        </div>
+
+        <div class="interpretation">{esc(bucket_meta['interpretation'])}</div>
+
+        <div class="tags-row">{tags_html}</div>
+
+        {squeeze_html}
+
+        <div class="card-actions">
+            <a href="https://www.tradingview.com/chart/?symbol={esc(symbol)}" target="_blank">Chart</a>
+            <a href="https://finance.yahoo.com/quote/{esc(symbol)}" target="_blank">Yahoo</a>
+            <a href="https://stocktwits.com/symbol/{esc(symbol)}" target="_blank">Twits</a>
+        </div>
+    </div>
+    """
+
+
+def build_section(title, subtitle, stocks, class_name, max_cards=10):
+    count = len(stocks)
+    cards = "".join(build_card(s) for s in stocks[:max_cards])
+
+    if not cards:
+        cards = f"""
+        <div class="empty-section">
+            <strong>No names in this bucket.</strong>
+            <span>{esc(subtitle)}</span>
+        </div>
+        """
+
+    return f"""
+    <section class="desk-section {class_name}">
+        <div class="section-header">
             <div>
-                <div class="price">${price:.2f}</div>
-                <div class="source">{stock.get("data_source", "Yahoo / scanner")}</div>
+                <h2>{esc(title)}</h2>
+                <p>{esc(subtitle)}</p>
             </div>
-            <div class="change {change_class}">{pct(change)}</div>
+            <span class="section-count">{count}</span>
         </div>
-
-        <div class="badge-row">
-            {risk_badge(stock)}
-            {vwap_badge(stock)}
-            {near_hod}
-            {base_badge}
+        <div class="cards-grid">
+            {cards}
         </div>
-
-        <div class="metrics">
-            <div class="metric"><span>Liquidity</span><strong>{money_m(stock.get("dollar_vol_M"))}</strong></div>
-            <div class="metric"><span>ATR</span><strong>{fnum(stock.get("atr_pct")):.1f}%</strong></div>
-            <div class="metric"><span>VWAP Dist</span><strong>{fnum(stock.get("vwap_dist_pct")):.1f}%</strong></div>
-            <div class="metric"><span>From HOD</span><strong>{fnum(stock.get("from_hod_pct")):.1f}%</strong></div>
-            {short_metric}
-        </div>
-
-        <div class="note">{interpretation(stock)}</div>
-
-        <div class="tags">{tags_html}</div>
-
-        <div class="actions">
-            <a href="https://www.tradingview.com/chart/?symbol={symbol}" target="_blank">Chart</a>
-            <a href="https://finance.yahoo.com/quote/{symbol}" target="_blank">Yahoo</a>
-            <a href="https://stocktwits.com/symbol/{symbol}" target="_blank">Twits</a>
-        </div>
-    </article>
-    '''
-
-
-def build_section(bucket, stocks, limit):
-    title, subtitle, accent, _ = bucket_info(bucket)
-    if stocks:
-        cards = '<div class="grid">' + "\n".join(build_card(s) for s in stocks[:limit]) + "</div>"
-    else:
-        cards = '<div class="empty">No names in this bucket.</div>'
-
-    return f'''
-    <section id="{bucket.lower()}" class="section">
-        <div class="section-head" style="--accent:{accent};">
-            <div>
-                <h2>{title}</h2>
-                <p>{subtitle}</p>
-            </div>
-            <div class="count">{len(stocks)}</div>
-        </div>
-        {cards}
     </section>
-    '''
+    """
 
 
-def build_table(stocks):
-    if not stocks:
+def build_regime_html(regime):
+    if not regime:
+        return """
+        <div class="regime-banner neutral">
+            <div>
+                <strong>Market Regime: Unknown</strong>
+                <span>No market_regime.json found.</span>
+            </div>
+        </div>
+        """
+
+    label = safe_str(regime.get("label"), "Unknown")
+    bias = safe_str(regime.get("bias"), "NEUTRAL")
+    spy = safe_float(regime.get("spy_change"), 0)
+    qqq = safe_float(regime.get("qqq_change"), 0)
+    iwm = safe_float(regime.get("iwm_change"), 0)
+    vix = safe_float(regime.get("vix_level"), 0)
+
+    bias_class = "bullish" if bias == "LONG_FAVORED" else "bearish" if bias == "SHORT_FAVORED" else "caution" if bias == "CAUTION" else "neutral"
+
+    return f"""
+    <div class="regime-banner {bias_class}">
+        <div>
+            <strong>{esc(label)}</strong>
+            <span>Bias: {esc(bias.replace("_", " "))} · Data: Yahoo + Alpaca IEX + Alpaca News</span>
+        </div>
+        <div class="regime-metrics">
+            <span>SPY <b class="{'positive' if spy >= 0 else 'negative'}">{spy:+.2f}%</b></span>
+            <span>QQQ <b class="{'positive' if qqq >= 0 else 'negative'}">{qqq:+.2f}%</b></span>
+            <span>IWM <b class="{'positive' if iwm >= 0 else 'negative'}">{iwm:+.2f}%</b></span>
+            <span>VIX <b>{vix:.1f}</b></span>
+        </div>
+    </div>
+    """
+
+
+def build_kpi_row(potential, active, extended, highrisk, raw, active_watchlist):
+    total_focus = len(active_watchlist)
+    avg_score = 0
+
+    if active_watchlist:
+        avg_score = sum(safe_float(s.get("score"), 0) for s in active_watchlist) / len(active_watchlist)
+
+    return f"""
+    <div class="kpi-grid">
+        <div class="kpi-card focus"><span>{total_focus}</span><label>Active Watchlist</label></div>
+        <div class="kpi-card potential"><span>{len(potential)}</span><label>Potential</label></div>
+        <div class="kpi-card active"><span>{len(active)}</span><label>Active Momentum</label></div>
+        <div class="kpi-card extended"><span>{len(extended)}</span><label>Extended</label></div>
+        <div class="kpi-card risk"><span>{len(highrisk)}</span><label>High Risk</label></div>
+        <div class="kpi-card"><span>{len(raw)}</span><label>Raw Scored</label></div>
+        <div class="kpi-card"><span>{avg_score:.0f}</span><label>Avg Score</label></div>
+    </div>
+    """
+
+
+def build_desk_table(rows):
+    if not rows:
         return ""
-    rows = ""
-    for s in stocks[:50]:
-        chg = fnum(s.get("change_pct"))
-        chg_class = "positive" if chg >= 0 else "negative"
-        vwap = "Above" if s.get("above_vwap") else "Below" if "above_vwap" in s else "—"
-        rows += f'''
+
+    html_rows = ""
+
+    for stock in rows[:40]:
+        symbol = safe_str(stock.get("symbol"), "—").upper()
+        score = safe_int(stock.get("score"), 0)
+        tier = safe_str(stock.get("tier"), "—")
+        bucket = get_bucket_meta(safe_str(stock.get("setup_bucket"), "MONITOR"))["label"]
+        price = safe_float(stock.get("price"), 0)
+        chg = safe_float(stock.get("change_pct"), 0)
+        liq = format_money_m(stock.get("dollar_vol_M"))
+        atr = safe_float(stock.get("atr_pct"), 0)
+        vwap = "Above" if truthy(stock.get("above_vwap")) else "Below/NA"
+        risk = safe_str(stock.get("risk_category"), "NORMAL")
+        catalyst = get_catalyst_meta(stock)
+        headline = catalyst["headline"][:85] if catalyst["headline"] else "—"
+
+        html_rows += f"""
         <tr>
-            <td><strong>{s.get("symbol", "—")}</strong></td>
-            <td>{fnum(s.get("score")):.0f}</td>
-            <td>{s.get("setup_bucket", "—").replace("_", " ")}</td>
-            <td>${fnum(s.get("price")):.2f}</td>
-            <td class="{chg_class}">{pct(chg)}</td>
-            <td>{money_m(s.get("dollar_vol_M"))}</td>
-            <td>{fnum(s.get("atr_pct")):.1f}%</td>
-            <td>{vwap}</td>
-            <td>{s.get("risk_category", "NORMAL")}</td>
-            <td>{", ".join(tag_list(s, 2))}</td>
+            <td><strong>{esc(symbol)}</strong></td>
+            <td>{score}</td>
+            <td>{esc(tier)}</td>
+            <td>{esc(bucket)}</td>
+            <td>${price:.2f}</td>
+            <td class="{'positive' if chg >= 0 else 'negative'}">{chg:+.2f}%</td>
+            <td>{liq}</td>
+            <td>{atr:.1f}%</td>
+            <td>{esc(vwap)}</td>
+            <td>{esc(risk)}</td>
+            <td>{esc(catalyst['label'])}</td>
+            <td>{esc(headline)}</td>
         </tr>
-        '''
-    return f'''
-    <section id="desk" class="section">
-        <div class="section-head">
+        """
+
+    return f"""
+    <section class="desk-table-section">
+        <div class="section-header">
             <div>
                 <h2>Desk View</h2>
-                <p>Compact comparison table for fast manual review.</p>
+                <p>Compact comparison table for the full active review list.</p>
             </div>
         </div>
         <div class="table-wrap">
             <table>
                 <thead>
                     <tr>
-                        <th>Ticker</th><th>Score</th><th>Bucket</th><th>Price</th>
-                        <th>% Chg</th><th>Liq</th><th>ATR</th><th>VWAP</th><th>Risk</th><th>Notes</th>
+                        <th>Ticker</th>
+                        <th>Score</th>
+                        <th>Tier</th>
+                        <th>Bucket</th>
+                        <th>Price</th>
+                        <th>% Chg</th>
+                        <th>Liq</th>
+                        <th>ATR</th>
+                        <th>VWAP</th>
+                        <th>Risk</th>
+                        <th>Catalyst</th>
+                        <th>Headline</th>
                     </tr>
                 </thead>
-                <tbody>{rows}</tbody>
+                <tbody>
+                    {html_rows}
+                </tbody>
             </table>
         </div>
     </section>
-    '''
+    """
 
 
-def market_status():
-    ny = datetime.now(ZoneInfo("America/New_York"))
-    mins = ny.hour * 60 + ny.minute
-    if mins < 4 * 60:
-        return "Closed", "#64748b", ny
-    if mins < 9 * 60 + 30:
-        return "Pre-Market", "#38bdf8", ny
-    if mins < 10 * 60 + 30:
-        return "Opening Drive", "#22c55e", ny
-    if mins < 11 * 60 + 30:
-        return "Trend Window", "#22c55e", ny
-    if mins < 13 * 60 + 30:
-        return "Midday", "#f59e0b", ny
-    if mins < 16 * 60:
-        return "Afternoon", "#22c55e", ny
-    if mins < 20 * 60:
-        return "After Hours", "#8b5cf6", ny
-    return "Closed", "#64748b", ny
+def get_times():
+    now_utc = datetime.now(timezone.utc)
+
+    if ZoneInfo:
+        now_ny = now_utc.astimezone(ZoneInfo("America/New_York"))
+    else:
+        now_ny = datetime.now()
+
+    return now_utc, now_ny
 
 
-def regime_html(regime, enriched, raw_count):
-    label = regime.get("label", "Market regime unavailable") if regime else "Market regime unavailable"
-    bias = regime.get("bias", "NEUTRAL") if regime else "NEUTRAL"
-    spy = fnum(regime.get("spy_change", 0) if regime else 0)
-    qqq = fnum(regime.get("qqq_change", 0) if regime else 0)
-    iwm = fnum(regime.get("iwm_change", 0) if regime else 0)
-    vix = fnum(regime.get("vix_level", 0) if regime else 0)
+def get_market_status(now_ny):
+    minutes = now_ny.hour * 60 + now_ny.minute
 
-    accent = "#22c55e" if bias == "LONG_FAVORED" else "#ef4444" if bias == "SHORT_FAVORED" else "#f59e0b" if bias == "CAUTION" else "#94a3b8"
-
-    return f'''
-    <div class="regime" style="--accent:{accent};">
-        <div>
-            <div class="regime-title">{label}</div>
-            <div class="regime-sub">Bias: {bias.replace("_", " ")} · Data: Yahoo + Alpaca IEX · Price Filter: $5–$80</div>
-        </div>
-        <div class="tape">
-            <span>SPY <b class="{'positive' if spy >= 0 else 'negative'}">{pct(spy)}</b></span>
-            <span>QQQ <b class="{'positive' if qqq >= 0 else 'negative'}">{pct(qqq)}</b></span>
-            <span>IWM <b class="{'positive' if iwm >= 0 else 'negative'}">{pct(iwm)}</b></span>
-            <span>VIX <b>{vix:.1f}</b></span>
-            <span>IEX <b>{enriched}</b></span>
-            <span>Raw <b>{raw_count}</b></span>
-        </div>
-    </div>
-    '''
+    if minutes < 9 * 60 + 30:
+        return "Pre-Market", "status-blue"
+    if minutes < 11 * 60 + 30:
+        return "Prime Window", "status-green"
+    if minutes < 14 * 60 + 30:
+        return "Lunch Lull", "status-yellow"
+    if minutes < 16 * 60:
+        return "Afternoon", "status-green"
+    return "Closed", "status-gray"
 
 
-def build_dashboard(data):
-    potential = sorted(data["potential"], key=lambda x: fnum(x.get("score")), reverse=True)
-    active = sorted(data["active"], key=lambda x: fnum(x.get("score")), reverse=True)
-    extended = sorted(data["extended"], key=lambda x: fnum(x.get("score")), reverse=True)
-    highrisk = sorted(data["highrisk"], key=lambda x: fnum(x.get("score")), reverse=True)
-    raw = data["raw"]
-    regime = data["regime"]
+# ==============================================================
+# HTML BUILDER
+# ==============================================================
 
-    all_stocks = potential + active + extended + highrisk
-    enriched = len([s for s in all_stocks if s.get("data_source")])
-    avg_score = sum(fnum(s.get("score")) for s in all_stocks) / len(all_stocks) if all_stocks else 0
+def build_dashboard(potential, active, extended, highrisk, raw, active_watchlist, regime):
+    now_utc, now_ny = get_times()
+    status, status_class = get_market_status(now_ny)
 
-    status, status_color, ny = market_status()
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    regime_html = build_regime_html(regime)
+    kpi_html = build_kpi_row(potential, active, extended, highrisk, raw, active_watchlist)
 
-    kpis = [
-        ("Potential", len(potential), "#38bdf8"),
-        ("Active Mom.", len(active), "#22c55e"),
-        ("Extended", len(extended), "#f59e0b"),
-        ("High Risk", len(highrisk), "#ef4444"),
-        ("Raw Universe", len(raw), "#94a3b8"),
-        ("Avg Score", f"{avg_score:.0f}", "#f8fafc"),
-    ]
+    potential_section = build_section(
+        "Primary Focus — Potential Movers",
+        "Cleanest technical setups. Review this section first.",
+        potential,
+        "section-potential",
+        max_cards=10,
+    )
 
-    kpi_html = ""
-    for label, value, color in kpis:
-        kpi_html += f'<div class="kpi"><div style="color:{color};">{value}</div><span>{label}</span></div>'
+    active_section = build_section(
+        "Active Momentum",
+        "Already moving. Wait for pullback or tight consolidation before entry.",
+        active,
+        "section-active",
+        max_cards=10,
+    )
 
-    sections = ""
-    sections += build_section("POTENTIAL_MOVER", potential, 12)
-    sections += build_section("ACTIVE_MOMENTUM", active, 8)
-    sections += build_section("EXTENDED_CHASE_RISK", extended, 8)
-    sections += build_section("HIGH_RISK_EXTREME", highrisk, 8)
-    desk = build_table(all_stocks)
+    extended_section = build_section(
+        "Extended / Chase Risk",
+        "Already stretched. Avoid chasing; use only as monitor list.",
+        extended,
+        "section-extended",
+        max_cards=10,
+    )
 
-    return f'''<!DOCTYPE html>
+    highrisk_section = build_section(
+        "High Risk / Extreme",
+        "Volatile or news-risk names. Monitor only unless intentionally trading high-risk momentum.",
+        highrisk,
+        "section-risk",
+        max_cards=10,
+    )
+
+    desk_rows = []
+    desk_rows.extend(potential[:10])
+    desk_rows.extend(active[:10])
+    desk_rows.extend(extended[:10])
+    desk_rows.extend(highrisk[:10])
+
+    desk_table = build_desk_table(desk_rows)
+
+    page = Template("""<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -439,209 +638,646 @@ def build_dashboard(data):
 <meta http-equiv="refresh" content="300">
 <title>Elite Scanner — Pro Desk</title>
 <style>
-:root {{
-    --bg:#080b10; --panel:#101620; --panel2:#0d121a; --border:#1f2937;
-    --text:#e5e7eb; --muted:#94a3b8; --muted2:#64748b;
-    --green:#22c55e; --red:#ef4444; --blue:#38bdf8; --orange:#f59e0b;
-}}
-* {{ box-sizing:border-box; margin:0; padding:0; }}
-body {{
-    background: radial-gradient(circle at top left, rgba(56,189,248,.08), transparent 30%),
-                radial-gradient(circle at top right, rgba(34,197,94,.05), transparent 25%),
-                var(--bg);
-    color:var(--text);
-    font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-}}
-a {{ color:inherit; }}
-.positive {{ color:var(--green); }} .negative {{ color:var(--red); }}
-.topbar {{
-    position:sticky; top:0; z-index:50; border-bottom:1px solid var(--border);
-    background:rgba(8,11,16,.92); backdrop-filter:blur(14px);
-}}
-.topbar-inner {{
-    max-width:1540px; margin:0 auto; padding:18px 24px;
-    display:flex; justify-content:space-between; gap:18px; align-items:center;
-}}
-.brand h1 {{ font-size:22px; letter-spacing:-.03em; }}
-.brand p {{ color:var(--muted); font-size:12px; margin-top:4px; }}
-.status {{
-    padding:8px 14px; border:1px solid {status_color}; color:{status_color};
-    border-radius:999px; font-size:12px; font-weight:800; text-align:center;
-}}
-.time {{ color:var(--muted); font-size:12px; text-align:right; margin-top:4px; }}
-.container {{ max-width:1540px; margin:0 auto; padding:24px; }}
-.regime {{
-    border:1px solid var(--border); border-left:4px solid var(--accent);
-    background:linear-gradient(135deg, rgba(16,22,32,.96), rgba(13,18,26,.96));
-    border-radius:16px; padding:18px 20px; display:flex; justify-content:space-between;
-    gap:16px; align-items:center; margin-bottom:18px;
-}}
-.regime-title {{ font-size:17px; font-weight:900; }}
-.regime-sub {{ color:var(--muted); font-size:12px; margin-top:4px; }}
-.tape {{ display:flex; gap:10px; flex-wrap:wrap; justify-content:flex-end; }}
-.tape span {{
-    border:1px solid var(--border); background:rgba(15,23,42,.7);
-    border-radius:999px; padding:7px 10px; color:var(--muted); font-size:12px;
-}}
-.tape b {{ margin-left:4px; }}
-.kpis {{ display:grid; grid-template-columns:repeat(6,minmax(120px,1fr)); gap:12px; margin-bottom:22px; }}
-.kpi {{ border:1px solid var(--border); background:rgba(16,22,32,.85); border-radius:14px; padding:15px; }}
-.kpi div {{ font-size:26px; font-weight:900; letter-spacing:-.03em; }}
-.kpi span {{ color:var(--muted); font-size:11px; text-transform:uppercase; letter-spacing:.08em; margin-top:5px; display:block; }}
-.nav {{ display:flex; flex-wrap:wrap; gap:10px; margin-bottom:24px; }}
-.nav a {{
-    text-decoration:none; border:1px solid var(--border); background:rgba(15,23,42,.65);
-    color:var(--muted); border-radius:999px; padding:9px 13px; font-size:12px; font-weight:800;
-}}
-.nav a:hover {{ color:var(--text); border-color:#334155; }}
-.section {{ margin-bottom:32px; }}
-.section-head {{
-    --accent:var(--blue); border:1px solid var(--border); border-left:4px solid var(--accent);
-    background:rgba(16,22,32,.78); padding:16px 18px; border-radius:14px;
-    display:flex; justify-content:space-between; gap:12px; align-items:center; margin-bottom:14px;
-}}
-.section-head h2 {{ font-size:18px; letter-spacing:-.02em; }}
-.section-head p {{ color:var(--muted); font-size:12px; margin-top:4px; }}
-.count {{
-    border:1px solid var(--border); background:rgba(15,23,42,.9); border-radius:12px;
-    min-width:46px; text-align:center; padding:10px 12px; font-weight:900;
-}}
-.grid {{ display:grid; grid-template-columns:repeat(auto-fill,minmax(390px,1fr)); gap:14px; }}
-.card {{
-    --accent:var(--blue); border:1px solid var(--border); border-top:3px solid var(--accent);
-    background:linear-gradient(180deg, rgba(16,22,32,.96), rgba(10,15,22,.96));
-    border-radius:16px; padding:16px; box-shadow:0 10px 30px rgba(0,0,0,.18);
-}}
-.card:hover {{ border-color:#334155; transform:translateY(-1px); transition:.15s ease; }}
-.card-top {{ display:flex; justify-content:space-between; gap:12px; align-items:flex-start; }}
-.sym-row {{ display:flex; gap:8px; align-items:center; flex-wrap:wrap; }}
-.symbol {{ font-size:25px; font-weight:950; letter-spacing:-.04em; }}
-.sector,.tier {{
-    border:1px solid var(--border); background:rgba(15,23,42,.8); border-radius:999px;
-    padding:4px 8px; font-size:11px; font-weight:850;
-}}
-.bucket {{ color:var(--muted); font-size:11px; text-transform:uppercase; letter-spacing:.08em; margin-top:5px; }}
-.score {{ min-width:62px; text-align:right; font-size:27px; font-weight:950; }}
-.score small {{ color:var(--muted2); font-size:11px; }}
-.price-row {{
-    display:flex; justify-content:space-between; align-items:end; margin-top:16px;
-    padding-bottom:14px; border-bottom:1px solid var(--border);
-}}
-.price {{ font-size:22px; font-weight:900; }}
-.source {{ color:var(--muted2); font-size:11px; margin-top:2px; }}
-.change {{ font-size:17px; font-weight:900; }}
-.badge-row {{ display:flex; flex-wrap:wrap; gap:7px; margin:13px 0; }}
-.badge {{
-    border-radius:999px; padding:5px 8px; font-size:10px; font-weight:900;
-    letter-spacing:.04em; border:1px solid transparent;
-}}
-.green {{ background:rgba(34,197,94,.12); color:#86efac; border-color:rgba(34,197,94,.25); }}
-.red {{ background:rgba(239,68,68,.12); color:#fca5a5; border-color:rgba(239,68,68,.25); }}
-.orange {{ background:rgba(245,158,11,.12); color:#fcd34d; border-color:rgba(245,158,11,.25); }}
-.blue {{ background:rgba(56,189,248,.12); color:#7dd3fc; border-color:rgba(56,189,248,.25); }}
-.muted {{ background:rgba(148,163,184,.10); color:#cbd5e1; border-color:rgba(148,163,184,.20); }}
-.metrics {{ display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; margin-bottom:13px; }}
-.metric {{
-    border:1px solid var(--border); background:rgba(8,13,20,.75); border-radius:10px;
-    padding:9px 10px; display:flex; justify-content:space-between; gap:8px; font-size:12px;
-}}
-.metric span {{ color:var(--muted); }} .metric strong {{ color:var(--text); }}
-.note {{
-    border:1px solid rgba(56,189,248,.16); background:rgba(56,189,248,.06);
-    color:#dbeafe; border-radius:11px; padding:10px 11px; font-size:12px;
-    line-height:1.35; margin-bottom:12px;
-}}
-.tags {{ display:flex; flex-wrap:wrap; gap:6px; min-height:25px; }}
-.tag {{
-    background:rgba(99,102,241,.11); color:#c4b5fd; border:1px solid rgba(99,102,241,.22);
-    border-radius:999px; padding:4px 8px; font-size:10px; font-weight:800;
-}}
-.actions {{ display:flex; gap:8px; margin-top:14px; }}
-.actions a {{
-    flex:1; text-align:center; text-decoration:none; border:1px solid var(--border);
-    background:rgba(15,23,42,.78); color:var(--muted); border-radius:9px;
-    padding:8px; font-size:11px; font-weight:850;
-}}
-.actions a:hover {{ color:var(--text); border-color:#334155; }}
-.empty {{ border:1px dashed #334155; border-radius:14px; padding:28px; color:var(--muted); text-align:center; }}
-.table-wrap {{ overflow-x:auto; border:1px solid var(--border); border-radius:14px; background:rgba(16,22,32,.72); }}
-table {{ width:100%; border-collapse:collapse; font-size:12px; }}
-th,td {{ padding:11px 12px; border-bottom:1px solid var(--border); text-align:left; white-space:nowrap; }}
-th {{ color:var(--muted); font-size:10px; letter-spacing:.08em; text-transform:uppercase; background:rgba(15,23,42,.95); }}
-td {{ color:#dbe4ef; }} tr:hover td {{ background:rgba(30,41,59,.35); }}
-.footer {{ color:var(--muted2); font-size:11px; text-align:center; margin:28px 0 10px; }}
-@media (max-width:920px) {{
-    .topbar-inner,.regime {{ flex-direction:column; align-items:flex-start; }}
-    .tape {{ justify-content:flex-start; }}
-    .kpis {{ grid-template-columns:repeat(2,1fr); }}
-    .grid {{ grid-template-columns:1fr; }}
-}}
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+body {
+    background:
+        radial-gradient(circle at top right, rgba(16, 185, 129, 0.10), transparent 28%),
+        linear-gradient(180deg, #05070b 0%, #080b12 100%);
+    color: #e5e7eb;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    min-height: 100vh;
+    padding-bottom: 44px;
+}
+
+.header {
+    position: sticky;
+    top: 0;
+    z-index: 50;
+    background: rgba(3, 7, 18, 0.92);
+    border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+    backdrop-filter: blur(14px);
+}
+
+.header-inner {
+    max-width: 1480px;
+    margin: 0 auto;
+    padding: 16px 22px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 18px;
+}
+
+.title h1 {
+    font-size: 19px;
+    font-weight: 750;
+    letter-spacing: -0.02em;
+}
+
+.title p {
+    color: #94a3b8;
+    font-size: 12px;
+    margin-top: 3px;
+}
+
+.header-meta {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    font-size: 12px;
+    color: #94a3b8;
+}
+
+.status-pill {
+    padding: 5px 11px;
+    border-radius: 999px;
+    font-weight: 700;
+    border: 1px solid rgba(148, 163, 184, 0.18);
+}
+
+.status-blue { color: #60a5fa; background: rgba(59, 130, 246, 0.10); }
+.status-green { color: #34d399; background: rgba(16, 185, 129, 0.10); }
+.status-yellow { color: #fbbf24; background: rgba(245, 158, 11, 0.10); }
+.status-gray { color: #94a3b8; background: rgba(148, 163, 184, 0.08); }
+
+.container {
+    max-width: 1480px;
+    margin: 0 auto;
+    padding: 22px;
+}
+
+.regime-banner {
+    border-radius: 14px;
+    border: 1px solid rgba(148, 163, 184, 0.14);
+    padding: 16px 18px;
+    display: flex;
+    justify-content: space-between;
+    gap: 16px;
+    flex-wrap: wrap;
+    margin-bottom: 16px;
+    background: rgba(15, 23, 42, 0.82);
+}
+
+.regime-banner strong {
+    display: block;
+    font-size: 15px;
+    margin-bottom: 4px;
+}
+
+.regime-banner span {
+    color: #94a3b8;
+    font-size: 12px;
+}
+
+.regime-banner.bullish { border-left: 4px solid #10b981; }
+.regime-banner.bearish { border-left: 4px solid #ef4444; }
+.regime-banner.caution { border-left: 4px solid #f59e0b; }
+.regime-banner.neutral { border-left: 4px solid #64748b; }
+
+.regime-metrics {
+    display: flex;
+    gap: 14px;
+    align-items: center;
+    flex-wrap: wrap;
+}
+
+.regime-metrics span {
+    color: #cbd5e1;
+}
+
+.positive { color: #22c55e !important; }
+.negative { color: #ef4444 !important; }
+
+.kpi-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
+    gap: 10px;
+    margin-bottom: 16px;
+}
+
+.kpi-card {
+    background: rgba(15, 23, 42, 0.82);
+    border: 1px solid rgba(148, 163, 184, 0.12);
+    border-radius: 12px;
+    padding: 14px 12px;
+}
+
+.kpi-card span {
+    display: block;
+    font-size: 24px;
+    font-weight: 800;
+}
+
+.kpi-card label {
+    color: #94a3b8;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin-top: 5px;
+    display: block;
+}
+
+.kpi-card.focus span { color: #38bdf8; }
+.kpi-card.potential span { color: #38bdf8; }
+.kpi-card.active span { color: #22c55e; }
+.kpi-card.extended span { color: #f59e0b; }
+.kpi-card.risk span { color: #ef4444; }
+
+.nav-tabs {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-bottom: 18px;
+}
+
+.nav-tabs a {
+    color: #cbd5e1;
+    text-decoration: none;
+    font-size: 12px;
+    padding: 7px 11px;
+    border-radius: 999px;
+    border: 1px solid rgba(148, 163, 184, 0.12);
+    background: rgba(15, 23, 42, 0.62);
+}
+
+.desk-section,
+.desk-table-section {
+    margin-bottom: 22px;
+}
+
+.section-header {
+    background: rgba(15, 23, 42, 0.86);
+    border: 1px solid rgba(148, 163, 184, 0.12);
+    border-radius: 12px;
+    padding: 13px 16px;
+    margin-bottom: 12px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+}
+
+.section-header h2 {
+    font-size: 15px;
+    letter-spacing: -0.01em;
+}
+
+.section-header p {
+    color: #94a3b8;
+    font-size: 12px;
+    margin-top: 3px;
+}
+
+.section-count {
+    min-width: 32px;
+    height: 26px;
+    padding: 0 9px;
+    border-radius: 999px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(148, 163, 184, 0.10);
+    color: #e2e8f0;
+    font-weight: 800;
+    font-size: 12px;
+}
+
+.cards-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(330px, 1fr));
+    gap: 12px;
+}
+
+.stock-card {
+    border-radius: 14px;
+    border: 1px solid rgba(148, 163, 184, 0.13);
+    border-top: 2px solid var(--accent);
+    background: rgba(15, 23, 42, 0.78);
+    padding: 14px;
+    box-shadow: 0 12px 30px rgba(0, 0, 0, 0.22);
+}
+
+.stock-card:hover {
+    border-color: rgba(148, 163, 184, 0.25);
+}
+
+.card-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 12px;
+}
+
+.symbol-row {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+    flex-wrap: wrap;
+}
+
+.symbol {
+    font-size: 22px;
+    font-weight: 850;
+    letter-spacing: -0.03em;
+}
+
+.sector,
+.tier {
+    font-size: 10px;
+    padding: 2px 6px;
+    border-radius: 999px;
+    border: 1px solid rgba(148, 163, 184, 0.18);
+    color: #94a3b8;
+}
+
+.bucket-label {
+    color: #94a3b8;
+    font-size: 11px;
+    margin-top: 4px;
+}
+
+.score-box {
+    font-size: 25px;
+    font-weight: 900;
+}
+
+.price-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    margin-top: 12px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid rgba(148, 163, 184, 0.10);
+}
+
+.price {
+    font-size: 18px;
+    font-weight: 800;
+}
+
+.change {
+    font-size: 13px;
+    font-weight: 800;
+}
+
+.catalyst-strip {
+    margin: 10px 0;
+    padding: 9px 10px;
+    border-radius: 9px;
+    border: 1px solid rgba(148, 163, 184, 0.14);
+    background: rgba(2, 6, 23, 0.52);
+}
+
+.catalyst-label {
+    font-size: 11px;
+    font-weight: 850;
+    letter-spacing: 0.02em;
+    line-height: 1.35;
+}
+
+.catalyst-headline {
+    font-size: 11px;
+    color: #cbd5e1;
+    margin-top: 5px;
+    line-height: 1.35;
+}
+
+.catalyst-source {
+    color: #94a3b8;
+    font-size: 10px;
+    margin-top: 5px;
+}
+
+.risk-flags {
+    color: #fca5a5;
+    font-size: 10px;
+    margin-top: 5px;
+}
+
+.catalyst-positive {
+    border-color: rgba(16, 185, 129, 0.35);
+    background: rgba(16, 185, 129, 0.08);
+    color: #34d399;
+}
+
+.catalyst-negative {
+    border-color: rgba(239, 68, 68, 0.40);
+    background: rgba(239, 68, 68, 0.08);
+    color: #f87171;
+}
+
+.catalyst-neutral {
+    border-color: rgba(59, 130, 246, 0.35);
+    background: rgba(59, 130, 246, 0.08);
+    color: #93c5fd;
+}
+
+.catalyst-none {
+    border-color: rgba(148, 163, 184, 0.16);
+    background: rgba(148, 163, 184, 0.05);
+    color: #94a3b8;
+}
+
+.metrics-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 6px;
+    margin-top: 10px;
+}
+
+.metrics-grid div {
+    background: rgba(2, 6, 23, 0.45);
+    border: 1px solid rgba(148, 163, 184, 0.10);
+    border-radius: 8px;
+    padding: 8px 7px;
+}
+
+.metrics-grid span {
+    display: block;
+    color: #94a3b8;
+    font-size: 10px;
+    margin-bottom: 3px;
+}
+
+.metrics-grid strong {
+    font-size: 11px;
+}
+
+.status-row {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+    margin-top: 10px;
+}
+
+.status-chip,
+.tag {
+    background: rgba(59, 130, 246, 0.10);
+    color: #93c5fd;
+    border: 1px solid rgba(59, 130, 246, 0.20);
+    border-radius: 999px;
+    padding: 3px 8px;
+    font-size: 10px;
+    font-weight: 700;
+}
+
+.risk-chip {
+    background: rgba(148, 163, 184, 0.08);
+    color: #cbd5e1;
+    border-color: rgba(148, 163, 184, 0.16);
+}
+
+.interpretation {
+    margin-top: 10px;
+    background: rgba(56, 189, 248, 0.06);
+    border: 1px solid rgba(56, 189, 248, 0.10);
+    border-radius: 8px;
+    padding: 8px 9px;
+    color: #cbd5e1;
+    font-size: 11px;
+    line-height: 1.35;
+}
+
+.tags-row {
+    display: flex;
+    gap: 5px;
+    flex-wrap: wrap;
+    margin-top: 10px;
+}
+
+.mini-panel {
+    margin-top: 10px;
+    background: rgba(239, 68, 68, 0.06);
+    border: 1px solid rgba(239, 68, 68, 0.12);
+    border-radius: 8px;
+    padding: 8px 9px;
+}
+
+.mini-row {
+    display: flex;
+    justify-content: space-between;
+    color: #94a3b8;
+    font-size: 11px;
+    padding: 2px 0;
+}
+
+.mini-row strong {
+    color: #e5e7eb;
+}
+
+.card-actions {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 6px;
+    margin-top: 12px;
+}
+
+.card-actions a {
+    text-align: center;
+    color: #cbd5e1;
+    background: rgba(15, 23, 42, 0.9);
+    border: 1px solid rgba(148, 163, 184, 0.12);
+    border-radius: 7px;
+    padding: 7px 8px;
+    text-decoration: none;
+    font-size: 11px;
+}
+
+.card-actions a:hover {
+    background: rgba(30, 41, 59, 0.9);
+}
+
+.empty-section {
+    padding: 26px;
+    border-radius: 12px;
+    border: 1px dashed rgba(148, 163, 184, 0.18);
+    color: #94a3b8;
+    background: rgba(15, 23, 42, 0.5);
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+}
+
+.table-wrap {
+    overflow-x: auto;
+    border: 1px solid rgba(148, 163, 184, 0.12);
+    border-radius: 12px;
+    background: rgba(15, 23, 42, 0.72);
+}
+
+table {
+    width: 100%;
+    border-collapse: collapse;
+    min-width: 1100px;
+}
+
+th {
+    text-align: left;
+    color: #94a3b8;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    padding: 10px;
+    background: rgba(2, 6, 23, 0.55);
+}
+
+td {
+    padding: 9px 10px;
+    border-top: 1px solid rgba(148, 163, 184, 0.08);
+    font-size: 11px;
+    color: #cbd5e1;
+    vertical-align: top;
+}
+
+.footer-note {
+    color: #64748b;
+    font-size: 11px;
+    text-align: center;
+    margin-top: 22px;
+}
+
+@media (max-width: 760px) {
+    .header-inner {
+        align-items: flex-start;
+        flex-direction: column;
+    }
+
+    .cards-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .metrics-grid {
+        grid-template-columns: repeat(2, 1fr);
+    }
+}
 </style>
 </head>
 <body>
-<header class="topbar">
-    <div class="topbar-inner">
-        <div class="brand">
+
+<header class="header">
+    <div class="header-inner">
+        <div class="title">
             <h1>Elite Scanner — Pro Desk</h1>
-            <p>Potential movers first · Bucketed by setup quality · Updated {now}</p>
+            <p>Technical Potential Movers + Catalyst Confirmation + News Risk Filter</p>
         </div>
-        <div>
-            <div class="status">{status}</div>
-            <div class="time">NY {ny.strftime("%H:%M:%S")}</div>
+        <div class="header-meta">
+            <span class="status-pill $status_class">$status</span>
+            <span>NY: $ny_time</span>
+            <span>UTC: $utc_time</span>
         </div>
     </div>
 </header>
 
 <main class="container">
-    {regime_html(regime, enriched, len(raw))}
+    $regime_html
+    $kpi_html
 
-    <div class="kpis">{kpi_html}</div>
-
-    <nav class="nav">
-        <a href="#potential_mover">Potential Movers</a>
-        <a href="#active_momentum">Active Momentum</a>
-        <a href="#extended_chase_risk">Extended Risk</a>
-        <a href="#high_risk_extreme">High Risk</a>
+    <div class="nav-tabs">
+        <a href="#potential">Potential Movers</a>
+        <a href="#active">Active Momentum</a>
+        <a href="#extended">Extended Risk</a>
+        <a href="#risk">High Risk</a>
         <a href="#desk">Desk View</a>
-    </nav>
+    </div>
 
-    {sections}
-    {desk}
+    <div id="potential">$potential_section</div>
+    <div id="active">$active_section</div>
+    <div id="extended">$extended_section</div>
+    <div id="risk">$highrisk_section</div>
+    <div id="desk">$desk_table</div>
 
-    <div class="footer">
-        Data note: Alpaca Free uses IEX-only, non-consolidated data. Volume and VWAP are useful proxies, not full SIP market data.
+    <div class="footer-note">
+        Data note: Alpaca IEX volume is non-consolidated. Confirm liquidity, spread, VWAP, and news manually before trade execution.
     </div>
 </main>
-</body>
-</html>'''
 
+</body>
+</html>""")
+
+    return page.safe_substitute(
+        status=status,
+        status_class=status_class,
+        ny_time=now_ny.strftime("%Y-%m-%d %H:%M"),
+        utc_time=now_utc.strftime("%Y-%m-%d %H:%M"),
+        regime_html=regime_html,
+        kpi_html=kpi_html,
+        potential_section=potential_section,
+        active_section=active_section,
+        extended_section=extended_section,
+        highrisk_section=highrisk_section,
+        desk_table=desk_table,
+    )
+
+
+# ==============================================================
+# MAIN
+# ==============================================================
 
 def main():
-    print("\n" + "=" * 60)
-    print("BUILDING ELITE DASHBOARD — PRO DESK")
-    print("=" * 60)
+    print("\n" + "=" * 70)
+    print("BUILDING ELITE PRO DESK DASHBOARD")
+    print("=" * 70)
 
-    data = load_data()
-    total = len(data["potential"]) + len(data["active"]) + len(data["extended"]) + len(data["highrisk"])
+    potential = load_csv_records("potential_movers.csv", limit=10)
+    active = load_csv_records("active_momentum.csv", limit=10)
+    extended = load_csv_records("extended_movers.csv", limit=10)
+    highrisk = load_csv_records("high_risk_movers.csv", limit=10)
+    raw = load_csv_records("elite_watchlist_raw.csv")
+    active_watchlist = load_csv_records("elite_watchlist.csv", limit=10)
 
-    if total == 0:
-        print("  ⚠ No bucketed scanner output found.")
-        print("  Run elite_scanner.py first.")
-        return
+    if not active_watchlist:
+        active_watchlist = load_json_records("elite_watchlist.json")
 
-    print(f"  Potential Movers:     {len(data['potential'])}")
-    print(f"  Active Momentum:      {len(data['active'])}")
-    print(f"  Extended / Chase:     {len(data['extended'])}")
-    print(f"  High Risk / Extreme:  {len(data['highrisk'])}")
-    print(f"  Raw Universe:         {len(data['raw'])}")
+    # Fallback if bucket files do not exist yet
+    if not potential and not active and active_watchlist:
+        potential = [
+            s for s in active_watchlist
+            if safe_str(s.get("setup_bucket")) == "POTENTIAL_MOVER"
+        ]
+        active = [
+            s for s in active_watchlist
+            if safe_str(s.get("setup_bucket")) == "ACTIVE_MOMENTUM"
+        ]
+        extended = [
+            s for s in active_watchlist
+            if safe_str(s.get("setup_bucket")) == "EXTENDED_CHASE_RISK"
+        ]
+        highrisk = [
+            s for s in active_watchlist
+            if safe_str(s.get("setup_bucket")) == "HIGH_RISK_EXTREME"
+        ]
 
-    html = build_dashboard(data)
+    regime = load_regime()
+
+    print(f"  Potential Movers:       {len(potential)}")
+    print(f"  Active Momentum:        {len(active)}")
+    print(f"  Extended / Chase Risk:  {len(extended)}")
+    print(f"  High Risk / Extreme:    {len(highrisk)}")
+    print(f"  Raw Scored:             {len(raw)}")
+    print(f"  Active Watchlist:       {len(active_watchlist)}")
+
+    html_output = build_dashboard(
+        potential=potential,
+        active=active,
+        extended=extended,
+        highrisk=highrisk,
+        raw=raw,
+        active_watchlist=active_watchlist,
+        regime=regime,
+    )
 
     with open("dashboard.html", "w", encoding="utf-8") as f:
-        f.write(html)
+        f.write(html_output)
 
     print("  ✓ Dashboard saved to dashboard.html")
-    print("=" * 60 + "\n")
+    print("=" * 70 + "\n")
 
 
 if __name__ == "__main__":
