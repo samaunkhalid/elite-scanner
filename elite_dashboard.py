@@ -239,49 +239,54 @@ def format_money_m(value):
 
 def get_tag_class(tag):
     """
-    Meaning-based tag classes:
-    tag-tech     = technical setup
-    tag-positive = constructive strength / sector / catalyst
-    tag-caution  = extension / big move / chase risk
-    tag-squeeze  = short interest / RVOL / float mechanics
-    tag-risk     = negative/risk
-    tag-neutral  = neutral context
+    Meaning-based tag classes.
+
+    Final color rules:
+    - Blue   = VWAP / core technical location
+    - Green  = constructive strength / continuation / sector support
+    - Orange = caution / extension / chase risk
+    - Purple = squeeze / volume / short-interest mechanics
+    - Red    = hard risk / negative news
+    - Gray   = neutral context
     """
     t = safe_str(tag).lower()
 
     risk_words = [
         "high risk", "news_risk", "offering", "downgrade", "investigation",
         "bankruptcy", "delisting", "reverse split", "dilution", "lawsuit",
-        "negative", "misses", "cuts guidance", "guidance cut", "sec risk"
+        "negative", "misses", "cuts guidance", "guidance cut", "sec risk",
+        "risk catalyst", "weak", "failed"
     ]
     if any(w in t for w in risk_words):
         return "tag-risk"
 
     caution_words = [
-        "extended", "major move", "big move", "far above vwap", "above vwap extended",
-        "gap", "high atr", "volatile", "chase", "extreme", "failed"
+        "extended", "major move", "big move", "far above vwap",
+        "above vwap extended", "gap", "high atr", "volatile",
+        "chase", "extreme", "lower-price"
     ]
     if any(w in t for w in caution_words):
         return "tag-caution"
 
     squeeze_words = [
         "si ", "short", "dtc", "days to cover", "float", "squeeze",
-        "rvol", "vol surge", "volume surge"
+        "rvol", "vol surge", "volume surge", "mentions"
     ]
     if any(w in t for w in squeeze_words):
         return "tag-squeeze"
 
     positive_words = [
-        "sector leading", "sector supportive", "vs sector", "rs strong", "rs positive",
-        "positive catalyst", "upgrade", "record revenue", "beats", "raises guidance",
-        "accumulating", "near 52wh", "upper range", "near hod", "tight consolidation"
+        "sector leading", "sector supportive", "vs sector", "rs strong",
+        "rs positive", "positive catalyst", "upgrade", "record revenue",
+        "beats", "raises guidance", "accumulating", "near 52wh",
+        "upper range", "near hod", "tight consolidation", "consolidating",
+        "breakout", "clean continuation"
     ]
     if any(w in t for w in positive_words):
         return "tag-positive"
 
     tech_words = [
-        "above vwap", "consolidating", "ema stack", "near 20d high", "breakout",
-        "vwap", "hod"
+        "above vwap", "ema stack", "near 20d high", "vwap hold"
     ]
     if any(w in t for w in tech_words):
         return "tag-tech"
@@ -1337,42 +1342,42 @@ body {
 
 .status-tech,
 .tag-tech {
-    background: rgba(59, 130, 246, 0.09);
-    color: #93c5fd;
-    border-color: rgba(59, 130, 246, 0.20);
+    background: rgba(59, 130, 246, 0.12);
+    color: #60a5fa;
+    border-color: rgba(59, 130, 246, 0.32);
 }
 
 .status-positive,
 .tag-positive {
-    background: rgba(16, 185, 129, 0.10);
-    color: #86efac;
-    border-color: rgba(16, 185, 129, 0.24);
+    background: rgba(16, 185, 129, 0.14);
+    color: #34d399;
+    border-color: rgba(16, 185, 129, 0.34);
 }
 
 .tag-caution {
-    background: rgba(245, 158, 11, 0.10);
+    background: rgba(245, 158, 11, 0.16);
     color: #fbbf24;
-    border-color: rgba(245, 158, 11, 0.24);
+    border-color: rgba(245, 158, 11, 0.38);
 }
 
 .tag-squeeze {
-    background: rgba(168, 85, 247, 0.10);
-    color: #d8b4fe;
-    border-color: rgba(168, 85, 247, 0.25);
+    background: rgba(168, 85, 247, 0.16);
+    color: #c084fc;
+    border-color: rgba(168, 85, 247, 0.38);
 }
 
 .status-risk,
 .tag-risk {
-    background: rgba(239, 68, 68, 0.10);
-    color: #fca5a5;
-    border-color: rgba(239, 68, 68, 0.25);
+    background: rgba(239, 68, 68, 0.14);
+    color: #f87171;
+    border-color: rgba(239, 68, 68, 0.38);
 }
 
 .status-neutral,
 .tag-neutral {
     background: rgba(148, 163, 184, 0.08);
     color: #cbd5e1;
-    border-color: rgba(148, 163, 184, 0.16);
+    border-color: rgba(148, 163, 184, 0.18);
 }
 
 .interpretation {
@@ -1411,8 +1416,8 @@ body {
 }
 
 .mini-row strong {
-    color: #e5e7eb;
-    font-weight: 650;
+    color: #c084fc;
+    font-weight: 700;
 }
 
 .card-actions {
