@@ -1,22 +1,19 @@
 """
 alpaca_news.py
 --------------
-Catalyst / news intelligence for Elite Scanner.
+Strict catalyst / news intelligence for Elite Scanner.
+
+Goal:
+- Avoid false catalysts from broad market/news roundup articles.
+- Only show catalyst if the headline is company-specific.
+- Generic market mover articles are ignored unless the ticker/company appears in headline.
 
 Uses Alpaca News API:
 https://data.alpaca.markets/v1beta1/news
-
-Adds:
-- catalyst_label
-- catalyst_sentiment
-- catalyst_score
-- catalyst_headline
-- catalyst_source
-- catalyst_time
-- risk_flags
 """
 
 import os
+import re
 import requests
 from datetime import datetime, timedelta, timezone
 
@@ -80,6 +77,7 @@ class AlpacaNews:
 
                 for article in articles:
                     article_symbols = article.get("symbols", []) or []
+
                     for sym in article_symbols:
                         if sym in news_by_symbol:
                             news_by_symbol[sym].append(article)
@@ -89,10 +87,104 @@ class AlpacaNews:
 
         return news_by_symbol
 
+    # ==========================================================
+    # COMPANY-SPECIFIC VALIDATION
+    # ==========================================================
+
+    def normalize_text(self, text):
+        text = (text or "").lower()
+        text = re.sub(r"[^a-z0-9\s]", " ", text)
+        text = re.sub(r"\s+", " ", text).strip()
+        return text
+
+    def company_keywords(self, company_name):
+        """
+        Extract useful company tokens.
+        Avoid generic legal suffixes and weak words.
+        """
+        name = self.normalize_text(company_name)
+
+        stop_words = {
+            "inc", "incorporated", "corp", "corporation", "co", "company",
+            "ltd", "limited", "plc", "holdings", "holding", "group",
+            "class", "common", "stock", "ordinary", "shares", "the",
+            "technologies", "technology", "systems", "solutions"
+        }
+
+        words = [w for w in name.split() if len(w) >= 4 and w not in stop_words]
+
+        # Keep only first few meaningful tokens.
+        return words[:4]
+
+    def is_generic_market_headline(self, headline):
+        """
+        Generic articles should not count as company catalyst.
+        """
+        h = self.normalize_text(headline)
+
+        generic_phrases = [
+            "stock market today",
+            "stocks moving",
+            "big stocks moving",
+            "why stocks are moving",
+            "market movers",
+            "premarket movers",
+            "midday movers",
+            "after hours movers",
+            "top gainers",
+            "top losers",
+            "nasdaq tops",
+            "dow jones",
+            "s p 500",
+            "wall street",
+            "markets rise",
+            "markets fall",
+            "stocks higher",
+            "stocks lower",
+            "what s going on with",
+        ]
+
+        return any(p in h for p in generic_phrases)
+
+    def is_company_specific(self, symbol, company_name, headline, article):
+        """
+        Strict test:
+        - ticker appears in headline, OR
+        - company keyword appears in headline, OR
+        - article only has one symbol and belongs to this symbol.
+        """
+        symbol = (symbol or "").upper().strip()
+        h_raw = headline or ""
+        h = self.normalize_text(h_raw)
+
+        article_symbols = article.get("symbols", []) or []
+        article_symbols = [str(s).upper() for s in article_symbols]
+
+        # 1. Ticker appears as standalone token in headline
+        if symbol and re.search(rf"\b{re.escape(symbol.lower())}\b", h):
+            return True
+
+        # 2. Company name keywords appear in headline
+        keywords = self.company_keywords(company_name)
+
+        for kw in keywords:
+            if re.search(rf"\b{re.escape(kw)}\b", h):
+                return True
+
+        # 3. Single-symbol article can be accepted
+        if len(article_symbols) == 1 and symbol in article_symbols:
+            return True
+
+        return False
+
+    # ==========================================================
+    # HEADLINE CLASSIFIER
+    # ==========================================================
+
     def classify_headline(self, headline):
         """
-        Simple keyword-based day-trading catalyst classifier.
-        Conservative by design.
+        Keyword-based classifier.
+        Only run this after company-specific validation.
         """
         h = (headline or "").lower()
 
@@ -115,6 +207,8 @@ class AlpacaNews:
             "acquisition": 12,
             "merger": 12,
             "buyout": 15,
+            "blowout quarter": 10,
+            "strong quarter": 8,
         }
 
         negative_keywords = {
@@ -142,7 +236,7 @@ class AlpacaNews:
         }
 
         best_score = 0
-        best_reason = "No confirmed catalyst"
+        best_reason = "Company-specific fresh news"
         risk_flags = []
 
         for kw, score in positive_keywords.items():
@@ -171,64 +265,83 @@ class AlpacaNews:
             "risk_flags": risk_flags,
         }
 
-    def analyze_symbol_news(self, symbol, articles):
+    def empty_catalyst(self):
+        return {
+            "catalyst_label": "No confirmed company-specific catalyst",
+            "catalyst_sentiment": "NONE",
+            "catalyst_score": 0,
+            "catalyst_headline": "",
+            "catalyst_source": "",
+            "catalyst_time": "",
+            "risk_flags": "",
+        }
+
+    def analyze_symbol_news(self, symbol, company_name, articles):
         """
-        Pick the most relevant article for a symbol.
+        Pick the best valid company-specific article.
+        Generic market articles are ignored.
         """
         if not articles:
-            return {
-                "catalyst_label": "No confirmed fresh news",
-                "catalyst_sentiment": "NONE",
-                "catalyst_score": 0,
-                "catalyst_headline": "",
-                "catalyst_source": "",
-                "catalyst_time": "",
-                "risk_flags": "",
-            }
+            return self.empty_catalyst()
 
-        best = None
-        best_abs_score = -1
-        best_classification = None
+        valid_articles = []
 
-        for article in articles[:10]:
+        for article in articles[:15]:
             headline = article.get("headline", "") or ""
+
+            if not headline:
+                continue
+
+            # Reject generic broad market roundup unless company-specific.
+            company_specific = self.is_company_specific(
+                symbol=symbol,
+                company_name=company_name,
+                headline=headline,
+                article=article,
+            )
+
+            if not company_specific:
+                continue
+
+            # Even if company-specific, classify it.
             classification = self.classify_headline(headline)
-            abs_score = abs(classification["score"])
 
-            if abs_score > best_abs_score:
-                best = article
-                best_abs_score = abs_score
-                best_classification = classification
+            valid_articles.append({
+                "article": article,
+                "classification": classification,
+                "abs_score": abs(classification["score"]),
+            })
 
-        if best is None:
-            return {
-                "catalyst_label": "No confirmed fresh news",
-                "catalyst_sentiment": "NONE",
-                "catalyst_score": 0,
-                "catalyst_headline": "",
-                "catalyst_source": "",
-                "catalyst_time": "",
-                "risk_flags": "",
-            }
+        if not valid_articles:
+            return self.empty_catalyst()
+
+        # Prefer stronger classified catalyst, otherwise most recent company-specific news.
+        valid_articles = sorted(
+            valid_articles,
+            key=lambda x: x["abs_score"],
+            reverse=True,
+        )
+
+        best = valid_articles[0]["article"]
+        classification = valid_articles[0]["classification"]
 
         headline = best.get("headline", "") or ""
         source = best.get("source", "") or "Alpaca News"
         created_at = best.get("created_at", "") or best.get("updated_at", "") or ""
 
-        classification = best_classification or self.classify_headline(headline)
+        score = classification["score"]
+        sentiment = classification["sentiment"]
 
-        # If article exists but no keyword hit, label as fresh news but neutral.
-        if classification["score"] == 0:
-            label = "Fresh news — neutral/unclassified"
+        if score == 0:
+            label = "Company-specific fresh news"
             sentiment = "NEUTRAL"
         else:
             label = classification["label"]
-            sentiment = classification["sentiment"]
 
         return {
             "catalyst_label": label,
             "catalyst_sentiment": sentiment,
-            "catalyst_score": classification["score"],
+            "catalyst_score": score,
             "catalyst_headline": headline,
             "catalyst_source": source,
             "catalyst_time": created_at,
@@ -237,30 +350,38 @@ class AlpacaNews:
 
     def enrich_stocks_with_news(self, stocks, lookback_hours=24):
         """
-        Add catalyst fields to each stock dict.
+        Add strict catalyst fields to each stock dict.
         """
         symbols = [s["symbol"] for s in stocks if "symbol" in s]
         news_map = self.fetch_news(symbols, lookback_hours=lookback_hours)
 
         enriched = 0
+        rejected_generic = 0
 
         for stock in stocks:
             symbol = stock.get("symbol")
+            company_name = stock.get("company_name", "") or stock.get("shortName", "") or symbol
+
             articles = news_map.get(symbol, [])
-            catalyst = self.analyze_symbol_news(symbol, articles)
+            catalyst = self.analyze_symbol_news(symbol, company_name, articles)
+
+            if articles and catalyst["catalyst_sentiment"] == "NONE":
+                rejected_generic += 1
 
             stock.update(catalyst)
 
             if catalyst["catalyst_sentiment"] != "NONE":
                 enriched += 1
 
-            # Add catalyst tag into visible tags.
+            # Add catalyst tag only if validated company-specific.
             if catalyst["catalyst_sentiment"] == "POSITIVE":
                 stock["tags"] = f"🟢 {catalyst['catalyst_label']} · " + stock.get("tags", "")
             elif catalyst["catalyst_sentiment"] == "NEGATIVE":
                 stock["tags"] = f"🔴 {catalyst['catalyst_label']} · " + stock.get("tags", "")
             elif catalyst["catalyst_sentiment"] == "NEUTRAL":
-                stock["tags"] = "📰 Fresh news · " + stock.get("tags", "")
+                stock["tags"] = "📰 Company-specific news · " + stock.get("tags", "")
 
-        print(f"  ✓ News-enriched {enriched} stocks with Alpaca News")
+        print(f"  ✓ News-enriched {enriched} stocks with strict company-specific catalysts")
+        print(f"  ✓ Rejected {rejected_generic} generic/broad news matches")
+
         return stocks
