@@ -5,15 +5,19 @@ on:
     # Runs at 9:00 AM ET (13:00 UTC) Mon-Fri = 8:00 PM Bangkok
     # 30 min before market open
     - cron: '0 13 * * 1-5'
-    # Also run mid-morning at 10:30 AM ET (14:30 UTC) = 9:30 PM Bangkok
+
+    # Mid-morning at 10:30 AM ET (14:30 UTC) = 9:30 PM Bangkok
     - cron: '30 14 * * 1-5'
+
     # Afternoon update at 1:00 PM ET (17:00 UTC) = 12:00 AM Bangkok
     - cron: '0 17 * * 1-5'
-  workflow_dispatch:  # Manual trigger button in Actions tab
+
+  workflow_dispatch:
 
 jobs:
   scan:
     runs-on: ubuntu-latest
+
     permissions:
       contents: write
 
@@ -44,6 +48,6 @@ jobs:
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git add elite_watchlist.csv elite_watchlist_raw.csv elite_watchlist.json market_regime.json dashboard.html || true
+          git add elite_watchlist.csv elite_watchlist_raw.csv elite_watchlist.json market_regime.json dashboard.html potential_movers.csv active_momentum.csv extended_movers.csv high_risk_movers.csv || true
           git diff --staged --quiet || git commit -m "scan: $(date -u '+%Y-%m-%d %H:%M UTC')"
           git push
