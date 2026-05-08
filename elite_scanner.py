@@ -991,8 +991,69 @@ def main():
     
     print(f"{'=' * 70}\n")
 
-    # Sort
+    # Sort by base score first
     results = sorted(results, key=lambda x: x["score"], reverse=True)
+    
+    # =================================================================
+    # ALPACA IEX ENRICHMENT (Real-time intraday data)
+    # =================================================================
+    print(f"\n[Stage 6] Enriching top candidates with Alpaca IEX real-time data...\n")
+    
+    try:
+        from alpaca_feed import AlpacaFeed
+        
+        # Only enrich top 100 to save API calls
+        top_100_symbols = [r["symbol"] for r in results[:100]]
+        
+        alpaca = AlpacaFeed()
+        intraday_data = alpaca.get_intraday_data(top_100_symbols)
+        
+        # Enrich results with intraday metrics
+        enriched_count = 0
+        for stock in results:
+            if stock["symbol"] in intraday_data:
+                rt = intraday_data[stock["symbol"]]
+                
+                # Add intraday score (0-20 points)
+                intraday_score, intraday_reasons = alpaca.score_intraday_position(rt)
+                
+                # Update final score
+                stock["score"] += intraday_score
+                stock["intraday_score"] = intraday_score
+                
+                # Add intraday fields
+                stock["vwap"] = rt["vwap"]
+                stock["vwap_dist_pct"] = rt["vwap_dist_pct"]
+                stock["above_vwap"] = rt["above_vwap"]
+                stock["hod"] = rt["hod"]
+                stock["lod"] = rt["lod"]
+                stock["from_hod_pct"] = rt["from_hod_pct"]
+                stock["near_hod"] = rt["near_hod"]
+                stock["intraday_volume"] = rt["intraday_volume"]
+                stock["data_source"] = "Yahoo + IEX"
+                
+                # Add intraday reasons to tags
+                if intraday_reasons:
+                    current_tags = stock["tags"].split(" · ")
+                    combined = intraday_reasons + current_tags
+                    stock["tags"] = " · ".join(combined[:7])
+                
+                enriched_count += 1
+        
+        print(f"  ✓ Enriched {enriched_count} stocks with IEX real-time data")
+        print(f"  ⚠️ Note: IEX volume is non-consolidated (~2-3% of market)")
+        
+        # Re-sort with intraday scores
+        results = sorted(results, key=lambda x: x["score"], reverse=True)
+        
+    except ImportError:
+        print(f"  ⚠️ Alpaca not available - skipping real-time enrichment")
+        print(f"  Install: pip install alpaca-py")
+    except Exception as e:
+        print(f"  ⚠️ Alpaca enrichment failed: {e}")
+        print(f"  Continuing with Yahoo data only...")
+    
+    # Create DataFrame after enrichment
     df = pd.DataFrame(results)
 
     if df.empty:
