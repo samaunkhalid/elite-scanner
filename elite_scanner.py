@@ -29,7 +29,7 @@ Tier System:
   3 (35+): Monitor
 
 Output:
-  - Active Watchlist: Top 20 only
+  - Active Watchlist: Top 10 only
   - Raw scored universe: Full CSV for diagnostics
 """
 
@@ -251,9 +251,9 @@ def check_earnings_status(symbol, calendar_all):
 
 def hard_reject(symbol, price, market_cap, avg_vol, exchange, atr_pct, earnings_within_2d):
     """Returns (rejected, reason)."""
-    if price < 2.0:
+    if price < 5.0:
         return True, "price_too_low"
-    if price > 100:
+    if price > 100.0:
         return True, "price_too_high"
     if market_cap < 100_000_000:
         return True, "mkt_cap_too_small"
@@ -396,8 +396,8 @@ def score_execution(symbol, price, avg_vol, atr_pct, today_vol):
     elif atr_pct > 10:
         score -= 3
 
-    # Price sweet spot: $5–$80 scanner
-    if 10 <= price <= 80:
+    # Price sweet spot: $5–$100 scanner
+    if 10 <= price <= 100:
         score += 4
         reasons.append("Clean price")
     elif 5 <= price < 10:
@@ -745,12 +745,14 @@ def classify_setup_bucket(stock):
     """
     change = abs(float(stock.get("change_pct", 0) or 0))
     risk = stock.get("risk_category", "NORMAL")
+    catalyst_sentiment = stock.get("catalyst_sentiment", "NONE")
 
     above_vwap = bool(stock.get("above_vwap", False))
     near_hod = bool(stock.get("near_hod", False))
     vwap_dist = float(stock.get("vwap_dist_pct", 999) or 999)
     recent_range = float(stock.get("recent_range_pct", 999) or 999)
-
+    if risk == "NEWS_RISK" or catalyst_sentiment == "NEGATIVE":
+        return "HIGH_RISK_EXTREME"
     # Highest risk first
     if risk in ["HIGH_RISK", "EXTREME_MOVE"]:
         return "HIGH_RISK_EXTREME"
@@ -1118,7 +1120,54 @@ def main():
     except Exception as e:
         print(f"  ⚠️ Alpaca enrichment failed: {e}")
         print(f"  Continuing with Yahoo data only...")
-    
+        # =================================================================
+    # STAGE 7: ALPACA NEWS CATALYST ENRICHMENT
+    # =================================================================
+    print(f"\n[Stage 7] Enriching top candidates with Alpaca News catalysts...\n")
+
+    try:
+        from alpaca_news import AlpacaNews
+        news = AlpacaNews()
+
+        # News only on top 100 scored names to keep scanner fast.
+        top_news_symbols = set([r["symbol"] for r in results[:100]])
+
+        news_candidates = [
+            stock for stock in results
+            if stock.get("symbol") in top_news_symbols
+        ]
+
+        news.enrich_stocks_with_news(news_candidates, lookback_hours=24)
+
+        # Apply conservative catalyst score overlay.
+        for stock in results:
+            catalyst_score = stock.get("catalyst_score", 0) or 0
+
+            # Positive catalysts help, but only modestly.
+            if catalyst_score > 0:
+                stock["score"] = min(100, stock["score"] + int(catalyst_score * 0.5))
+
+            # Negative catalysts/risk hurt strongly.
+            elif catalyst_score < 0:
+                stock["score"] = max(0, stock["score"] + catalyst_score)
+
+                # Risk names should not remain clean potential movers.
+                if catalyst_score <= -10:
+                    stock["risk_category"] = "NEWS_RISK"
+
+        print("  ✓ Catalyst overlay applied")
+
+        # Re-sort after news catalyst overlay.
+        results = sorted(results, key=lambda x: x["score"], reverse=True)
+
+    except ImportError as e:
+        print(f"  ⚠️ Alpaca News file not available: {e}")
+        print(f"  Make sure alpaca_news.py exists in the repo root.")
+        print("  Continuing without news catalysts...")
+
+    except Exception as e:
+        print(f"  ⚠️ Alpaca News enrichment failed: {e}")
+        print("  Continuing without news catalysts...")
     # Create DataFrame after enrichment
     # Recalculate tier and setup bucket after Alpaca enrichment
     for stock in results:
