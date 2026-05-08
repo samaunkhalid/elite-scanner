@@ -63,13 +63,14 @@ def get_sector(symbol):
 def get_setup_type(stock):
     """Determine primary setup type based on which layers scored highest."""
     scores = {
-        "🧨 SQUEEZE PLAY": stock["squeeze"],
-        "📅 CATALYST EVENT": stock["catalyst"],
+        "🚀 MOMENTUM": stock.get("momentum", 0),
         "💎 CLEAN LIQUIDITY": stock.get("execution", 0),
-        "💰 SMART MONEY": stock["smart_money"],
-        "🐦 SOCIAL MOMENTUM": stock["social"],
-        "💪 RELATIVE STRENGTH": stock["strength"],
-        "📈 BREAKOUT": stock["technical"],
+        "📅 CATALYST EVENT": stock.get("catalyst", 0),
+        "🧨 SQUEEZE PLAY": stock.get("squeeze", 0),
+        "💪 RELATIVE STRENGTH": stock.get("strength", 0),
+        "📈 BREAKOUT": stock.get("technical", 0),
+        "💰 PARTICIPATION": stock.get("participation", 0),
+        "🐦 SOCIAL MOMENTUM": stock.get("social", 0),
     }
     primary = max(scores.items(), key=lambda x: x[1])
     if primary[1] == 0:
@@ -113,15 +114,15 @@ def build_card(stock):
         for tag in stock["tags"].split(" · ")[:6]:
             tags_html += f'<span class="tag">{tag}</span>'
 
-    # Build score bar segments
+    # Build score bar segments (v2.1 normalized to 100)
     layers = [
-        ("CAT", stock["catalyst"], 20, "#a855f7"),
+        ("CAT", stock.get("catalyst", 0), 15, "#a855f7"),
+        ("MOM", stock.get("momentum", 0), 20, "#f59e0b"),
         ("EXEC", stock.get("execution", 0), 20, "#14b8a6"),
-        ("SQZ", stock["squeeze"], 15, "#ef4444"),
-        ("SM", stock["smart_money"], 10, "#3b82f6"),
-        ("SOC", stock["social"], 10, "#f59e0b"),
-        ("RS", stock["strength"], 15, "#06b6d4"),
-        ("TECH", stock["technical"], 15, "#8b5cf6"),
+        ("SQZ", stock.get("squeeze", 0), 8, "#ef4444"),
+        ("RS", stock.get("strength", 0), 15, "#06b6d4"),
+        ("TECH", stock.get("technical", 0), 12, "#8b5cf6"),
+        ("PART", stock.get("participation", 0), 10, "#3b82f6"),
     ]
     
     score_breakdown = ""
@@ -163,6 +164,20 @@ def build_card(stock):
             </div>
         '''
 
+    # Risk category badge (v2.1 new)
+    risk_html = ""
+    risk_cat = stock.get("risk_category", "NORMAL")
+    if risk_cat == "EXTENDED":
+        risk_html = '<span class="tag" style="background:#f59e0b22;color:#f59e0b;">⚠️ EXTENDED</span>'
+    elif risk_cat == "HIGH_RISK":
+        risk_html = '<span class="tag" style="background:#ef444422;color:#ef4444;">🔴 HIGH RISK</span>'
+    elif risk_cat == "EXTREME_MOVE":
+        risk_html = '<span class="tag" style="background:#dc262622;color:#dc2626;">🚨 EXTREME</span>'
+    
+    # Earnings reaction badge (v2.1 new)
+    if stock.get("is_earnings_reaction", False):
+        risk_html += '<span class="tag" style="background:#8b5cf622;color:#8b5cf6;">📊 EARNINGS</span>'
+    
     return f'''
     <div class="card" style="border-left: 3px solid {get_tier_color(tier)}; background: {get_tier_bg(tier)};">
         <div class="card-header">
@@ -170,6 +185,7 @@ def build_card(stock):
                 <div class="tier-badge" style="background:{get_tier_color(tier)};color:#0a0a0a;">TIER {tier}</div>
                 <div class="symbol">{stock["symbol"]}</div>
                 <div class="sector-pill">{sector}</div>
+                {risk_html}
             </div>
             <div class="card-right">
                 <div class="price">${stock["price"]:.2f}</div>
@@ -667,14 +683,14 @@ body {{
     </div>
 
     <div class="legend">
-        <strong>Conviction Layers:</strong>
-        <span class="legend-item"><span class="legend-dot" style="background:#a855f7;"></span>CAT (Catalyst /20)</span>
+        <strong>Conviction Layers (v2.1):</strong>
+        <span class="legend-item"><span class="legend-dot" style="background:#a855f7;"></span>CAT (Catalyst /15)</span>
+        <span class="legend-item"><span class="legend-dot" style="background:#f59e0b;"></span>MOM (Momentum /20)</span>
         <span class="legend-item"><span class="legend-dot" style="background:#14b8a6;"></span>EXEC (Execution /20)</span>
-        <span class="legend-item"><span class="legend-dot" style="background:#ef4444;"></span>SQZ (Squeeze /15)</span>
-        <span class="legend-item"><span class="legend-dot" style="background:#3b82f6;"></span>SM (Smart Money /10)</span>
-        <span class="legend-item"><span class="legend-dot" style="background:#f59e0b;"></span>SOC (Social /10)</span>
+        <span class="legend-item"><span class="legend-dot" style="background:#ef4444;"></span>SQZ (Squeeze /8)</span>
         <span class="legend-item"><span class="legend-dot" style="background:#06b6d4;"></span>RS (Strength /15)</span>
-        <span class="legend-item"><span class="legend-dot" style="background:#8b5cf6;"></span>TECH (Technical /15)</span>
+        <span class="legend-item"><span class="legend-dot" style="background:#8b5cf6;"></span>TECH (Technical /12)</span>
+        <span class="legend-item"><span class="legend-dot" style="background:#3b82f6;"></span>PART (Participation /10)</span>
     </div>
 
     {f'<div class="cards-grid">{cards_html}</div>' if stocks else '<div class="empty-state"><h3>No setups yet</h3><p>Run elite_scanner.py to populate</p></div>'}
