@@ -246,6 +246,230 @@ def check_earnings_status(symbol, calendar_all):
 
 
 # ==============================================================
+# SECTOR / INDUSTRY RELATIVE STRENGTH
+# ==============================================================
+
+SECTOR_ETFS = {
+    "Semiconductors": "SMH",
+    "Technology": "XLK",
+    "Software": "IGV",
+    "Financial Services": "XLF",
+    "Healthcare": "XLV",
+    "Biotechnology": "XBI",
+    "Industrials": "XLI",
+    "Consumer Cyclical": "XLY",
+    "Consumer Defensive": "XLP",
+    "Communication Services": "XLC",
+    "Energy": "XLE",
+    "Basic Materials": "XLB",
+    "Real Estate": "XLRE",
+    "Utilities": "XLU",
+    "Crypto": "IBIT",
+    "Aerospace & Defense": "ITA",
+    "Solar": "TAN",
+    "Automobiles": "CARZ",
+    "Unknown": "SPY",
+}
+
+SYMBOL_SECTOR_OVERRIDES = {
+    # Semiconductors
+    "GFS": "Semiconductors",
+    "AMKR": "Semiconductors",
+    "STM": "Semiconductors",
+    "AMD": "Semiconductors",
+    "INTC": "Semiconductors",
+    "QCOM": "Semiconductors",
+    "NVDA": "Semiconductors",
+    "MU": "Semiconductors",
+    "SMCI": "Semiconductors",
+    "AVGO": "Semiconductors",
+    "MRVL": "Semiconductors",
+    "LSCC": "Semiconductors",
+    "WOLF": "Semiconductors",
+
+    # Crypto / digital assets
+    "RIOT": "Crypto",
+    "MARA": "Crypto",
+    "CLSK": "Crypto",
+    "CORZ": "Crypto",
+    "IREN": "Crypto",
+    "HUT": "Crypto",
+    "BITF": "Crypto",
+    "CIFR": "Crypto",
+    "COIN": "Crypto",
+    "MSTR": "Crypto",
+
+    # Space / defense / aviation
+    "RKLB": "Aerospace & Defense",
+    "LUNR": "Aerospace & Defense",
+    "ASTS": "Aerospace & Defense",
+    "KTOS": "Aerospace & Defense",
+
+    # EV / mobility
+    "TSLA": "Automobiles",
+    "RIVN": "Automobiles",
+    "LCID": "Automobiles",
+    "NIO": "Automobiles",
+    "XPEV": "Automobiles",
+    "LI": "Automobiles",
+    "JOBY": "Automobiles",
+    "ACHR": "Automobiles",
+
+    # Solar
+    "RUN": "Solar",
+    "CSIQ": "Solar",
+    "ENPH": "Solar",
+    "SEDG": "Solar",
+}
+
+
+def normalize_sector(raw_sector, symbol=None):
+    """Normalize Yahoo sector names into ETF-mapped sectors."""
+    symbol = str(symbol or "").upper()
+
+    if symbol in SYMBOL_SECTOR_OVERRIDES:
+        return SYMBOL_SECTOR_OVERRIDES[symbol]
+
+    s = str(raw_sector or "").strip()
+
+    if not s:
+        return "Unknown"
+
+    if s in SECTOR_ETFS:
+        return s
+
+    mapping = {
+        "Technology": "Technology",
+        "Financial Services": "Financial Services",
+        "Healthcare": "Healthcare",
+        "Industrials": "Industrials",
+        "Consumer Cyclical": "Consumer Cyclical",
+        "Consumer Defensive": "Consumer Defensive",
+        "Communication Services": "Communication Services",
+        "Energy": "Energy",
+        "Basic Materials": "Basic Materials",
+        "Real Estate": "Real Estate",
+        "Utilities": "Utilities",
+    }
+
+    return mapping.get(s, "Unknown")
+
+
+def fetch_sector_context(regime):
+    """
+    Fetch sector ETF same-day % change.
+    Lightweight sector-leadership context for stock-level scoring.
+    """
+    etfs = sorted(set(SECTOR_ETFS.values()) | {"SPY", "QQQ", "IWM", "SMH", "ARKK"})
+    context = {}
+
+    try:
+        t = Ticker(etfs, asynchronous=True)
+        prices = t.price
+
+        for etf in etfs:
+            q = prices.get(etf, {}) if isinstance(prices, dict) else {}
+            if not isinstance(q, dict):
+                continue
+
+            chg = (q.get("regularMarketChangePercent", 0) or 0) * 100
+            px = q.get("regularMarketPrice", 0) or 0
+
+            context[etf] = {
+                "change_pct": chg,
+                "price": px,
+            }
+
+    except Exception as e:
+        print(f"  Sector ETF context failed: {e}")
+
+    return context
+
+
+def build_symbol_sector_map(universe, profile_all):
+    """
+    Build symbol -> sector map from Yahoo summary_profile.
+    Fallback to overrides / Unknown.
+    """
+    symbol_sector = {}
+
+    for symbol in universe:
+        raw_sector = ""
+
+        try:
+            if isinstance(profile_all, dict):
+                profile = profile_all.get(symbol, {})
+                if isinstance(profile, dict):
+                    raw_sector = profile.get("sector", "") or ""
+        except Exception:
+            raw_sector = ""
+
+        symbol_sector[symbol] = normalize_sector(raw_sector, symbol)
+
+    return symbol_sector
+
+
+def score_sector_alignment(symbol, change_pct, sector, sector_context, regime):
+    """
+    Sector alignment overlay.
+    Returns score adjustment, reasons, data.
+
+    Professional intent:
+    - Reward stocks aligned with leading sectors.
+    - Modestly reward stocks outperforming their sector.
+    - Penalize stocks fighting weak/rotating-out sectors.
+    """
+    score = 0
+    reasons = []
+
+    sector = sector or "Unknown"
+    etf = SECTOR_ETFS.get(sector, "SPY")
+
+    sector_chg = sector_context.get(etf, {}).get("change_pct", 0)
+    spy_chg = regime.get("spy_change", 0)
+
+    stock_vs_sector = change_pct - sector_chg
+    sector_vs_spy = sector_chg - spy_chg
+
+    if sector == "Unknown":
+        sector_status = "UNKNOWN"
+    elif sector_vs_spy >= 0.75 and sector_chg > 0:
+        sector_status = "LEADING"
+    elif sector_vs_spy >= 0.25:
+        sector_status = "IMPROVING"
+    elif sector_vs_spy <= -0.75:
+        sector_status = "WEAK"
+    else:
+        sector_status = "NEUTRAL"
+
+    if sector_status == "LEADING" and stock_vs_sector >= 1.0:
+        score += 4
+        reasons.append("Sector leading")
+        reasons.append(f"Vs sector +{stock_vs_sector:.1f}%")
+    elif sector_status in ["LEADING", "IMPROVING"] and stock_vs_sector >= 0:
+        score += 2
+        reasons.append("Sector supportive")
+    elif sector_status == "WEAK" and stock_vs_sector < 0:
+        score -= 4
+        reasons.append("Sector weak")
+    elif sector_status == "WEAK":
+        score -= 2
+        reasons.append("Sector headwind")
+
+    data = {
+        "sector": sector,
+        "sector_etf": etf,
+        "sector_change_pct": round(sector_chg, 2),
+        "stock_vs_sector_pct": round(stock_vs_sector, 2),
+        "sector_vs_spy_pct": round(sector_vs_spy, 2),
+        "sector_status": sector_status,
+    }
+
+    return score, reasons, data
+
+
+
+# ==============================================================
 # HARD REJECT
 # ==============================================================
 
@@ -824,6 +1048,17 @@ def main():
         print(f"  Calendar fetch failed: {e}")
         calendar_all = {}
 
+    print(f"  Fetching company profiles for sector mapping...")
+    try:
+        profile_all = tickers.summary_profile
+    except Exception as e:
+        print(f"  Company profile fetch failed: {e}")
+        profile_all = {}
+
+    print(f"  Fetching sector ETF context...")
+    sector_context = fetch_sector_context(regime)
+    symbol_sector_map = build_symbol_sector_map(universe, profile_all)
+
     print(f"\n[Stage 5] Scoring with 7 layers + extension risk...\n")
     
     layer_stats = {name: {"hits": 0, "total_pts": 0, "max_seen": 0}
@@ -887,6 +1122,16 @@ def main():
             part_score, part_reasons = score_participation(symbol, key_stats_all, hist_df)
             soc_score, soc_reasons = score_social(symbol, social_map)
 
+            # Sector / industry alignment overlay
+            sector = symbol_sector_map.get(symbol, "Unknown")
+            sector_score, sector_reasons, sector_data = score_sector_alignment(
+                symbol=symbol,
+                change_pct=change_pct,
+                sector=sector,
+                sector_context=sector_context,
+                regime=regime,
+            )
+
             # Track diagnostics
             for name, score in [("catalyst", cat_score), ("momentum", mom_score),
                                  ("execution", exec_score), ("squeeze", sq_score),
@@ -913,7 +1158,8 @@ def main():
             if regime.get("smallcap_caution") and float_M < 500 and change_pct > 0:
                 regime_penalty = -5
             
-            final_score = base_total + ext_penalty + regime_penalty
+            final_score = base_total + ext_penalty + regime_penalty + sector_score
+            final_score = max(0, min(100, final_score))
 
             # Distribution tracking
             if final_score < 10:
@@ -950,7 +1196,8 @@ def main():
 
             # Build tags
             all_reasons = (cat_reasons + mom_reasons + exec_reasons + sq_reasons +
-                           rs_reasons + tech_reasons + part_reasons + soc_reasons)
+                           rs_reasons + tech_reasons + part_reasons + soc_reasons +
+                           sector_reasons)
             
             # Add special tags
             if is_earnings_reaction:
@@ -963,6 +1210,14 @@ def main():
             results.append({
                 "tier": tier,
                 "symbol": symbol,
+                "company_name": q.get("shortName") or q.get("longName") or symbol,
+                "sector": sector_data.get("sector", "Unknown"),
+                "sector_etf": sector_data.get("sector_etf", "SPY"),
+                "sector_change_pct": sector_data.get("sector_change_pct", 0),
+                "stock_vs_sector_pct": sector_data.get("stock_vs_sector_pct", 0),
+                "sector_vs_spy_pct": sector_data.get("sector_vs_spy_pct", 0),
+                "sector_status": sector_data.get("sector_status", "UNKNOWN"),
+                "sector_score": sector_score,
                 "price": round(price, 2),
                 "change_pct": round(change_pct, 2),
                 "score": final_score,
