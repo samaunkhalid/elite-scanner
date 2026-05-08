@@ -270,7 +270,7 @@ def format_money_m(value):
     return "—"
 
 
-def build_tags(stock, max_tags=5):
+def build_tags(stock, max_tags=4):
     tags = safe_str(stock.get("tags"), "")
     if not tags:
         return ""
@@ -335,7 +335,7 @@ def build_card(stock):
         )
 
     squeeze_html = ""
-    if short_pct >= 15 or float_m > 0 or days_to_cover >= 3:
+    if short_pct >= 15 or days_to_cover >= 4:
         squeeze_html = f"""
         <div class="mini-panel">
             <div class="mini-row"><span>Short %</span><strong>{short_pct:.0f}%</strong></div>
@@ -649,7 +649,9 @@ body {
         radial-gradient(circle at top right, rgba(16, 185, 129, 0.10), transparent 28%),
         linear-gradient(180deg, #05070b 0%, #080b12 100%);
     color: #e5e7eb;
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, sans-serif;
+    font-weight: 400;
+    line-height: 1.45;
     min-height: 100vh;
     padding-bottom: 44px;
 }
@@ -674,8 +676,8 @@ body {
 }
 
 .title h1 {
-    font-size: 19px;
-    font-weight: 750;
+    font-size: 20px;
+    font-weight: 700;
     letter-spacing: -0.02em;
 }
 
@@ -683,6 +685,7 @@ body {
     color: #94a3b8;
     font-size: 12px;
     margin-top: 3px;
+    line-height: 1.4;
 }
 
 .header-meta {
@@ -698,7 +701,7 @@ body {
 .status-pill {
     padding: 5px 11px;
     border-radius: 999px;
-    font-weight: 700;
+    font-weight: 650;
     border: 1px solid rgba(148, 163, 184, 0.18);
 }
 
@@ -728,12 +731,14 @@ body {
 .regime-banner strong {
     display: block;
     font-size: 15px;
+    font-weight: 700;
     margin-bottom: 4px;
 }
 
 .regime-banner span {
     color: #94a3b8;
     font-size: 12px;
+    line-height: 1.4;
 }
 
 .regime-banner.bullish { border-left: 4px solid #10b981; }
@@ -778,6 +783,7 @@ body {
 .kpi-card label {
     color: #94a3b8;
     font-size: 11px;
+    font-weight: 500;
     text-transform: uppercase;
     letter-spacing: 0.06em;
     margin-top: 5px;
@@ -809,15 +815,15 @@ body {
 
 .desk-section,
 .desk-table-section {
-    margin-bottom: 22px;
+    margin-bottom: 24px;
 }
 
 .section-header {
     background: rgba(15, 23, 42, 0.86);
     border: 1px solid rgba(148, 163, 184, 0.12);
     border-radius: 12px;
-    padding: 13px 16px;
-    margin-bottom: 12px;
+    padding: 16px 18px;
+    margin-bottom: 14px;
     display: flex;
     justify-content: space-between;
     align-items: center;
@@ -825,14 +831,17 @@ body {
 }
 
 .section-header h2 {
-    font-size: 15px;
+    font-size: 16px;
+    font-weight: 700;
     letter-spacing: -0.01em;
 }
 
 .section-header p {
     color: #94a3b8;
-    font-size: 12px;
-    margin-top: 3px;
+    font-size: 13px;
+    font-weight: 400;
+    margin-top: 4px;
+    line-height: 1.45;
 }
 
 .section-count {
@@ -845,22 +854,22 @@ body {
     justify-content: center;
     background: rgba(148, 163, 184, 0.10);
     color: #e2e8f0;
-    font-weight: 800;
+    font-weight: 750;
     font-size: 12px;
 }
 
 .cards-grid {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(330px, 1fr));
-    gap: 12px;
+    gap: 16px;
 }
 
 .stock-card {
-    border-radius: 14px;
+    border-radius: 16px;
     border: 1px solid rgba(148, 163, 184, 0.13);
     border-top: 2px solid var(--accent);
     background: rgba(15, 23, 42, 0.78);
-    padding: 14px;
+    padding: 18px;
     box-shadow: 0 12px 30px rgba(0, 0, 0, 0.22);
 }
 
@@ -883,14 +892,15 @@ body {
 }
 
 .symbol {
-    font-size: 22px;
-    font-weight: 850;
+    font-size: 24px;
+    font-weight: 800;
     letter-spacing: -0.03em;
 }
 
 .sector,
 .tier {
     font-size: 10px;
+    font-weight: 500;
     padding: 2px 6px;
     border-radius: 999px;
     border: 1px solid rgba(148, 163, 184, 0.18);
@@ -899,13 +909,15 @@ body {
 
 .bucket-label {
     color: #94a3b8;
-    font-size: 11px;
-    margin-top: 4px;
+    font-size: 12px;
+    font-weight: 400;
+    margin-top: 5px;
+    line-height: 1.35;
 }
 
 .score-box {
     font-size: 25px;
-    font-weight: 900;
+    font-weight: 850;
 }
 
 .price-row {
@@ -919,46 +931,49 @@ body {
 
 .price {
     font-size: 18px;
-    font-weight: 800;
+    font-weight: 750;
 }
 
 .change {
-    font-size: 13px;
-    font-weight: 800;
+    font-size: 14px;
+    font-weight: 700;
 }
 
 .catalyst-strip {
-    margin: 10px 0;
-    padding: 9px 10px;
+    margin: 12px 0;
+    padding: 10px 11px;
     border-radius: 9px;
     border: 1px solid rgba(148, 163, 184, 0.14);
     background: rgba(2, 6, 23, 0.52);
 }
 
 .catalyst-label {
-    font-size: 11px;
-    font-weight: 850;
+    font-size: 12px;
+    font-weight: 650;
     letter-spacing: 0.02em;
-    line-height: 1.35;
+    line-height: 1.4;
 }
 
 .catalyst-headline {
-    font-size: 11px;
+    font-size: 12px;
     color: #cbd5e1;
-    margin-top: 5px;
-    line-height: 1.35;
+    margin-top: 6px;
+    line-height: 1.45;
 }
 
 .catalyst-source {
     color: #94a3b8;
     font-size: 10px;
+    font-weight: 400;
     margin-top: 5px;
+    line-height: 1.35;
 }
 
 .risk-flags {
     color: #fca5a5;
     font-size: 10px;
     margin-top: 5px;
+    line-height: 1.35;
 }
 
 .catalyst-positive {
@@ -988,33 +1003,37 @@ body {
 .metrics-grid {
     display: grid;
     grid-template-columns: repeat(4, 1fr);
-    gap: 6px;
-    margin-top: 10px;
+    gap: 8px;
+    margin-top: 12px;
 }
 
 .metrics-grid div {
     background: rgba(2, 6, 23, 0.45);
     border: 1px solid rgba(148, 163, 184, 0.10);
     border-radius: 8px;
-    padding: 8px 7px;
+    padding: 9px 9px;
 }
 
 .metrics-grid span {
     display: block;
     color: #94a3b8;
     font-size: 10px;
+    font-weight: 400;
     margin-bottom: 3px;
+    line-height: 1.35;
 }
 
 .metrics-grid strong {
-    font-size: 11px;
+    font-size: 12px;
+    font-weight: 650;
+    line-height: 1.35;
 }
 
 .status-row {
     display: flex;
-    gap: 6px;
+    gap: 7px;
     flex-wrap: wrap;
-    margin-top: 10px;
+    margin-top: 12px;
 }
 
 .status-chip,
@@ -1023,9 +1042,10 @@ body {
     color: #93c5fd;
     border: 1px solid rgba(59, 130, 246, 0.20);
     border-radius: 999px;
-    padding: 3px 8px;
+    padding: 4px 9px;
     font-size: 10px;
-    font-weight: 700;
+    font-weight: 600;
+    line-height: 1.2;
 }
 
 .risk-chip {
@@ -1035,29 +1055,29 @@ body {
 }
 
 .interpretation {
-    margin-top: 10px;
+    margin-top: 12px;
     background: rgba(56, 189, 248, 0.06);
     border: 1px solid rgba(56, 189, 248, 0.10);
     border-radius: 8px;
-    padding: 8px 9px;
+    padding: 10px 11px;
     color: #cbd5e1;
-    font-size: 11px;
-    line-height: 1.35;
+    font-size: 12px;
+    line-height: 1.5;
 }
 
 .tags-row {
     display: flex;
-    gap: 5px;
+    gap: 7px;
     flex-wrap: wrap;
-    margin-top: 10px;
+    margin-top: 12px;
 }
 
 .mini-panel {
-    margin-top: 10px;
+    margin-top: 12px;
     background: rgba(239, 68, 68, 0.06);
     border: 1px solid rgba(239, 68, 68, 0.12);
     border-radius: 8px;
-    padding: 8px 9px;
+    padding: 9px 10px;
 }
 
 .mini-row {
@@ -1066,17 +1086,19 @@ body {
     color: #94a3b8;
     font-size: 11px;
     padding: 2px 0;
+    line-height: 1.4;
 }
 
 .mini-row strong {
     color: #e5e7eb;
+    font-weight: 650;
 }
 
 .card-actions {
     display: grid;
     grid-template-columns: repeat(3, 1fr);
-    gap: 6px;
-    margin-top: 12px;
+    gap: 8px;
+    margin-top: 14px;
 }
 
 .card-actions a {
@@ -1085,7 +1107,7 @@ body {
     background: rgba(15, 23, 42, 0.9);
     border: 1px solid rgba(148, 163, 184, 0.12);
     border-radius: 7px;
-    padding: 7px 8px;
+    padding: 8px 8px;
     text-decoration: none;
     font-size: 11px;
 }
@@ -1122,6 +1144,7 @@ th {
     text-align: left;
     color: #94a3b8;
     font-size: 10px;
+    font-weight: 650;
     text-transform: uppercase;
     letter-spacing: 0.06em;
     padding: 10px;
@@ -1134,11 +1157,13 @@ td {
     font-size: 11px;
     color: #cbd5e1;
     vertical-align: top;
+    line-height: 1.4;
 }
 
 .footer-note {
     color: #64748b;
     font-size: 11px;
+    font-weight: 400;
     text-align: center;
     margin-top: 22px;
 }
