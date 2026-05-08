@@ -1,11 +1,11 @@
 {
-  "spy_change": 0.7326588,
-  "qqq_change": 1.8375715000000001,
-  "iwm_change": 0.43932334999999995,
-  "vix_level": 17.29,
-  "vix_change": 1.229514,
+  "spy_change": 0.8051004,
+  "qqq_change": 2.0908264,
+  "iwm_change": 0.8609057,
+  "vix_level": 17.5,
+  "vix_change": 2.4590168,
   "regime": "BULLISH",
   "bias": "LONG_FAVORED",
-  "label": "\ud83d\udfe2 Bullish (+0.7%)",
+  "label": "\ud83d\udfe2 Bullish (+0.8%)",
   "smallcap_caution": false
 }
