@@ -1037,7 +1037,7 @@ def main():
                 intraday_score, intraday_reasons = alpaca.score_intraday_position(rt)
                 
                 # Update final score
-                stock["score"] += intraday_score
+                stock["score"] += istock["score"] = min(100, stock["score"] + intraday_score)ntraday_score
                 stock["intraday_score"] = intraday_score
                 
                 # Add intraday fields
