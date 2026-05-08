@@ -1,217 +1,296 @@
 """
-ALPACA IEX DATA FEED
-====================
-Real-time Level 1 data from IEX exchange (free tier).
+alpaca_feed.py
+---------------
+Alpaca IEX real-time / intraday enrichment for elite_scanner.py.
 
-Important: IEX represents ~2-3% of total market volume.
-Volume/RVOL calculations are proxy only, not full market consolidated data.
+Uses:
+- GitHub Secrets / environment variables:
+  ALPACA_API_KEY
+  ALPACA_SECRET_KEY
+
+Data:
+- IEX feed only
+- Non-consolidated volume
+- Good for live price/VWAP proxy/HOD/LOD scanning prototype
 """
 
 import os
-from datetime import datetime, timedelta
-import pandas as pd
+import time
+import requests
+from datetime import datetime, timedelta, timezone
 
 try:
-    from alpaca.data import StockHistoricalDataClient
-    from alpaca.data.requests import StockBarsRequest, StockLatestQuoteRequest
-    from alpaca.data.timeframe import TimeFrame
-    ALPACA_AVAILABLE = True
-except ImportError:
-    ALPACA_AVAILABLE = False
-    print("  ⚠️ alpaca-py not installed. Run: pip install alpaca-py")
+    from zoneinfo import ZoneInfo
+except Exception:
+    ZoneInfo = None
 
 
 class AlpacaFeed:
-    """Fetch real-time IEX data for intraday potential mover detection."""
-    
-    def __init__(self, api_key=None, secret_key=None):
-        if not ALPACA_AVAILABLE:
-            raise ImportError("alpaca-py not installed")
-        
-        # Get from environment if not provided
-        self.api_key = api_key or os.getenv("ALPACA_API_KEY")
-        self.secret_key = secret_key or os.getenv("ALPACA_SECRET_KEY")
-        
+    def __init__(self):
+        self.api_key = os.getenv("ALPACA_API_KEY")
+        self.secret_key = os.getenv("ALPACA_SECRET_KEY")
+
+        self.base_url = "https://data.alpaca.markets/v2"
+
+        self.headers = {
+            "APCA-API-KEY-ID": self.api_key or "",
+            "APCA-API-SECRET-KEY": self.secret_key or "",
+        }
+
         if not self.api_key or not self.secret_key:
-            raise ValueError("Alpaca API credentials not found")
-        
-        self.client = StockHistoricalDataClient(self.api_key, self.secret_key)
-    
-    def get_intraday_data(self, symbols, lookback_hours=6):
+            print("  ⚠️ Alpaca credentials missing inside AlpacaFeed")
+
+    def _ny_now(self):
+        if ZoneInfo:
+            return datetime.now(ZoneInfo("America/New_York"))
+        return datetime.now()
+
+    def _get_intraday_window_utc(self):
         """
-        Get real-time intraday data for multiple symbols.
-        
-        Returns dict with:
-        - price: current price
-        - vwap: today's VWAP
-        - vwap_dist_pct: % distance from VWAP
-        - hod/lod: high/low of day
-        - from_hod_pct: % below high
-        - intraday_volume: total IEX volume today
-        - bars_count: number of 1-min bars
+        Use today's US session window from 4:00 AM ET to now.
+        Works for pre-market, regular session, and after-hours.
         """
-        print(f"  Fetching Alpaca IEX data for {len(symbols)} symbols...")
-        
-        results = {}
-        
-        # Market open/close times (ET)
-        now = datetime.now()
-        market_open = now.replace(hour=9, minute=30, second=0, microsecond=0)
-        
-        # If before market open, use yesterday
-        if now < market_open:
-            market_open = market_open - timedelta(days=1)
-        
-        # Get 1-minute bars
-        try:
-            request = StockBarsRequest(
-                symbol_or_symbols=symbols,
-                timeframe=TimeFrame.Minute,
-                start=market_open,
-                end=now
+        now_ny = self._ny_now()
+
+        # If it is very early before 4 AM ET, use prior calendar day.
+        # This is simple; later you can improve weekend/holiday handling.
+        session_date = now_ny.date()
+        if now_ny.hour < 4:
+            session_date = session_date - timedelta(days=1)
+
+        if ZoneInfo:
+            start_ny = datetime(
+                session_date.year,
+                session_date.month,
+                session_date.day,
+                4,
+                0,
+                tzinfo=ZoneInfo("America/New_York"),
             )
-            
-            bars_response = self.client.get_stock_bars(request)
-            
-            for symbol in symbols:
-                try:
-                    if symbol not in bars_response:
-                        continue
-                    
-                    # Convert to dataframe
-                    bars_df = bars_response[symbol].df.reset_index()
-                    
-                    if len(bars_df) == 0:
-                        continue
-                    
-                    # Calculate VWAP
-                    bars_df['typical_price'] = (bars_df['high'] + bars_df['low'] + bars_df['close']) / 3
-                    bars_df['pv'] = bars_df['typical_price'] * bars_df['volume']
-                    
-                    total_pv = bars_df['pv'].sum()
-                    total_vol = bars_df['volume'].sum()
-                    vwap = total_pv / total_vol if total_vol > 0 else 0
-                    
-                    # Current metrics
-                    current_price = float(bars_df['close'].iloc[-1])
-                    hod = float(bars_df['high'].max())
-                    lod = float(bars_df['low'].min())
-                    
-                    # Calculate distances
-                    vwap_dist_pct = ((current_price - vwap) / vwap * 100) if vwap > 0 else 0
-                    from_hod_pct = ((hod - current_price) / hod * 100) if hod > 0 else 0
-                    from_lod_pct = ((current_price - lod) / lod * 100) if lod > 0 else 0
-                    
-                    # Opening price (first bar)
-                    open_price = float(bars_df['open'].iloc[0])
-                    
-                    # Price action flags
-                    above_vwap = current_price > vwap
-                    near_hod = from_hod_pct < 2  # Within 2% of HOD
-                    near_lod = from_lod_pct < 2
-                    
-                    results[symbol] = {
-                        'symbol': symbol,
-                        'price': round(current_price, 2),
-                        'open_price': round(open_price, 2),
-                        'vwap': round(vwap, 2),
-                        'vwap_dist_pct': round(vwap_dist_pct, 2),
-                        'above_vwap': above_vwap,
-                        'hod': round(hod, 2),
-                        'lod': round(lod, 2),
-                        'from_hod_pct': round(from_hod_pct, 2),
-                        'from_lod_pct': round(from_lod_pct, 2),
-                        'near_hod': near_hod,
-                        'near_lod': near_lod,
-                        'intraday_volume': int(total_vol),
-                        'bars_count': len(bars_df),
-                        'data_source': 'IEX',
-                    }
-                    
-                except Exception as e:
-                    print(f"    Error processing {symbol}: {e}")
-                    continue
-            
-            print(f"  ✓ Got intraday data for {len(results)} symbols")
-            
-        except Exception as e:
-            print(f"  ✗ Alpaca API error: {e}")
-        
-        return results
-    
-    def score_intraday_position(self, symbol_data):
+            end_ny = now_ny
+            start_utc = start_ny.astimezone(timezone.utc)
+            end_utc = end_ny.astimezone(timezone.utc)
+        else:
+            # Fallback: approximate ET as UTC-5/UTC-4 not handled perfectly.
+            # This should rarely be used on GitHub runners with Python 3.11+.
+            start_utc = datetime.utcnow().replace(hour=9, minute=0, second=0, microsecond=0)
+            end_utc = datetime.utcnow()
+
+        return start_utc.isoformat().replace("+00:00", "Z"), end_utc.isoformat().replace("+00:00", "Z")
+
+    def _chunks(self, symbols, size=20):
+        for i in range(0, len(symbols), size):
+            yield symbols[i:i + size]
+
+    def _fetch_bars_batch(self, symbols):
         """
-        Score a stock's intraday position for potential mover detection.
-        
-        Returns (score, reasons) where score is 0-20 points.
+        Fetch 1-minute IEX bars for a batch of symbols.
+        Handles Alpaca pagination.
+        """
+        if not symbols:
+            return {}
+
+        start, end = self._get_intraday_window_utc()
+        url = f"{self.base_url}/stocks/bars"
+
+        all_bars = {}
+        page_token = None
+
+        while True:
+            params = {
+                "symbols": ",".join(symbols),
+                "timeframe": "1Min",
+                "start": start,
+                "end": end,
+                "limit": 10000,
+                "adjustment": "raw",
+                "feed": "iex",
+                "sort": "asc",
+            }
+
+            if page_token:
+                params["page_token"] = page_token
+
+            try:
+                r = requests.get(
+                    url,
+                    headers=self.headers,
+                    params=params,
+                    timeout=20,
+                )
+
+                if r.status_code != 200:
+                    print(f"  ⚠️ Alpaca bars error {r.status_code}: {r.text[:300]}")
+                    return all_bars
+
+                data = r.json()
+                bars = data.get("bars", {}) or {}
+
+                for sym, sym_bars in bars.items():
+                    if sym not in all_bars:
+                        all_bars[sym] = []
+                    all_bars[sym].extend(sym_bars or [])
+
+                page_token = data.get("next_page_token")
+                if not page_token:
+                    break
+
+                time.sleep(0.15)
+
+            except Exception as e:
+                print(f"  ⚠️ Alpaca bars request failed: {e}")
+                break
+
+        return all_bars
+
+    def get_intraday_data(self, symbols):
+        """
+        Return dict keyed by symbol with:
+        vwap, above_vwap, hod/lod, from_hod_pct, near_hod, volume, etc.
+        """
+        if not self.api_key or not self.secret_key:
+            print("  ⚠️ Alpaca keys unavailable; returning empty intraday data")
+            return {}
+
+        symbols = [s for s in symbols if isinstance(s, str) and s.strip()]
+        symbols = list(dict.fromkeys(symbols))  # de-duplicate, preserve order
+
+        print(f"  Requesting Alpaca IEX bars for {len(symbols)} symbols...")
+
+        output = {}
+
+        for batch in self._chunks(symbols, size=20):
+            batch_bars = self._fetch_bars_batch(batch)
+
+            for symbol, bars in batch_bars.items():
+                if not bars:
+                    continue
+
+                # Sort just in case
+                bars = sorted(bars, key=lambda x: x.get("t", ""))
+
+                last = bars[-1]
+                last_price = last.get("c")
+                if not last_price:
+                    continue
+
+                highs = [b.get("h", 0) for b in bars if b.get("h") is not None]
+                lows = [b.get("l", 0) for b in bars if b.get("l") is not None]
+                vols = [b.get("v", 0) or 0 for b in bars]
+
+                hod = max(highs) if highs else last_price
+                lod = min(lows) if lows else last_price
+                intraday_volume = sum(vols)
+
+                # VWAP proxy from Alpaca bar VWAP if available; otherwise close*volume.
+                vwap_num = 0.0
+                vwap_den = 0.0
+
+                for b in bars:
+                    v = b.get("v", 0) or 0
+                    vw = b.get("vw")
+                    c = b.get("c")
+
+                    if v > 0:
+                        if vw is not None:
+                            vwap_num += float(vw) * v
+                        elif c is not None:
+                            vwap_num += float(c) * v
+                        vwap_den += v
+
+                vwap = (vwap_num / vwap_den) if vwap_den > 0 else last_price
+
+                vwap_dist_pct = ((last_price - vwap) / vwap * 100) if vwap else 0
+                above_vwap = last_price >= vwap if vwap else False
+
+                from_hod_pct = ((last_price - hod) / hod * 100) if hod else 0
+                near_hod = from_hod_pct >= -1.0
+
+                day_range = hod - lod
+                if day_range > 0:
+                    range_position = (last_price - lod) / day_range
+                else:
+                    range_position = 0.5
+
+                # Simple compression proxy: last 20 bars range vs price
+                recent_bars = bars[-20:] if len(bars) >= 20 else bars
+                recent_high = max([b.get("h", 0) for b in recent_bars if b.get("h") is not None], default=last_price)
+                recent_low = min([b.get("l", 0) for b in recent_bars if b.get("l") is not None], default=last_price)
+                recent_range_pct = ((recent_high - recent_low) / last_price * 100) if last_price else 0
+
+                output[symbol] = {
+                    "last_price": round(float(last_price), 4),
+                    "vwap": round(float(vwap), 4),
+                    "vwap_dist_pct": round(float(vwap_dist_pct), 2),
+                    "above_vwap": bool(above_vwap),
+                    "hod": round(float(hod), 4),
+                    "lod": round(float(lod), 4),
+                    "from_hod_pct": round(float(from_hod_pct), 2),
+                    "near_hod": bool(near_hod),
+                    "range_position": round(float(range_position), 3),
+                    "intraday_volume": int(intraday_volume),
+                    "recent_range_pct": round(float(recent_range_pct), 2),
+                    "bar_count": len(bars),
+                    "last_bar_time": last.get("t"),
+                    "source": "alpaca_iex",
+                }
+
+            time.sleep(0.2)
+
+        print(f"  Alpaca returned intraday data for {len(output)} symbols")
+        return output
+
+    def score_intraday_position(self, rt):
+        """
+        Intraday score: 0-20.
+        This rewards potential continuation, not just biggest movers.
         """
         score = 0
         reasons = []
-        
-        # VWAP position (0-8 points)
-        vwap_dist = abs(symbol_data['vwap_dist_pct'])
-        
-        if symbol_data['above_vwap']:
-            if vwap_dist < 1:
-                score += 6
-                reasons.append("Tight to VWAP ↑")
-            elif vwap_dist < 2:
-                score += 4
-                reasons.append("Above VWAP")
-            elif vwap_dist < 4:
-                score += 2
-        else:
-            if vwap_dist < 1:
-                score += 4
-                reasons.append("Tight to VWAP ↓")
-            elif vwap_dist < 2:
-                score += 2
-        
-        # Near breakout (0-6 points)
-        if symbol_data['near_hod']:
-            score += 6
-            reasons.append("Near HOD")
-        elif symbol_data['from_hod_pct'] < 5:
+
+        above_vwap = rt.get("above_vwap", False)
+        vwap_dist = rt.get("vwap_dist_pct", 0) or 0
+        range_pos = rt.get("range_position", 0.5) or 0.5
+        near_hod = rt.get("near_hod", False)
+        from_hod = rt.get("from_hod_pct", 0) or 0
+        recent_range_pct = rt.get("recent_range_pct", 99) or 99
+        bar_count = rt.get("bar_count", 0) or 0
+
+        # Need enough bars to trust the intraday read
+        if bar_count < 5:
+            return 0, ["IEX data thin"]
+
+        # VWAP control
+        if above_vwap and 0 <= vwap_dist <= 4:
+            score += 5
+            reasons.append("Above VWAP")
+        elif above_vwap:
+            score += 2
+            reasons.append("Above VWAP extended")
+
+        # Range position
+        if range_pos >= 0.75:
+            score += 5
+            reasons.append("Upper range")
+        elif range_pos >= 0.60:
             score += 3
-        
-        # Compression detection (0-6 points)
-        # If near both HOD and VWAP = coiling
-        if symbol_data['near_hod'] and vwap_dist < 2:
-            score += 6
-            reasons.append("Compression ⚡")
-        
-        return min(score, 20), reasons
 
+        # Near HOD, but not too far stretched
+        if near_hod and from_hod >= -1.0:
+            score += 4
+            reasons.append("Near HOD")
 
-def test_alpaca_feed():
-    """Test function to verify Alpaca integration."""
-    print("\n" + "="*60)
-    print("TESTING ALPACA IEX FEED")
-    print("="*60)
-    
-    try:
-        feed = AlpacaFeed()
-        
-        # Test with a few liquid symbols
-        test_symbols = ["AAPL", "TSLA", "NVDA", "SPY"]
-        
-        data = feed.get_intraday_data(test_symbols)
-        
-        for symbol, info in data.items():
-            score, reasons = feed.score_intraday_position(info)
-            
-            print(f"\n{symbol}:")
-            print(f"  Price: ${info['price']} | VWAP: ${info['vwap']} ({info['vwap_dist_pct']:+.1f}%)")
-            print(f"  Range: ${info['lod']} - ${info['hod']}")
-            print(f"  From HOD: {info['from_hod_pct']:.1f}%")
-            print(f"  Volume: {info['intraday_volume']:,} bars")
-            print(f"  Intraday Score: {score}/20 - {' · '.join(reasons)}")
-        
-        print("\n✓ Alpaca feed working correctly")
-        
-    except Exception as e:
-        print(f"\n✗ Test failed: {e}")
+        # Compression near highs
+        if recent_range_pct <= 1.0 and range_pos >= 0.60:
+            score += 4
+            reasons.append("Tight consolidation")
+        elif recent_range_pct <= 1.8 and range_pos >= 0.60:
+            score += 2
+            reasons.append("Consolidating")
 
+        # Avoid huge VWAP extension
+        if vwap_dist > 8:
+            score -= 4
+            reasons.append("Far above VWAP")
 
-if __name__ == "__main__":
-    test_alpaca_feed()
+        return max(0, min(score, 20)), reasons
