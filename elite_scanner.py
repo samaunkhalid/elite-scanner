@@ -1153,10 +1153,9 @@ def main():
 
     # Main active watchlist should prioritize potential movers first
     active_watchlist = pd.concat([
-        potential_df.head(12),
-        active_df.head(5),
-        monitor_df.head(3)
-    ]).head(20)
+    potential_df.head(8),
+    active_df.head(2)
+]).head(10)
 
     print(f"\n{'=' * 70}")
     print(f"  RAW SCORED UNIVERSE: {len(df)} names")
@@ -1207,10 +1206,10 @@ def main():
     active_watchlist.to_csv("elite_watchlist.csv", index=False)
     active_watchlist.to_json("elite_watchlist.json", orient="records", indent=2)
 
-    potential_df.head(20).to_csv("potential_movers.csv", index=False)
-    active_df.head(20).to_csv("active_momentum.csv", index=False)
-    extended_df.head(20).to_csv("extended_movers.csv", index=False)
-    highrisk_df.head(20).to_csv("high_risk_movers.csv", index=False)
+    potential_df.head(10).to_csv("potential_movers.csv", index=False)
+    active_df.head(10).to_csv("active_momentum.csv", index=False)
+    extended_df.head(10).to_csv("extended_movers.csv", index=False)
+    highrisk_df.head(10).to_csv("high_risk_movers.csv", index=False)
 
     with open("market_regime.json", "w") as f:
         json.dump(regime, f, indent=2)
