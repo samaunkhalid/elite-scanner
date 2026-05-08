@@ -999,13 +999,32 @@ def main():
     # =================================================================
     print(f"\n[Stage 6] Enriching top candidates with Alpaca IEX real-time data...\n")
     
+    # Debug: Check if API keys are available
+    import os
+    alpaca_key = os.getenv("ALPACA_API_KEY")
+    alpaca_secret = os.getenv("ALPACA_SECRET_KEY")
+    
+    if alpaca_key:
+        print(f"  ✓ ALPACA_API_KEY found (length: {len(alpaca_key)})")
+    else:
+        print(f"  ✗ ALPACA_API_KEY not found in environment")
+    
+    if alpaca_secret:
+        print(f"  ✓ ALPACA_SECRET_KEY found (length: {len(alpaca_secret)})")
+    else:
+        print(f"  ✗ ALPACA_SECRET_KEY not found in environment")
+    
     try:
         from alpaca_feed import AlpacaFeed
+        print(f"  ✓ alpaca_feed module imported successfully")
         
         # Only enrich top 100 to save API calls
         top_100_symbols = [r["symbol"] for r in results[:100]]
+        print(f"  ✓ Preparing to enrich top {len(top_100_symbols)} symbols")
         
         alpaca = AlpacaFeed()
+        print(f"  ✓ AlpacaFeed initialized")
+        
         intraday_data = alpaca.get_intraday_data(top_100_symbols)
         
         # Enrich results with intraday metrics
