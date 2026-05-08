@@ -22,6 +22,7 @@ Display:
   - Catalyst strip
   - Meaning-based tag colors
   - Last scan time and market status
+  - Dashboard hides Extended / High Risk sections from the main decision screen
 """
 
 import json
@@ -735,8 +736,6 @@ def build_kpi_row(potential, active, extended, highrisk, raw, active_watchlist):
         <div class="kpi-card focus"><span>{total_focus}</span><label>Active Watchlist</label></div>
         <div class="kpi-card potential"><span>{len(potential)}</span><label>Potential</label></div>
         <div class="kpi-card active"><span>{len(active)}</span><label>Active Momentum</label></div>
-        <div class="kpi-card extended"><span>{len(extended)}</span><label>Extended</label></div>
-        <div class="kpi-card risk"><span>{len(highrisk)}</span><label>High Risk</label></div>
         <div class="kpi-card"><span>{len(raw)}</span><label>Raw Scored</label></div>
         <div class="kpi-card"><span>{avg_score:.0f}</span><label>Avg Score</label></div>
     </div>
@@ -951,11 +950,12 @@ def build_dashboard(potential, active, extended, highrisk, raw, active_watchlist
     regime_html = build_regime_html(regime)
     kpi_html = build_kpi_row(potential, active, extended, highrisk, raw, active_watchlist)
 
+    # Main decision screen intentionally excludes Extended / High Risk names.
+    # They are still generated and saved by the scanner for diagnostics,
+    # but the dashboard focuses on actionable candidates only.
     focus_rows = []
     focus_rows.extend(potential[:10])
     focus_rows.extend(active[:10])
-    focus_rows.extend(extended[:10])
-    focus_rows.extend(highrisk[:10])
 
     sector_snapshot = build_sector_snapshot(raw, focus_rows, regime)
 
@@ -972,22 +972,6 @@ def build_dashboard(potential, active, extended, highrisk, raw, active_watchlist
         "Already moving. Wait for pullback or tight consolidation before entry.",
         active,
         "section-active",
-        max_cards=10,
-    )
-
-    extended_section = build_section(
-        "Extended / Chase Risk",
-        "Already stretched. Avoid chasing; use only as monitor list.",
-        extended,
-        "section-extended",
-        max_cards=10,
-    )
-
-    highrisk_section = build_section(
-        "High Risk / Extreme",
-        "Volatile or news-risk names. Monitor only unless intentionally trading high-risk momentum.",
-        highrisk,
-        "section-risk",
         max_cards=10,
     )
 
@@ -1727,19 +1711,15 @@ td small {
     <div class="nav-tabs">
         <a href="#potential">Potential Movers</a>
         <a href="#active">Active Momentum</a>
-        <a href="#extended">Extended Risk</a>
-        <a href="#risk">High Risk</a>
         <a href="#desk">Desk View</a>
     </div>
 
     <div id="potential">$potential_section</div>
     <div id="active">$active_section</div>
-    <div id="extended">$extended_section</div>
-    <div id="risk">$highrisk_section</div>
     <div id="desk">$desk_table</div>
 
     <div class="footer-note">
-        Static dashboard. Data updates only when GitHub Actions runs and rebuilds dashboard.html. Alpaca IEX volume is non-consolidated; confirm spread, liquidity, VWAP, and news manually before execution.
+        Static dashboard. Data updates only when GitHub Actions runs and rebuilds dashboard.html. Extended/high-risk names are saved in CSV but hidden from this decision view. Alpaca IEX volume is non-consolidated; confirm spread, liquidity, VWAP, and news manually before execution.
     </div>
 </main>
 
@@ -1756,8 +1736,6 @@ td small {
         kpi_html=kpi_html,
         potential_section=potential_section,
         active_section=active_section,
-        extended_section=extended_section,
-        highrisk_section=highrisk_section,
         desk_table=desk_table,
     )
 
@@ -1804,8 +1782,8 @@ def main():
 
     print(f"  Potential Movers:       {len(potential)}")
     print(f"  Active Momentum:        {len(active)}")
-    print(f"  Extended / Chase Risk:  {len(extended)}")
-    print(f"  High Risk / Extreme:    {len(highrisk)}")
+    print(f"  Extended / Chase Risk:  {len(extended)} (generated, hidden on dashboard)")
+    print(f"  High Risk / Extreme:    {len(highrisk)} (generated, hidden on dashboard)")
     print(f"  Raw Scored:             {len(raw)}")
     print(f"  Active Watchlist:       {len(active_watchlist)}")
 
