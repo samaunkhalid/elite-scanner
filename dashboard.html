@@ -460,6 +460,27 @@ body {
     line-height: 1.35;
 }
 
+
+.metric-good {
+    color: #34d399 !important;
+}
+
+.metric-ok {
+    color: #60a5fa !important;
+}
+
+.metric-neutral {
+    color: #cbd5e1 !important;
+}
+
+.metric-caution {
+    color: #fbbf24 !important;
+}
+
+.metric-risk {
+    color: #f87171 !important;
+}
+
 .status-row {
     display: flex;
     gap: 7px;
@@ -564,7 +585,12 @@ body {
     margin-top: 14px;
 }
 
-.card-actions a {
+.card-actions a,
+.action-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 7px;
     text-align: center;
     color: #cbd5e1;
     background: rgba(15, 23, 42, 0.9);
@@ -573,10 +599,33 @@ body {
     padding: 8px 8px;
     text-decoration: none;
     font-size: 11px;
+    font-weight: 650;
+    transition: background 0.15s ease, transform 0.15s ease, border-color 0.15s ease;
 }
 
-.card-actions a:hover {
-    background: rgba(30, 41, 59, 0.9);
+.action-btn img {
+    width: 15px;
+    height: 15px;
+    object-fit: contain;
+    display: inline-block;
+}
+
+.action-chart {
+    border-color: rgba(59, 130, 246, 0.30);
+}
+
+.action-yahoo {
+    border-color: rgba(168, 85, 247, 0.34);
+}
+
+.action-twits {
+    border-color: rgba(59, 130, 246, 0.34);
+}
+
+.card-actions a:hover,
+.action-btn:hover {
+    background: rgba(30, 41, 59, 0.95);
+    transform: translateY(-1px);
 }
 
 .empty-section {
@@ -669,7 +718,7 @@ td small {
             <p>Technical Potential Movers + Catalyst Confirmation + Sector Context</p>
         </div>
         <div class="header-meta">
-            <span class="scan-pill">Last Scan: 2026-05-08 17:12 ET</span>
+            <span class="scan-pill">Last Scan: 2026-05-08 17:30 ET</span>
             <span class="status-pill status-yellow">Market: AFTER-HOURS</span>
         </div>
     </div>
@@ -739,7 +788,7 @@ td small {
             <td class="positive">+2.82%</td>
             <td><span class="sector-status-pill sector-leading">LEADING</span></td>
             <td>3</td>
-            <td>CSIQ</td>
+            <td>RUN, CSIQ</td>
         </tr>
         
         <tr>
@@ -749,7 +798,7 @@ td small {
             <td class="positive">+2.61%</td>
             <td><span class="sector-status-pill sector-leading">LEADING</span></td>
             <td>59</td>
-            <td>GRND, AVPT, RELY, BLSH</td>
+            <td>GRND, AVPT, BLSH, RELY</td>
         </tr>
         
         <tr>
@@ -863,10 +912,10 @@ td small {
         </div>
 
         <div class="metrics-grid">
-            <div><span>Liquidity</span><strong>$20M</strong></div>
-            <div><span>ATR</span><strong>3.4%</strong></div>
-            <div><span>VWAP Dist</span><strong>+3.2%</strong></div>
-            <div><span>HOD</span><strong>Near HOD</strong></div>
+            <div><span>Liquidity</span><strong class="metric-caution">$20M</strong></div>
+            <div><span>ATR</span><strong class="metric-good">3.4%</strong></div>
+            <div><span>VWAP Dist</span><strong class="metric-caution">+3.2%</strong></div>
+            <div><span>HOD Dist</span><strong class="metric-good">-0.3%</strong></div>
         </div>
 
         <div class="status-row">
@@ -888,9 +937,15 @@ td small {
         
 
         <div class="card-actions">
-            <a href="https://www.tradingview.com/chart/?symbol=GRND" target="_blank">Chart</a>
-            <a href="https://finance.yahoo.com/quote/GRND" target="_blank">Yahoo</a>
-            <a href="https://stocktwits.com/symbol/GRND" target="_blank">Twits</a>
+            <a class="action-btn action-chart" href="https://www.tradingview.com/chart/?symbol=GRND" target="_blank">
+                <img src="assets/tradingview.png" alt="TradingView"> Chart
+            </a>
+            <a class="action-btn action-yahoo" href="https://finance.yahoo.com/quote/GRND" target="_blank">
+                <img src="assets/yahoo.png" alt="Yahoo Finance"> Yahoo
+            </a>
+            <a class="action-btn action-twits" href="https://stocktwits.com/symbol/GRND" target="_blank">
+                <img src="assets/stocktwits.png" alt="Stocktwits"> Twits
+            </a>
         </div>
     </div>
     
@@ -930,10 +985,10 @@ td small {
         </div>
 
         <div class="metrics-grid">
-            <div><span>Liquidity</span><strong>$20M</strong></div>
-            <div><span>ATR</span><strong>4.2%</strong></div>
-            <div><span>VWAP Dist</span><strong>+2.4%</strong></div>
-            <div><span>HOD</span><strong>Near HOD</strong></div>
+            <div><span>Liquidity</span><strong class="metric-caution">$20M</strong></div>
+            <div><span>ATR</span><strong class="metric-good">4.2%</strong></div>
+            <div><span>VWAP Dist</span><strong class="metric-good">+2.4%</strong></div>
+            <div><span>HOD Dist</span><strong class="metric-good">-0.7%</strong></div>
         </div>
 
         <div class="status-row">
@@ -955,9 +1010,15 @@ td small {
         
 
         <div class="card-actions">
-            <a href="https://www.tradingview.com/chart/?symbol=AVPT" target="_blank">Chart</a>
-            <a href="https://finance.yahoo.com/quote/AVPT" target="_blank">Yahoo</a>
-            <a href="https://stocktwits.com/symbol/AVPT" target="_blank">Twits</a>
+            <a class="action-btn action-chart" href="https://www.tradingview.com/chart/?symbol=AVPT" target="_blank">
+                <img src="assets/tradingview.png" alt="TradingView"> Chart
+            </a>
+            <a class="action-btn action-yahoo" href="https://finance.yahoo.com/quote/AVPT" target="_blank">
+                <img src="assets/yahoo.png" alt="Yahoo Finance"> Yahoo
+            </a>
+            <a class="action-btn action-twits" href="https://stocktwits.com/symbol/AVPT" target="_blank">
+                <img src="assets/stocktwits.png" alt="Stocktwits"> Twits
+            </a>
         </div>
     </div>
     
@@ -997,10 +1058,10 @@ td small {
         </div>
 
         <div class="metrics-grid">
-            <div><span>Liquidity</span><strong>$75M</strong></div>
-            <div><span>ATR</span><strong>3.2%</strong></div>
-            <div><span>VWAP Dist</span><strong>+1.5%</strong></div>
-            <div><span>HOD</span><strong>Near HOD</strong></div>
+            <div><span>Liquidity</span><strong class="metric-ok">$75M</strong></div>
+            <div><span>ATR</span><strong class="metric-good">3.2%</strong></div>
+            <div><span>VWAP Dist</span><strong class="metric-good">+1.5%</strong></div>
+            <div><span>HOD Dist</span><strong class="metric-good">-0.7%</strong></div>
         </div>
 
         <div class="status-row">
@@ -1022,70 +1083,15 @@ td small {
         
 
         <div class="card-actions">
-            <a href="https://www.tradingview.com/chart/?symbol=WMG" target="_blank">Chart</a>
-            <a href="https://finance.yahoo.com/quote/WMG" target="_blank">Yahoo</a>
-            <a href="https://stocktwits.com/symbol/WMG" target="_blank">Twits</a>
-        </div>
-    </div>
-    
-    <div class="stock-card bucket-potential" style="--accent:#38bdf8;">
-        <div class="card-top">
-            <div class="card-id">
-                <div class="symbol-row">
-                    <span class="symbol">RELY</span>
-                    <span class="sector-chip">Technology</span>
-                    <span class="tier" style="color:#10b981;border-color:#10b981;">Tier 1</span>
-                </div>
-                <div class="company-name">Remitly Global, Inc.</div>
-            </div>
-            <div class="price-box">
-                <div class="price">$24.03</div>
-                <div class="change positive">+5.44%</div>
-            </div>
-        </div>
-
-        <div class="score-risk-row">
-            <span class="score-pill">Score 74/100</span>
-            <span class="risk-pill">NORMAL</span>
-            <span class="sector-status-pill sector-leading">LEADING</span>
-        </div>
-
-        <div class="sector-strip">
-            <span>Sector <strong>Technology</strong></span>
-            <span>ETF <strong>XLK</strong> <b class="positive">+3.44%</b></span>
-            <span>Vs Sector <b class="positive">+2.01%</b></span>
-        </div>
-
-        <div class="catalyst-strip catalyst-none">
-            <div class="catalyst-label">⚪ Catalyst: No confirmed company-specific catalyst</div>
-            
-            
-            
-        </div>
-
-        <div class="metrics-grid">
-            <div><span>Liquidity</span><strong>$107M</strong></div>
-            <div><span>ATR</span><strong>3.8%</strong></div>
-            <div><span>VWAP Dist</span><strong>+1.3%</strong></div>
-            <div><span>HOD</span><strong>Near HOD</strong></div>
-        </div>
-
-        <div class="status-row">
-            <span class="status-chip status-tech">Above VWAP</span>
-            <span class="status-chip status-positive">Near HOD</span>
-            <span class="status-chip status-neutral">NORMAL</span>
-        </div>
-
-        <div class="interpretation">Clean continuation candidate; confirm VWAP hold and breakout structure.</div>
-
-        <div class="tags-row"><span class="tag tag-positive">Sector leading</span><span class="tag tag-positive">Vs sector +2.0%</span><span class="tag tag-tech">Above VWAP</span><span class="tag tag-neutral">$107M liq</span><span class="tag tag-positive">Upper range</span></div>
-
-        
-
-        <div class="card-actions">
-            <a href="https://www.tradingview.com/chart/?symbol=RELY" target="_blank">Chart</a>
-            <a href="https://finance.yahoo.com/quote/RELY" target="_blank">Yahoo</a>
-            <a href="https://stocktwits.com/symbol/RELY" target="_blank">Twits</a>
+            <a class="action-btn action-chart" href="https://www.tradingview.com/chart/?symbol=WMG" target="_blank">
+                <img src="assets/tradingview.png" alt="TradingView"> Chart
+            </a>
+            <a class="action-btn action-yahoo" href="https://finance.yahoo.com/quote/WMG" target="_blank">
+                <img src="assets/yahoo.png" alt="Yahoo Finance"> Yahoo
+            </a>
+            <a class="action-btn action-twits" href="https://stocktwits.com/symbol/WMG" target="_blank">
+                <img src="assets/stocktwits.png" alt="Stocktwits"> Twits
+            </a>
         </div>
     </div>
     
@@ -1125,10 +1131,10 @@ td small {
         </div>
 
         <div class="metrics-grid">
-            <div><span>Liquidity</span><strong>$52M</strong></div>
-            <div><span>ATR</span><strong>6.6%</strong></div>
-            <div><span>VWAP Dist</span><strong>+2.7%</strong></div>
-            <div><span>HOD</span><strong>Near HOD</strong></div>
+            <div><span>Liquidity</span><strong class="metric-ok">$52M</strong></div>
+            <div><span>ATR</span><strong class="metric-caution">6.6%</strong></div>
+            <div><span>VWAP Dist</span><strong class="metric-good">+2.7%</strong></div>
+            <div><span>HOD Dist</span><strong class="metric-good">-0.1%</strong></div>
         </div>
 
         <div class="status-row">
@@ -1150,9 +1156,82 @@ td small {
         
 
         <div class="card-actions">
-            <a href="https://www.tradingview.com/chart/?symbol=BLSH" target="_blank">Chart</a>
-            <a href="https://finance.yahoo.com/quote/BLSH" target="_blank">Yahoo</a>
-            <a href="https://stocktwits.com/symbol/BLSH" target="_blank">Twits</a>
+            <a class="action-btn action-chart" href="https://www.tradingview.com/chart/?symbol=BLSH" target="_blank">
+                <img src="assets/tradingview.png" alt="TradingView"> Chart
+            </a>
+            <a class="action-btn action-yahoo" href="https://finance.yahoo.com/quote/BLSH" target="_blank">
+                <img src="assets/yahoo.png" alt="Yahoo Finance"> Yahoo
+            </a>
+            <a class="action-btn action-twits" href="https://stocktwits.com/symbol/BLSH" target="_blank">
+                <img src="assets/stocktwits.png" alt="Stocktwits"> Twits
+            </a>
+        </div>
+    </div>
+    
+    <div class="stock-card bucket-potential" style="--accent:#38bdf8;">
+        <div class="card-top">
+            <div class="card-id">
+                <div class="symbol-row">
+                    <span class="symbol">RELY</span>
+                    <span class="sector-chip">Technology</span>
+                    <span class="tier" style="color:#10b981;border-color:#10b981;">Tier 1</span>
+                </div>
+                <div class="company-name">Remitly Global, Inc.</div>
+            </div>
+            <div class="price-box">
+                <div class="price">$24.03</div>
+                <div class="change positive">+5.44%</div>
+            </div>
+        </div>
+
+        <div class="score-risk-row">
+            <span class="score-pill">Score 74/100</span>
+            <span class="risk-pill">NORMAL</span>
+            <span class="sector-status-pill sector-leading">LEADING</span>
+        </div>
+
+        <div class="sector-strip">
+            <span>Sector <strong>Technology</strong></span>
+            <span>ETF <strong>XLK</strong> <b class="positive">+3.44%</b></span>
+            <span>Vs Sector <b class="positive">+2.01%</b></span>
+        </div>
+
+        <div class="catalyst-strip catalyst-none">
+            <div class="catalyst-label">⚪ Catalyst: No confirmed company-specific catalyst</div>
+            
+            
+            
+        </div>
+
+        <div class="metrics-grid">
+            <div><span>Liquidity</span><strong class="metric-good">$107M</strong></div>
+            <div><span>ATR</span><strong class="metric-good">3.8%</strong></div>
+            <div><span>VWAP Dist</span><strong class="metric-good">+1.3%</strong></div>
+            <div><span>HOD Dist</span><strong class="metric-ok">-0.9%</strong></div>
+        </div>
+
+        <div class="status-row">
+            <span class="status-chip status-tech">Above VWAP</span>
+            <span class="status-chip status-neutral">HOD -0.9%</span>
+            <span class="status-chip status-neutral">NORMAL</span>
+        </div>
+
+        <div class="interpretation">Clean continuation candidate; confirm VWAP hold and breakout structure.</div>
+
+        <div class="tags-row"><span class="tag tag-positive">Sector leading</span><span class="tag tag-positive">Vs sector +2.0%</span><span class="tag tag-tech">Above VWAP</span><span class="tag tag-neutral">$107M liq</span><span class="tag tag-positive">Upper range</span></div>
+
+        
+
+        <div class="card-actions">
+            <a class="action-btn action-chart" href="https://www.tradingview.com/chart/?symbol=RELY" target="_blank">
+                <img src="assets/tradingview.png" alt="TradingView"> Chart
+            </a>
+            <a class="action-btn action-yahoo" href="https://finance.yahoo.com/quote/RELY" target="_blank">
+                <img src="assets/yahoo.png" alt="Yahoo Finance"> Yahoo
+            </a>
+            <a class="action-btn action-twits" href="https://stocktwits.com/symbol/RELY" target="_blank">
+                <img src="assets/stocktwits.png" alt="Stocktwits"> Twits
+            </a>
         </div>
     </div>
     
@@ -1192,10 +1271,10 @@ td small {
         </div>
 
         <div class="metrics-grid">
-            <div><span>Liquidity</span><strong>$377M</strong></div>
-            <div><span>ATR</span><strong>4.1%</strong></div>
-            <div><span>VWAP Dist</span><strong>+2.0%</strong></div>
-            <div><span>HOD</span><strong>Near HOD</strong></div>
+            <div><span>Liquidity</span><strong class="metric-good">$377M</strong></div>
+            <div><span>ATR</span><strong class="metric-good">4.1%</strong></div>
+            <div><span>VWAP Dist</span><strong class="metric-good">+2.0%</strong></div>
+            <div><span>HOD Dist</span><strong class="metric-good">-0.2%</strong></div>
         </div>
 
         <div class="status-row">
@@ -1217,9 +1296,15 @@ td small {
         
 
         <div class="card-actions">
-            <a href="https://www.tradingview.com/chart/?symbol=HPQ" target="_blank">Chart</a>
-            <a href="https://finance.yahoo.com/quote/HPQ" target="_blank">Yahoo</a>
-            <a href="https://stocktwits.com/symbol/HPQ" target="_blank">Twits</a>
+            <a class="action-btn action-chart" href="https://www.tradingview.com/chart/?symbol=HPQ" target="_blank">
+                <img src="assets/tradingview.png" alt="TradingView"> Chart
+            </a>
+            <a class="action-btn action-yahoo" href="https://finance.yahoo.com/quote/HPQ" target="_blank">
+                <img src="assets/yahoo.png" alt="Yahoo Finance"> Yahoo
+            </a>
+            <a class="action-btn action-twits" href="https://stocktwits.com/symbol/HPQ" target="_blank">
+                <img src="assets/stocktwits.png" alt="Stocktwits"> Twits
+            </a>
         </div>
     </div>
     
@@ -1259,10 +1344,10 @@ td small {
         </div>
 
         <div class="metrics-grid">
-            <div><span>Liquidity</span><strong>$416M</strong></div>
-            <div><span>ATR</span><strong>6.3%</strong></div>
-            <div><span>VWAP Dist</span><strong>+1.6%</strong></div>
-            <div><span>HOD</span><strong>Near HOD</strong></div>
+            <div><span>Liquidity</span><strong class="metric-good">$416M</strong></div>
+            <div><span>ATR</span><strong class="metric-good">6.3%</strong></div>
+            <div><span>VWAP Dist</span><strong class="metric-good">+1.6%</strong></div>
+            <div><span>HOD Dist</span><strong class="metric-good">-0.1%</strong></div>
         </div>
 
         <div class="status-row">
@@ -1278,9 +1363,15 @@ td small {
         
 
         <div class="card-actions">
-            <a href="https://www.tradingview.com/chart/?symbol=AMKR" target="_blank">Chart</a>
-            <a href="https://finance.yahoo.com/quote/AMKR" target="_blank">Yahoo</a>
-            <a href="https://stocktwits.com/symbol/AMKR" target="_blank">Twits</a>
+            <a class="action-btn action-chart" href="https://www.tradingview.com/chart/?symbol=AMKR" target="_blank">
+                <img src="assets/tradingview.png" alt="TradingView"> Chart
+            </a>
+            <a class="action-btn action-yahoo" href="https://finance.yahoo.com/quote/AMKR" target="_blank">
+                <img src="assets/yahoo.png" alt="Yahoo Finance"> Yahoo
+            </a>
+            <a class="action-btn action-twits" href="https://stocktwits.com/symbol/AMKR" target="_blank">
+                <img src="assets/stocktwits.png" alt="Stocktwits"> Twits
+            </a>
         </div>
     </div>
     
@@ -1320,10 +1411,10 @@ td small {
         </div>
 
         <div class="metrics-grid">
-            <div><span>Liquidity</span><strong>$202M</strong></div>
-            <div><span>ATR</span><strong>4.0%</strong></div>
-            <div><span>VWAP Dist</span><strong>+1.1%</strong></div>
-            <div><span>HOD</span><strong>Near HOD</strong></div>
+            <div><span>Liquidity</span><strong class="metric-good">$202M</strong></div>
+            <div><span>ATR</span><strong class="metric-good">4.0%</strong></div>
+            <div><span>VWAP Dist</span><strong class="metric-good">+1.1%</strong></div>
+            <div><span>HOD Dist</span><strong class="metric-good">-0.1%</strong></div>
         </div>
 
         <div class="status-row">
@@ -1339,9 +1430,15 @@ td small {
         
 
         <div class="card-actions">
-            <a href="https://www.tradingview.com/chart/?symbol=TECK" target="_blank">Chart</a>
-            <a href="https://finance.yahoo.com/quote/TECK" target="_blank">Yahoo</a>
-            <a href="https://stocktwits.com/symbol/TECK" target="_blank">Twits</a>
+            <a class="action-btn action-chart" href="https://www.tradingview.com/chart/?symbol=TECK" target="_blank">
+                <img src="assets/tradingview.png" alt="TradingView"> Chart
+            </a>
+            <a class="action-btn action-yahoo" href="https://finance.yahoo.com/quote/TECK" target="_blank">
+                <img src="assets/yahoo.png" alt="Yahoo Finance"> Yahoo
+            </a>
+            <a class="action-btn action-twits" href="https://stocktwits.com/symbol/TECK" target="_blank">
+                <img src="assets/stocktwits.png" alt="Stocktwits"> Twits
+            </a>
         </div>
     </div>
     
@@ -1381,10 +1478,10 @@ td small {
         </div>
 
         <div class="metrics-grid">
-            <div><span>Liquidity</span><strong>$102M</strong></div>
-            <div><span>ATR</span><strong>4.8%</strong></div>
-            <div><span>VWAP Dist</span><strong>+1.2%</strong></div>
-            <div><span>HOD</span><strong>Near HOD</strong></div>
+            <div><span>Liquidity</span><strong class="metric-good">$102M</strong></div>
+            <div><span>ATR</span><strong class="metric-good">4.8%</strong></div>
+            <div><span>VWAP Dist</span><strong class="metric-good">+1.2%</strong></div>
+            <div><span>HOD Dist</span><strong class="metric-good">-0.3%</strong></div>
         </div>
 
         <div class="status-row">
@@ -1406,9 +1503,15 @@ td small {
         
 
         <div class="card-actions">
-            <a href="https://www.tradingview.com/chart/?symbol=VSAT" target="_blank">Chart</a>
-            <a href="https://finance.yahoo.com/quote/VSAT" target="_blank">Yahoo</a>
-            <a href="https://stocktwits.com/symbol/VSAT" target="_blank">Twits</a>
+            <a class="action-btn action-chart" href="https://www.tradingview.com/chart/?symbol=VSAT" target="_blank">
+                <img src="assets/tradingview.png" alt="TradingView"> Chart
+            </a>
+            <a class="action-btn action-yahoo" href="https://finance.yahoo.com/quote/VSAT" target="_blank">
+                <img src="assets/yahoo.png" alt="Yahoo Finance"> Yahoo
+            </a>
+            <a class="action-btn action-twits" href="https://stocktwits.com/symbol/VSAT" target="_blank">
+                <img src="assets/stocktwits.png" alt="Stocktwits"> Twits
+            </a>
         </div>
     </div>
     
@@ -1416,28 +1519,28 @@ td small {
         <div class="card-top">
             <div class="card-id">
                 <div class="symbol-row">
-                    <span class="symbol">WRBY</span>
-                    <span class="sector-chip">Healthcare</span>
+                    <span class="symbol">RUN</span>
+                    <span class="sector-chip">Solar</span>
                     <span class="tier" style="color:#10b981;border-color:#10b981;">Tier 1</span>
                 </div>
-                <div class="company-name">Warby Parker Inc.</div>
+                <div class="company-name">Sunrun Inc.</div>
             </div>
             <div class="price-box">
-                <div class="price">$29.55</div>
-                <div class="change positive">+8.64%</div>
+                <div class="price">$14.61</div>
+                <div class="change positive">+5.87%</div>
             </div>
         </div>
 
         <div class="score-risk-row">
             <span class="score-pill">Score 70/100</span>
             <span class="risk-pill">NORMAL</span>
-            <span class="sector-status-pill sector-weak">WEAK</span>
+            <span class="sector-status-pill sector-leading">LEADING</span>
         </div>
 
         <div class="sector-strip">
-            <span>Sector <strong>Healthcare</strong></span>
-            <span>ETF <strong>XLV</strong> <b class="negative">-0.85%</b></span>
-            <span>Vs Sector <b class="positive">+9.49%</b></span>
+            <span>Sector <strong>Solar</strong></span>
+            <span>ETF <strong>TAN</strong> <b class="positive">+3.65%</b></span>
+            <span>Vs Sector <b class="positive">+2.22%</b></span>
         </div>
 
         <div class="catalyst-strip catalyst-none">
@@ -1448,34 +1551,40 @@ td small {
         </div>
 
         <div class="metrics-grid">
-            <div><span>Liquidity</span><strong>$77M</strong></div>
-            <div><span>ATR</span><strong>6.5%</strong></div>
-            <div><span>VWAP Dist</span><strong>+2.2%</strong></div>
-            <div><span>HOD</span><strong>Near HOD</strong></div>
+            <div><span>Liquidity</span><strong class="metric-good">$140M</strong></div>
+            <div><span>ATR</span><strong class="metric-good">6.4%</strong></div>
+            <div><span>VWAP Dist</span><strong class="metric-good">+2.0%</strong></div>
+            <div><span>HOD Dist</span><strong class="metric-ok">-0.8%</strong></div>
         </div>
 
         <div class="status-row">
             <span class="status-chip status-tech">Above VWAP</span>
-            <span class="status-chip status-positive">Near HOD</span>
+            <span class="status-chip status-neutral">HOD -0.8%</span>
             <span class="status-chip status-neutral">NORMAL</span>
         </div>
 
         <div class="interpretation">Clean continuation candidate; confirm VWAP hold and breakout structure.</div>
 
-        <div class="tags-row"><span class="tag tag-risk">Sector weak</span><span class="tag tag-positive">Vs sector +9.5%</span><span class="tag tag-positive">Upper range</span><span class="tag tag-tech">Above VWAP</span><span class="tag tag-neutral">$77M liq</span></div>
+        <div class="tags-row"><span class="tag tag-positive">Sector leading</span><span class="tag tag-positive">Vs sector +2.2%</span><span class="tag tag-tech">Above VWAP</span><span class="tag tag-neutral">$141M liq</span><span class="tag tag-positive">Upper range</span></div>
 
         
         <div class="mini-panel">
-            <div class="mini-row"><span>Short %</span><strong>11%</strong></div>
-            <div class="mini-row"><span>Float</span><strong>92.9M</strong></div>
-            <div class="mini-row"><span>DTC</span><strong>4.5d</strong></div>
+            <div class="mini-row"><span>Short %</span><strong>27%</strong></div>
+            <div class="mini-row"><span>Float</span><strong>231.8M</strong></div>
+            <div class="mini-row"><span>DTC</span><strong>6.7d</strong></div>
         </div>
         
 
         <div class="card-actions">
-            <a href="https://www.tradingview.com/chart/?symbol=WRBY" target="_blank">Chart</a>
-            <a href="https://finance.yahoo.com/quote/WRBY" target="_blank">Yahoo</a>
-            <a href="https://stocktwits.com/symbol/WRBY" target="_blank">Twits</a>
+            <a class="action-btn action-chart" href="https://www.tradingview.com/chart/?symbol=RUN" target="_blank">
+                <img src="assets/tradingview.png" alt="TradingView"> Chart
+            </a>
+            <a class="action-btn action-yahoo" href="https://finance.yahoo.com/quote/RUN" target="_blank">
+                <img src="assets/yahoo.png" alt="Yahoo Finance"> Yahoo
+            </a>
+            <a class="action-btn action-twits" href="https://stocktwits.com/symbol/RUN" target="_blank">
+                <img src="assets/stocktwits.png" alt="Stocktwits"> Twits
+            </a>
         </div>
     </div>
     
@@ -1529,10 +1638,10 @@ td small {
         </div>
 
         <div class="metrics-grid">
-            <div><span>Liquidity</span><strong>$105M</strong></div>
-            <div><span>ATR</span><strong>3.4%</strong></div>
-            <div><span>VWAP Dist</span><strong>+2.3%</strong></div>
-            <div><span>HOD</span><strong>Near HOD</strong></div>
+            <div><span>Liquidity</span><strong class="metric-good">$105M</strong></div>
+            <div><span>ATR</span><strong class="metric-good">3.4%</strong></div>
+            <div><span>VWAP Dist</span><strong class="metric-good">+2.3%</strong></div>
+            <div><span>HOD Dist</span><strong class="metric-good">-0.7%</strong></div>
         </div>
 
         <div class="status-row">
@@ -1554,9 +1663,15 @@ td small {
         
 
         <div class="card-actions">
-            <a href="https://www.tradingview.com/chart/?symbol=DBX" target="_blank">Chart</a>
-            <a href="https://finance.yahoo.com/quote/DBX" target="_blank">Yahoo</a>
-            <a href="https://stocktwits.com/symbol/DBX" target="_blank">Twits</a>
+            <a class="action-btn action-chart" href="https://www.tradingview.com/chart/?symbol=DBX" target="_blank">
+                <img src="assets/tradingview.png" alt="TradingView"> Chart
+            </a>
+            <a class="action-btn action-yahoo" href="https://finance.yahoo.com/quote/DBX" target="_blank">
+                <img src="assets/yahoo.png" alt="Yahoo Finance"> Yahoo
+            </a>
+            <a class="action-btn action-twits" href="https://stocktwits.com/symbol/DBX" target="_blank">
+                <img src="assets/stocktwits.png" alt="Stocktwits"> Twits
+            </a>
         </div>
     </div>
     
@@ -1596,15 +1711,15 @@ td small {
         </div>
 
         <div class="metrics-grid">
-            <div><span>Liquidity</span><strong>$193M</strong></div>
-            <div><span>ATR</span><strong>5.0%</strong></div>
-            <div><span>VWAP Dist</span><strong>+2.8%</strong></div>
-            <div><span>HOD</span><strong>Not HOD</strong></div>
+            <div><span>Liquidity</span><strong class="metric-good">$193M</strong></div>
+            <div><span>ATR</span><strong class="metric-good">5.0%</strong></div>
+            <div><span>VWAP Dist</span><strong class="metric-good">+2.8%</strong></div>
+            <div><span>HOD Dist</span><strong class="metric-caution">-2.0%</strong></div>
         </div>
 
         <div class="status-row">
             <span class="status-chip status-tech">Above VWAP</span>
-            <span class="status-chip status-neutral">Not HOD</span>
+            <span class="status-chip status-neutral">HOD -2.0%</span>
             <span class="status-chip status-neutral">NORMAL</span>
         </div>
 
@@ -1615,9 +1730,15 @@ td small {
         
 
         <div class="card-actions">
-            <a href="https://www.tradingview.com/chart/?symbol=FROG" target="_blank">Chart</a>
-            <a href="https://finance.yahoo.com/quote/FROG" target="_blank">Yahoo</a>
-            <a href="https://stocktwits.com/symbol/FROG" target="_blank">Twits</a>
+            <a class="action-btn action-chart" href="https://www.tradingview.com/chart/?symbol=FROG" target="_blank">
+                <img src="assets/tradingview.png" alt="TradingView"> Chart
+            </a>
+            <a class="action-btn action-yahoo" href="https://finance.yahoo.com/quote/FROG" target="_blank">
+                <img src="assets/yahoo.png" alt="Yahoo Finance"> Yahoo
+            </a>
+            <a class="action-btn action-twits" href="https://stocktwits.com/symbol/FROG" target="_blank">
+                <img src="assets/stocktwits.png" alt="Stocktwits"> Twits
+            </a>
         </div>
     </div>
     
@@ -1657,10 +1778,10 @@ td small {
         </div>
 
         <div class="metrics-grid">
-            <div><span>Liquidity</span><strong>$103M</strong></div>
-            <div><span>ATR</span><strong>5.7%</strong></div>
-            <div><span>VWAP Dist</span><strong>+1.9%</strong></div>
-            <div><span>HOD</span><strong>Near HOD</strong></div>
+            <div><span>Liquidity</span><strong class="metric-good">$103M</strong></div>
+            <div><span>ATR</span><strong class="metric-good">5.7%</strong></div>
+            <div><span>VWAP Dist</span><strong class="metric-good">+1.9%</strong></div>
+            <div><span>HOD Dist</span><strong class="metric-good">-0.6%</strong></div>
         </div>
 
         <div class="status-row">
@@ -1682,9 +1803,15 @@ td small {
         
 
         <div class="card-actions">
-            <a href="https://www.tradingview.com/chart/?symbol=PENG" target="_blank">Chart</a>
-            <a href="https://finance.yahoo.com/quote/PENG" target="_blank">Yahoo</a>
-            <a href="https://stocktwits.com/symbol/PENG" target="_blank">Twits</a>
+            <a class="action-btn action-chart" href="https://www.tradingview.com/chart/?symbol=PENG" target="_blank">
+                <img src="assets/tradingview.png" alt="TradingView"> Chart
+            </a>
+            <a class="action-btn action-yahoo" href="https://finance.yahoo.com/quote/PENG" target="_blank">
+                <img src="assets/yahoo.png" alt="Yahoo Finance"> Yahoo
+            </a>
+            <a class="action-btn action-twits" href="https://stocktwits.com/symbol/PENG" target="_blank">
+                <img src="assets/stocktwits.png" alt="Stocktwits"> Twits
+            </a>
         </div>
     </div>
     
@@ -1724,15 +1851,15 @@ td small {
         </div>
 
         <div class="metrics-grid">
-            <div><span>Liquidity</span><strong>$90M</strong></div>
-            <div><span>ATR</span><strong>4.4%</strong></div>
-            <div><span>VWAP Dist</span><strong>+1.3%</strong></div>
-            <div><span>HOD</span><strong>Not HOD</strong></div>
+            <div><span>Liquidity</span><strong class="metric-ok">$90M</strong></div>
+            <div><span>ATR</span><strong class="metric-good">4.4%</strong></div>
+            <div><span>VWAP Dist</span><strong class="metric-good">+1.3%</strong></div>
+            <div><span>HOD Dist</span><strong class="metric-caution">-2.2%</strong></div>
         </div>
 
         <div class="status-row">
             <span class="status-chip status-tech">Above VWAP</span>
-            <span class="status-chip status-neutral">Not HOD</span>
+            <span class="status-chip status-neutral">HOD -2.2%</span>
             <span class="status-chip status-neutral">NORMAL</span>
         </div>
 
@@ -1749,9 +1876,15 @@ td small {
         
 
         <div class="card-actions">
-            <a href="https://www.tradingview.com/chart/?symbol=WSC" target="_blank">Chart</a>
-            <a href="https://finance.yahoo.com/quote/WSC" target="_blank">Yahoo</a>
-            <a href="https://stocktwits.com/symbol/WSC" target="_blank">Twits</a>
+            <a class="action-btn action-chart" href="https://www.tradingview.com/chart/?symbol=WSC" target="_blank">
+                <img src="assets/tradingview.png" alt="TradingView"> Chart
+            </a>
+            <a class="action-btn action-yahoo" href="https://finance.yahoo.com/quote/WSC" target="_blank">
+                <img src="assets/yahoo.png" alt="Yahoo Finance"> Yahoo
+            </a>
+            <a class="action-btn action-twits" href="https://stocktwits.com/symbol/WSC" target="_blank">
+                <img src="assets/stocktwits.png" alt="Stocktwits"> Twits
+            </a>
         </div>
     </div>
     
@@ -1791,10 +1924,10 @@ td small {
         </div>
 
         <div class="metrics-grid">
-            <div><span>Liquidity</span><strong>$123M</strong></div>
-            <div><span>ATR</span><strong>5.8%</strong></div>
-            <div><span>VWAP Dist</span><strong>+6.0%</strong></div>
-            <div><span>HOD</span><strong>Near HOD</strong></div>
+            <div><span>Liquidity</span><strong class="metric-good">$123M</strong></div>
+            <div><span>ATR</span><strong class="metric-good">5.8%</strong></div>
+            <div><span>VWAP Dist</span><strong class="metric-risk">+6.0%</strong></div>
+            <div><span>HOD Dist</span><strong class="metric-good">-0.7%</strong></div>
         </div>
 
         <div class="status-row">
@@ -1810,9 +1943,15 @@ td small {
         
 
         <div class="card-actions">
-            <a href="https://www.tradingview.com/chart/?symbol=DXYZ" target="_blank">Chart</a>
-            <a href="https://finance.yahoo.com/quote/DXYZ" target="_blank">Yahoo</a>
-            <a href="https://stocktwits.com/symbol/DXYZ" target="_blank">Twits</a>
+            <a class="action-btn action-chart" href="https://www.tradingview.com/chart/?symbol=DXYZ" target="_blank">
+                <img src="assets/tradingview.png" alt="TradingView"> Chart
+            </a>
+            <a class="action-btn action-yahoo" href="https://finance.yahoo.com/quote/DXYZ" target="_blank">
+                <img src="assets/yahoo.png" alt="Yahoo Finance"> Yahoo
+            </a>
+            <a class="action-btn action-twits" href="https://stocktwits.com/symbol/DXYZ" target="_blank">
+                <img src="assets/stocktwits.png" alt="Stocktwits"> Twits
+            </a>
         </div>
     </div>
     
@@ -1852,15 +1991,15 @@ td small {
         </div>
 
         <div class="metrics-grid">
-            <div><span>Liquidity</span><strong>$52M</strong></div>
-            <div><span>ATR</span><strong>3.9%</strong></div>
-            <div><span>VWAP Dist</span><strong>+1.5%</strong></div>
-            <div><span>HOD</span><strong>Not HOD</strong></div>
+            <div><span>Liquidity</span><strong class="metric-ok">$52M</strong></div>
+            <div><span>ATR</span><strong class="metric-good">3.9%</strong></div>
+            <div><span>VWAP Dist</span><strong class="metric-good">+1.5%</strong></div>
+            <div><span>HOD Dist</span><strong class="metric-ok">-1.1%</strong></div>
         </div>
 
         <div class="status-row">
             <span class="status-chip status-tech">Above VWAP</span>
-            <span class="status-chip status-neutral">Not HOD</span>
+            <span class="status-chip status-neutral">HOD -1.1%</span>
             <span class="status-chip status-neutral">NORMAL</span>
         </div>
 
@@ -1871,9 +2010,15 @@ td small {
         
 
         <div class="card-actions">
-            <a href="https://www.tradingview.com/chart/?symbol=CALY" target="_blank">Chart</a>
-            <a href="https://finance.yahoo.com/quote/CALY" target="_blank">Yahoo</a>
-            <a href="https://stocktwits.com/symbol/CALY" target="_blank">Twits</a>
+            <a class="action-btn action-chart" href="https://www.tradingview.com/chart/?symbol=CALY" target="_blank">
+                <img src="assets/tradingview.png" alt="TradingView"> Chart
+            </a>
+            <a class="action-btn action-yahoo" href="https://finance.yahoo.com/quote/CALY" target="_blank">
+                <img src="assets/yahoo.png" alt="Yahoo Finance"> Yahoo
+            </a>
+            <a class="action-btn action-twits" href="https://stocktwits.com/symbol/CALY" target="_blank">
+                <img src="assets/stocktwits.png" alt="Stocktwits"> Twits
+            </a>
         </div>
     </div>
     
@@ -1913,15 +2058,15 @@ td small {
         </div>
 
         <div class="metrics-grid">
-            <div><span>Liquidity</span><strong>$60M</strong></div>
-            <div><span>ATR</span><strong>6.6%</strong></div>
-            <div><span>VWAP Dist</span><strong>+2.3%</strong></div>
-            <div><span>HOD</span><strong>Not HOD</strong></div>
+            <div><span>Liquidity</span><strong class="metric-ok">$60M</strong></div>
+            <div><span>ATR</span><strong class="metric-caution">6.6%</strong></div>
+            <div><span>VWAP Dist</span><strong class="metric-good">+2.3%</strong></div>
+            <div><span>HOD Dist</span><strong class="metric-caution">-1.8%</strong></div>
         </div>
 
         <div class="status-row">
             <span class="status-chip status-tech">Above VWAP</span>
-            <span class="status-chip status-neutral">Not HOD</span>
+            <span class="status-chip status-neutral">HOD -1.8%</span>
             <span class="status-chip status-neutral">NORMAL</span>
         </div>
 
@@ -1938,9 +2083,15 @@ td small {
         
 
         <div class="card-actions">
-            <a href="https://www.tradingview.com/chart/?symbol=CSIQ" target="_blank">Chart</a>
-            <a href="https://finance.yahoo.com/quote/CSIQ" target="_blank">Yahoo</a>
-            <a href="https://stocktwits.com/symbol/CSIQ" target="_blank">Twits</a>
+            <a class="action-btn action-chart" href="https://www.tradingview.com/chart/?symbol=CSIQ" target="_blank">
+                <img src="assets/tradingview.png" alt="TradingView"> Chart
+            </a>
+            <a class="action-btn action-yahoo" href="https://finance.yahoo.com/quote/CSIQ" target="_blank">
+                <img src="assets/yahoo.png" alt="Yahoo Finance"> Yahoo
+            </a>
+            <a class="action-btn action-twits" href="https://stocktwits.com/symbol/CSIQ" target="_blank">
+                <img src="assets/stocktwits.png" alt="Stocktwits"> Twits
+            </a>
         </div>
     </div>
     
@@ -1980,10 +2131,10 @@ td small {
         </div>
 
         <div class="metrics-grid">
-            <div><span>Liquidity</span><strong>$37M</strong></div>
-            <div><span>ATR</span><strong>3.7%</strong></div>
-            <div><span>VWAP Dist</span><strong>+4.2%</strong></div>
-            <div><span>HOD</span><strong>Near HOD</strong></div>
+            <div><span>Liquidity</span><strong class="metric-neutral">$37M</strong></div>
+            <div><span>ATR</span><strong class="metric-good">3.7%</strong></div>
+            <div><span>VWAP Dist</span><strong class="metric-caution">+4.2%</strong></div>
+            <div><span>HOD Dist</span><strong class="metric-good">-0.2%</strong></div>
         </div>
 
         <div class="status-row">
@@ -2005,9 +2156,15 @@ td small {
         
 
         <div class="card-actions">
-            <a href="https://www.tradingview.com/chart/?symbol=PGNY" target="_blank">Chart</a>
-            <a href="https://finance.yahoo.com/quote/PGNY" target="_blank">Yahoo</a>
-            <a href="https://stocktwits.com/symbol/PGNY" target="_blank">Twits</a>
+            <a class="action-btn action-chart" href="https://www.tradingview.com/chart/?symbol=PGNY" target="_blank">
+                <img src="assets/tradingview.png" alt="TradingView"> Chart
+            </a>
+            <a class="action-btn action-yahoo" href="https://finance.yahoo.com/quote/PGNY" target="_blank">
+                <img src="assets/yahoo.png" alt="Yahoo Finance"> Yahoo
+            </a>
+            <a class="action-btn action-twits" href="https://stocktwits.com/symbol/PGNY" target="_blank">
+                <img src="assets/stocktwits.png" alt="Stocktwits"> Twits
+            </a>
         </div>
     </div>
     
@@ -2047,10 +2204,10 @@ td small {
         </div>
 
         <div class="metrics-grid">
-            <div><span>Liquidity</span><strong>$160M</strong></div>
-            <div><span>ATR</span><strong>3.6%</strong></div>
-            <div><span>VWAP Dist</span><strong>+2.3%</strong></div>
-            <div><span>HOD</span><strong>Near HOD</strong></div>
+            <div><span>Liquidity</span><strong class="metric-good">$160M</strong></div>
+            <div><span>ATR</span><strong class="metric-good">3.6%</strong></div>
+            <div><span>VWAP Dist</span><strong class="metric-good">+2.3%</strong></div>
+            <div><span>HOD Dist</span><strong class="metric-good">-0.3%</strong></div>
         </div>
 
         <div class="status-row">
@@ -2066,9 +2223,15 @@ td small {
         
 
         <div class="card-actions">
-            <a href="https://www.tradingview.com/chart/?symbol=GEN" target="_blank">Chart</a>
-            <a href="https://finance.yahoo.com/quote/GEN" target="_blank">Yahoo</a>
-            <a href="https://stocktwits.com/symbol/GEN" target="_blank">Twits</a>
+            <a class="action-btn action-chart" href="https://www.tradingview.com/chart/?symbol=GEN" target="_blank">
+                <img src="assets/tradingview.png" alt="TradingView"> Chart
+            </a>
+            <a class="action-btn action-yahoo" href="https://finance.yahoo.com/quote/GEN" target="_blank">
+                <img src="assets/yahoo.png" alt="Yahoo Finance"> Yahoo
+            </a>
+            <a class="action-btn action-twits" href="https://stocktwits.com/symbol/GEN" target="_blank">
+                <img src="assets/stocktwits.png" alt="Stocktwits"> Twits
+            </a>
         </div>
     </div>
     
@@ -2108,15 +2271,15 @@ td small {
         </div>
 
         <div class="metrics-grid">
-            <div><span>Liquidity</span><strong>$54M</strong></div>
-            <div><span>ATR</span><strong>6.8%</strong></div>
-            <div><span>VWAP Dist</span><strong>+3.2%</strong></div>
-            <div><span>HOD</span><strong>Not HOD</strong></div>
+            <div><span>Liquidity</span><strong class="metric-ok">$54M</strong></div>
+            <div><span>ATR</span><strong class="metric-caution">6.8%</strong></div>
+            <div><span>VWAP Dist</span><strong class="metric-caution">+3.2%</strong></div>
+            <div><span>HOD Dist</span><strong class="metric-risk">-5.9%</strong></div>
         </div>
 
         <div class="status-row">
             <span class="status-chip status-tech">Above VWAP</span>
-            <span class="status-chip status-neutral">Not HOD</span>
+            <span class="status-chip status-neutral">HOD -5.9%</span>
             <span class="status-chip status-neutral">NORMAL</span>
         </div>
 
@@ -2133,9 +2296,15 @@ td small {
         
 
         <div class="card-actions">
-            <a href="https://www.tradingview.com/chart/?symbol=QURE" target="_blank">Chart</a>
-            <a href="https://finance.yahoo.com/quote/QURE" target="_blank">Yahoo</a>
-            <a href="https://stocktwits.com/symbol/QURE" target="_blank">Twits</a>
+            <a class="action-btn action-chart" href="https://www.tradingview.com/chart/?symbol=QURE" target="_blank">
+                <img src="assets/tradingview.png" alt="TradingView"> Chart
+            </a>
+            <a class="action-btn action-yahoo" href="https://finance.yahoo.com/quote/QURE" target="_blank">
+                <img src="assets/yahoo.png" alt="Yahoo Finance"> Yahoo
+            </a>
+            <a class="action-btn action-twits" href="https://stocktwits.com/symbol/QURE" target="_blank">
+                <img src="assets/stocktwits.png" alt="Stocktwits"> Twits
+            </a>
         </div>
     </div>
     
@@ -2189,15 +2358,15 @@ td small {
         </div>
 
         <div class="metrics-grid">
-            <div><span>Liquidity</span><strong>$216M</strong></div>
-            <div><span>ATR</span><strong>7.7%</strong></div>
-            <div><span>VWAP Dist</span><strong>-2.7%</strong></div>
-            <div><span>HOD</span><strong>Not HOD</strong></div>
+            <div><span>Liquidity</span><strong class="metric-good">$216M</strong></div>
+            <div><span>ATR</span><strong class="metric-caution">7.7%</strong></div>
+            <div><span>VWAP Dist</span><strong class="metric-risk">-2.7%</strong></div>
+            <div><span>HOD Dist</span><strong class="metric-risk">-10.3%</strong></div>
         </div>
 
         <div class="status-row">
             <span class="status-chip status-neutral">Below/Unknown</span>
-            <span class="status-chip status-neutral">Not HOD</span>
+            <span class="status-chip status-neutral">HOD -10.3%</span>
             <span class="status-chip status-risk">EXTENDED</span>
         </div>
 
@@ -2214,9 +2383,15 @@ td small {
         
 
         <div class="card-actions">
-            <a href="https://www.tradingview.com/chart/?symbol=FLNC" target="_blank">Chart</a>
-            <a href="https://finance.yahoo.com/quote/FLNC" target="_blank">Yahoo</a>
-            <a href="https://stocktwits.com/symbol/FLNC" target="_blank">Twits</a>
+            <a class="action-btn action-chart" href="https://www.tradingview.com/chart/?symbol=FLNC" target="_blank">
+                <img src="assets/tradingview.png" alt="TradingView"> Chart
+            </a>
+            <a class="action-btn action-yahoo" href="https://finance.yahoo.com/quote/FLNC" target="_blank">
+                <img src="assets/yahoo.png" alt="Yahoo Finance"> Yahoo
+            </a>
+            <a class="action-btn action-twits" href="https://stocktwits.com/symbol/FLNC" target="_blank">
+                <img src="assets/stocktwits.png" alt="Stocktwits"> Twits
+            </a>
         </div>
     </div>
     
@@ -2256,10 +2431,10 @@ td small {
         </div>
 
         <div class="metrics-grid">
-            <div><span>Liquidity</span><strong>$26M</strong></div>
-            <div><span>ATR</span><strong>4.7%</strong></div>
-            <div><span>VWAP Dist</span><strong>+5.8%</strong></div>
-            <div><span>HOD</span><strong>Near HOD</strong></div>
+            <div><span>Liquidity</span><strong class="metric-neutral">$26M</strong></div>
+            <div><span>ATR</span><strong class="metric-good">4.7%</strong></div>
+            <div><span>VWAP Dist</span><strong class="metric-risk">+5.8%</strong></div>
+            <div><span>HOD Dist</span><strong class="metric-good">-0.1%</strong></div>
         </div>
 
         <div class="status-row">
@@ -2275,9 +2450,15 @@ td small {
         
 
         <div class="card-actions">
-            <a href="https://www.tradingview.com/chart/?symbol=AMN" target="_blank">Chart</a>
-            <a href="https://finance.yahoo.com/quote/AMN" target="_blank">Yahoo</a>
-            <a href="https://stocktwits.com/symbol/AMN" target="_blank">Twits</a>
+            <a class="action-btn action-chart" href="https://www.tradingview.com/chart/?symbol=AMN" target="_blank">
+                <img src="assets/tradingview.png" alt="TradingView"> Chart
+            </a>
+            <a class="action-btn action-yahoo" href="https://finance.yahoo.com/quote/AMN" target="_blank">
+                <img src="assets/yahoo.png" alt="Yahoo Finance"> Yahoo
+            </a>
+            <a class="action-btn action-twits" href="https://stocktwits.com/symbol/AMN" target="_blank">
+                <img src="assets/stocktwits.png" alt="Stocktwits"> Twits
+            </a>
         </div>
     </div>
     
@@ -2317,15 +2498,15 @@ td small {
         </div>
 
         <div class="metrics-grid">
-            <div><span>Liquidity</span><strong>$200M</strong></div>
-            <div><span>ATR</span><strong>8.1%</strong></div>
-            <div><span>VWAP Dist</span><strong>+5.1%</strong></div>
-            <div><span>HOD</span><strong>Near HOD</strong></div>
+            <div><span>Liquidity</span><strong class="metric-good">$200M</strong></div>
+            <div><span>ATR</span><strong class="metric-risk">8.1%</strong></div>
+            <div><span>VWAP Dist</span><strong class="metric-risk">+5.1%</strong></div>
+            <div><span>HOD Dist</span><strong class="metric-ok">-0.9%</strong></div>
         </div>
 
         <div class="status-row">
             <span class="status-chip status-tech">Above VWAP</span>
-            <span class="status-chip status-positive">Near HOD</span>
+            <span class="status-chip status-neutral">HOD -0.9%</span>
             <span class="status-chip status-risk">EXTENDED</span>
         </div>
 
@@ -2342,9 +2523,15 @@ td small {
         
 
         <div class="card-actions">
-            <a href="https://www.tradingview.com/chart/?symbol=EOSE" target="_blank">Chart</a>
-            <a href="https://finance.yahoo.com/quote/EOSE" target="_blank">Yahoo</a>
-            <a href="https://stocktwits.com/symbol/EOSE" target="_blank">Twits</a>
+            <a class="action-btn action-chart" href="https://www.tradingview.com/chart/?symbol=EOSE" target="_blank">
+                <img src="assets/tradingview.png" alt="TradingView"> Chart
+            </a>
+            <a class="action-btn action-yahoo" href="https://finance.yahoo.com/quote/EOSE" target="_blank">
+                <img src="assets/yahoo.png" alt="Yahoo Finance"> Yahoo
+            </a>
+            <a class="action-btn action-twits" href="https://stocktwits.com/symbol/EOSE" target="_blank">
+                <img src="assets/stocktwits.png" alt="Stocktwits"> Twits
+            </a>
         </div>
     </div>
     
@@ -2398,15 +2585,15 @@ td small {
         </div>
 
         <div class="metrics-grid">
-            <div><span>Liquidity</span><strong>$169M</strong></div>
-            <div><span>ATR</span><strong>6.9%</strong></div>
-            <div><span>VWAP Dist</span><strong>+0.2%</strong></div>
-            <div><span>HOD</span><strong>Not HOD</strong></div>
+            <div><span>Liquidity</span><strong class="metric-good">$169M</strong></div>
+            <div><span>ATR</span><strong class="metric-caution">6.9%</strong></div>
+            <div><span>VWAP Dist</span><strong class="metric-good">+0.2%</strong></div>
+            <div><span>HOD Dist</span><strong class="metric-risk">-7.5%</strong></div>
         </div>
 
         <div class="status-row">
             <span class="status-chip status-tech">Above VWAP</span>
-            <span class="status-chip status-neutral">Not HOD</span>
+            <span class="status-chip status-neutral">HOD -7.5%</span>
             <span class="status-chip status-risk">HIGH_RISK</span>
         </div>
 
@@ -2423,9 +2610,15 @@ td small {
         
 
         <div class="card-actions">
-            <a href="https://www.tradingview.com/chart/?symbol=INOD" target="_blank">Chart</a>
-            <a href="https://finance.yahoo.com/quote/INOD" target="_blank">Yahoo</a>
-            <a href="https://stocktwits.com/symbol/INOD" target="_blank">Twits</a>
+            <a class="action-btn action-chart" href="https://www.tradingview.com/chart/?symbol=INOD" target="_blank">
+                <img src="assets/tradingview.png" alt="TradingView"> Chart
+            </a>
+            <a class="action-btn action-yahoo" href="https://finance.yahoo.com/quote/INOD" target="_blank">
+                <img src="assets/yahoo.png" alt="Yahoo Finance"> Yahoo
+            </a>
+            <a class="action-btn action-twits" href="https://stocktwits.com/symbol/INOD" target="_blank">
+                <img src="assets/stocktwits.png" alt="Stocktwits"> Twits
+            </a>
         </div>
     </div>
     
@@ -2465,15 +2658,15 @@ td small {
         </div>
 
         <div class="metrics-grid">
-            <div><span>Liquidity</span><strong>$128M</strong></div>
-            <div><span>ATR</span><strong>9.9%</strong></div>
-            <div><span>VWAP Dist</span><strong>+6.3%</strong></div>
-            <div><span>HOD</span><strong>Not HOD</strong></div>
+            <div><span>Liquidity</span><strong class="metric-good">$128M</strong></div>
+            <div><span>ATR</span><strong class="metric-risk">9.9%</strong></div>
+            <div><span>VWAP Dist</span><strong class="metric-risk">+6.3%</strong></div>
+            <div><span>HOD Dist</span><strong class="metric-risk">-8.5%</strong></div>
         </div>
 
         <div class="status-row">
             <span class="status-chip status-tech">Above VWAP</span>
-            <span class="status-chip status-neutral">Not HOD</span>
+            <span class="status-chip status-neutral">HOD -8.5%</span>
             <span class="status-chip status-risk">HIGH_RISK</span>
         </div>
 
@@ -2490,9 +2683,15 @@ td small {
         
 
         <div class="card-actions">
-            <a href="https://www.tradingview.com/chart/?symbol=RXT" target="_blank">Chart</a>
-            <a href="https://finance.yahoo.com/quote/RXT" target="_blank">Yahoo</a>
-            <a href="https://stocktwits.com/symbol/RXT" target="_blank">Twits</a>
+            <a class="action-btn action-chart" href="https://www.tradingview.com/chart/?symbol=RXT" target="_blank">
+                <img src="assets/tradingview.png" alt="TradingView"> Chart
+            </a>
+            <a class="action-btn action-yahoo" href="https://finance.yahoo.com/quote/RXT" target="_blank">
+                <img src="assets/yahoo.png" alt="Yahoo Finance"> Yahoo
+            </a>
+            <a class="action-btn action-twits" href="https://stocktwits.com/symbol/RXT" target="_blank">
+                <img src="assets/stocktwits.png" alt="Stocktwits"> Twits
+            </a>
         </div>
     </div>
     
@@ -2576,22 +2775,6 @@ td small {
         </tr>
         
         <tr>
-            <td><strong>RELY</strong><br><small>Technology</small></td>
-            <td>74</td>
-            <td>1</td>
-            <td>Potential Mover</td>
-            <td>$24.03</td>
-            <td class="positive">+5.44%</td>
-            <td>$107M</td>
-            <td>3.8%</td>
-            <td>Above</td>
-            <td>NORMAL</td>
-            <td>LEADING<br><small>+2.01% vs sector</small></td>
-            <td>No confirmed company-specific catalyst</td>
-            <td>—</td>
-        </tr>
-        
-        <tr>
             <td><strong>BLSH</strong><br><small>Technology</small></td>
             <td>74</td>
             <td>1</td>
@@ -2603,6 +2786,22 @@ td small {
             <td>Above</td>
             <td>NORMAL</td>
             <td>LEADING<br><small>+2.54% vs sector</small></td>
+            <td>No confirmed company-specific catalyst</td>
+            <td>—</td>
+        </tr>
+        
+        <tr>
+            <td><strong>RELY</strong><br><small>Technology</small></td>
+            <td>74</td>
+            <td>1</td>
+            <td>Potential Mover</td>
+            <td>$24.03</td>
+            <td class="positive">+5.44%</td>
+            <td>$107M</td>
+            <td>3.8%</td>
+            <td>Above</td>
+            <td>NORMAL</td>
+            <td>LEADING<br><small>+2.01% vs sector</small></td>
             <td>No confirmed company-specific catalyst</td>
             <td>—</td>
         </tr>
@@ -2672,17 +2871,17 @@ td small {
         </tr>
         
         <tr>
-            <td><strong>WRBY</strong><br><small>Healthcare</small></td>
+            <td><strong>RUN</strong><br><small>Solar</small></td>
             <td>70</td>
             <td>1</td>
             <td>Potential Mover</td>
-            <td>$29.55</td>
-            <td class="positive">+8.64%</td>
-            <td>$77M</td>
-            <td>6.5%</td>
+            <td>$14.61</td>
+            <td class="positive">+5.87%</td>
+            <td>$140M</td>
+            <td>6.4%</td>
             <td>Above</td>
             <td>NORMAL</td>
-            <td>WEAK<br><small>+9.49% vs sector</small></td>
+            <td>LEADING<br><small>+2.22% vs sector</small></td>
             <td>No confirmed company-specific catalyst</td>
             <td>—</td>
         </tr>
