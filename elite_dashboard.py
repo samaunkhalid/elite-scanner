@@ -15,10 +15,15 @@ Inputs:
 
 Features:
   - Professional bucketed display
+  - Company name under ticker
+  - Price top-right, smaller score badge
+  - Sector / stock-vs-sector context
+  - Sector leadership snapshot
   - Catalyst strip on every card
-  - News headline/risk flags
+  - Meaning-based tag colors
   - Desk View table
   - Market regime banner
+  - Last scan/build time + market status
 """
 
 import json
@@ -36,7 +41,7 @@ except Exception:
 
 
 # ==============================================================
-# SECTOR MAPPING
+# FALLBACK SECTOR MAPPING
 # ==============================================================
 
 SECTORS = {
@@ -45,46 +50,55 @@ SECTORS = {
     "IREN": "Crypto", "MSTR": "Crypto", "COIN": "Crypto",
 
     "SOUN": "AI", "AI": "AI", "BBAI": "AI", "IONQ": "Quantum",
-    "RGTI": "Quantum", "ARQQ": "Quantum", "PLTR": "AI", "NVDA": "AI",
-    "SMCI": "AI",
+    "RGTI": "Quantum", "ARQQ": "Quantum", "PLTR": "AI", "NVDA": "Semiconductors",
+    "SMCI": "Semiconductors",
 
-    "AMD": "Semis", "INTC": "Semis", "WOLF": "Semis", "LSCC": "Semis",
-    "MU": "Semis", "QCOM": "Semis", "ARM": "Semis", "SMTC": "Semis",
-    "MRVL": "Semis", "AVGO": "Semis", "TSM": "Semis", "GFS": "Semis",
-    "AMKR": "Semis",
+    "AMD": "Semiconductors", "INTC": "Semiconductors", "WOLF": "Semiconductors",
+    "LSCC": "Semiconductors", "MU": "Semiconductors", "QCOM": "Semiconductors",
+    "ARM": "Semiconductors", "SMTC": "Semiconductors", "MRVL": "Semiconductors",
+    "AVGO": "Semiconductors", "TSM": "Semiconductors", "GFS": "Semiconductors",
+    "AMKR": "Semiconductors", "STM": "Semiconductors",
 
-    "TSLA": "EV", "RIVN": "EV", "NIO": "EV", "XPEV": "EV", "LCID": "EV",
-    "LI": "EV", "QS": "EV", "CHPT": "EV", "PLUG": "EV", "FCEL": "EV",
-    "BE": "EV", "BLNK": "EV", "EVGO": "EV", "RUN": "Solar",
+    "TSLA": "Automobiles", "RIVN": "Automobiles", "NIO": "Automobiles",
+    "XPEV": "Automobiles", "LCID": "Automobiles", "LI": "Automobiles",
+    "QS": "EV", "CHPT": "EV", "PLUG": "Energy", "FCEL": "Energy",
+    "BE": "Energy", "BLNK": "EV", "EVGO": "EV", "RUN": "Solar",
+    "CSIQ": "Solar", "ENPH": "Solar", "SEDG": "Solar",
 
-    "RKLB": "Space", "ASTS": "Space", "LUNR": "Space", "JOBY": "Mobility",
-    "ACHR": "Mobility", "KTOS": "Defense", "LMT": "Defense", "RTX": "Defense",
+    "RKLB": "Aerospace & Defense", "ASTS": "Aerospace & Defense",
+    "LUNR": "Aerospace & Defense", "JOBY": "Automobiles",
+    "ACHR": "Automobiles", "KTOS": "Aerospace & Defense",
+    "LMT": "Aerospace & Defense", "RTX": "Aerospace & Defense",
 
-    "HIMS": "Biotech", "CRSP": "Biotech", "BNGO": "Biotech", "VKTX": "Biotech",
-    "MDGL": "Biotech", "VRDN": "Biotech", "CYTK": "Biotech", "IOVA": "Biotech",
-    "SAVA": "Biotech", "MRNA": "Biotech", "NVAX": "Biotech", "QURE": "Biotech",
+    "HIMS": "Healthcare", "CRSP": "Biotechnology", "BNGO": "Biotechnology",
+    "VKTX": "Biotechnology", "MDGL": "Biotechnology", "VRDN": "Biotechnology",
+    "CYTK": "Biotechnology", "IOVA": "Biotechnology", "SAVA": "Biotechnology",
+    "MRNA": "Biotechnology", "NVAX": "Biotechnology", "QURE": "Biotechnology",
 
-    "GME": "Retail", "AMC": "Meme", "BBBY": "Meme", "BB": "Meme", "NOK": "Meme",
-    "HOOD": "Fintech", "SOFI": "Fintech", "AFRM": "Fintech", "UPST": "Fintech",
-    "NU": "Fintech",
+    "GME": "Retail", "AMC": "Meme", "BBBY": "Meme", "BB": "Meme", "NOK": "Technology",
+    "HOOD": "Financial Services", "SOFI": "Financial Services", "AFRM": "Financial Services",
+    "UPST": "Financial Services", "NU": "Financial Services",
 
-    "RDDT": "Social", "PINS": "Social", "SNAP": "Social", "RBLX": "Gaming",
-    "ROKU": "Streaming", "DKNG": "Gaming", "NFLX": "Streaming",
+    "RDDT": "Communication Services", "PINS": "Communication Services",
+    "SNAP": "Communication Services", "RBLX": "Gaming", "ROKU": "Communication Services",
+    "DKNG": "Gaming", "NFLX": "Communication Services",
 
-    "NET": "Cyber", "CRWD": "Cyber", "ZS": "Cyber", "PANW": "Cyber", "OKTA": "Cyber",
+    "NET": "Software", "CRWD": "Software", "ZS": "Software", "PANW": "Software",
+    "OKTA": "Software", "DBX": "Software", "FROG": "Software",
 
     "DVN": "Energy", "CTRA": "Energy", "XOM": "Energy", "CVX": "Energy",
-    "TECK": "Materials",
+    "TECK": "Basic Materials",
 
-    "CCL": "Travel", "ABNB": "Travel", "CART": "Retail", "CAVA": "Consumer",
-    "CELH": "Consumer", "SHOP": "E-Commerce",
+    "CCL": "Travel", "ABNB": "Travel", "CART": "Retail", "CAVA": "Consumer Cyclical",
+    "CELH": "Consumer Defensive", "SHOP": "E-Commerce",
 
-    "AAPL": "Tech", "MSFT": "Tech", "GOOGL": "Tech", "META": "Tech", "AMZN": "Tech",
+    "AAPL": "Technology", "MSFT": "Technology", "GOOGL": "Communication Services",
+    "META": "Communication Services", "AMZN": "Consumer Cyclical",
 }
 
 
 def get_sector(symbol):
-    return SECTORS.get(str(symbol).upper(), "Other")
+    return SECTORS.get(str(symbol).upper(), "Unknown")
 
 
 # ==============================================================
@@ -131,6 +145,13 @@ def truthy(value):
         return value
     text = safe_str(value).lower()
     return text in ["true", "1", "yes", "y"]
+
+
+def shorten(value, max_len=58):
+    text = safe_str(value)
+    if len(text) <= max_len:
+        return text
+    return text[:max_len - 1].rstrip() + "…"
 
 
 def load_csv_records(path, limit=None):
@@ -261,6 +282,19 @@ def get_catalyst_meta(stock):
     }
 
 
+def get_sector_status_class(status):
+    status = safe_str(status).upper()
+    if status == "LEADING":
+        return "sector-leading"
+    if status == "IMPROVING":
+        return "sector-improving"
+    if status == "WEAK":
+        return "sector-weak"
+    if status == "UNKNOWN":
+        return "sector-unknown"
+    return "sector-neutral"
+
+
 def format_money_m(value):
     val = safe_float(value, 0)
     if val >= 1000:
@@ -268,6 +302,47 @@ def format_money_m(value):
     if val > 0:
         return f"${val:.0f}M"
     return "—"
+
+
+def classify_tag(tag):
+    t = safe_str(tag).lower()
+
+    risk_words = [
+        "risk", "high risk", "offering", "downgrade", "dilution", "investigation",
+        "bankruptcy", "delisting", "reverse split", "news_risk"
+    ]
+    caution_words = [
+        "extended", "big move", "major move", "far above", "gap", "high atr",
+        "vol surge", "rvol"
+    ]
+    squeeze_words = [
+        "si ", "short", "dtc", "float"
+    ]
+    positive_words = [
+        "positive catalyst", "sector leading", "sector supportive", "rs strong",
+        "rs positive", "accumulating", "near 52wh", "record revenue", "upgrade"
+    ]
+    technical_words = [
+        "above vwap", "near hod", "upper range", "tight consolidation",
+        "consolidating", "ema", "near 20d high", "vwap"
+    ]
+    neutral_words = [
+        "clean price", "lower-price", "atr", "liq", "insider"
+    ]
+
+    if any(w in t for w in risk_words):
+        return "tag-risk"
+    if any(w in t for w in caution_words):
+        return "tag-caution"
+    if any(w in t for w in squeeze_words):
+        return "tag-squeeze"
+    if any(w in t for w in positive_words):
+        return "tag-positive"
+    if any(w in t for w in technical_words):
+        return "tag-tech"
+    if any(w in t for w in neutral_words):
+        return "tag-neutral"
+    return "tag-neutral"
 
 
 def build_tags(stock, max_tags=4):
@@ -279,7 +354,7 @@ def build_tags(stock, max_tags=4):
     html_parts = []
 
     for tag in parts[:max_tags]:
-        html_parts.append(f'<span class="tag">{esc(tag)}</span>')
+        html_parts.append(f'<span class="tag {classify_tag(tag)}">{esc(tag)}</span>')
 
     return "".join(html_parts)
 
@@ -293,10 +368,22 @@ def build_card(stock):
     bucket = safe_str(stock.get("setup_bucket"), "MONITOR")
     risk = safe_str(stock.get("risk_category"), "NORMAL")
 
+    company_name = safe_str(stock.get("company_name"), "")
+    if not company_name or company_name.upper() == symbol:
+        company_name = ""
+
+    sector = safe_str(stock.get("sector"), "")
+    if not sector or sector == "Unknown":
+        sector = get_sector(symbol)
+
+    sector_etf = safe_str(stock.get("sector_etf"), "SPY")
+    sector_status = safe_str(stock.get("sector_status"), "UNKNOWN").upper()
+    sector_change = safe_float(stock.get("sector_change_pct"), 0)
+    stock_vs_sector = safe_float(stock.get("stock_vs_sector_pct"), 0)
+
     bucket_meta = get_bucket_meta(bucket)
     catalyst = get_catalyst_meta(stock)
 
-    sector = get_sector(symbol)
     tier_color = get_tier_color(tier)
     change_class = "positive" if change_pct >= 0 else "negative"
     change_sign = "+" if change_pct >= 0 else ""
@@ -344,23 +431,37 @@ def build_card(stock):
         </div>
         """
 
+    company_line = ""
+    if company_name:
+        company_line = f'<div class="company-name">{esc(shorten(company_name, 58))}</div>'
+
     return f"""
     <div class="stock-card {bucket_meta['class']}" style="--accent:{bucket_meta['accent']};">
         <div class="card-top">
-            <div>
+            <div class="card-id">
                 <div class="symbol-row">
                     <span class="symbol">{esc(symbol)}</span>
-                    <span class="sector">{esc(sector)}</span>
+                    <span class="sector-chip">{esc(sector)}</span>
                     <span class="tier" style="color:{tier_color};border-color:{tier_color};">Tier {esc(tier)}</span>
                 </div>
-                <div class="bucket-label">{esc(bucket_meta['label'])}</div>
+                {company_line}
             </div>
-            <div class="score-box" style="color:{tier_color};">{score}</div>
+            <div class="price-box">
+                <div class="price">${price:.2f}</div>
+                <div class="change {change_class}">{change_sign}{change_pct:.2f}%</div>
+            </div>
         </div>
 
-        <div class="price-row">
-            <div class="price">${price:.2f}</div>
-            <div class="change {change_class}">{change_sign}{change_pct:.2f}%</div>
+        <div class="score-risk-row">
+            <span class="score-pill">Score {score}/100</span>
+            <span class="risk-pill">{esc(risk)}</span>
+            <span class="sector-status-pill {get_sector_status_class(sector_status)}">{esc(sector_status)}</span>
+        </div>
+
+        <div class="sector-strip">
+            <span>Sector <strong>{esc(sector)}</strong></span>
+            <span>ETF <strong>{esc(sector_etf)}</strong> <b class="{'positive' if sector_change >= 0 else 'negative'}">{sector_change:+.2f}%</b></span>
+            <span>Vs Sector <b class="{'positive' if stock_vs_sector >= 0 else 'negative'}">{stock_vs_sector:+.2f}%</b></span>
         </div>
 
         <div class="catalyst-strip {catalyst['class']}">
@@ -378,9 +479,9 @@ def build_card(stock):
         </div>
 
         <div class="status-row">
-            <span class="status-chip">{esc(vwap_text)}</span>
-            <span class="status-chip">{esc(hod_text)}</span>
-            <span class="status-chip risk-chip">{esc(risk)}</span>
+            <span class="status-chip status-tech">{esc(vwap_text)}</span>
+            <span class="status-chip status-tech">{esc(hod_text)}</span>
+            <span class="status-chip status-neutral">{esc(bucket_meta['label'])}</span>
         </div>
 
         <div class="interpretation">{esc(bucket_meta['interpretation'])}</div>
@@ -462,6 +563,94 @@ def build_regime_html(regime):
     """
 
 
+def build_sector_snapshot(raw, active_watchlist):
+    if not raw:
+        return ""
+
+    active_symbols = {safe_str(s.get("symbol")).upper() for s in active_watchlist}
+    grouped = {}
+
+    for row in raw:
+        sector = safe_str(row.get("sector"), "")
+        if not sector or sector == "Unknown":
+            sector = get_sector(row.get("symbol"))
+
+        if not sector or sector == "Unknown":
+            continue
+
+        etf = safe_str(row.get("sector_etf"), "SPY")
+        sector_chg = safe_float(row.get("sector_change_pct"), 0)
+        sector_vs_spy = safe_float(row.get("sector_vs_spy_pct"), 0)
+        status = safe_str(row.get("sector_status"), "UNKNOWN").upper()
+        symbol = safe_str(row.get("symbol")).upper()
+
+        if sector not in grouped:
+            grouped[sector] = {
+                "sector": sector,
+                "etf": etf,
+                "sector_change": sector_chg,
+                "sector_vs_spy": sector_vs_spy,
+                "status": status,
+                "count": 0,
+                "active_names": [],
+            }
+
+        grouped[sector]["count"] += 1
+        if symbol in active_symbols and len(grouped[sector]["active_names"]) < 4:
+            grouped[sector]["active_names"].append(symbol)
+
+    if not grouped:
+        return ""
+
+    rows = sorted(
+        grouped.values(),
+        key=lambda x: (x["sector_vs_spy"], x["sector_change"], x["count"]),
+        reverse=True,
+    )[:8]
+
+    row_html = ""
+    for item in rows:
+        names = ", ".join(item["active_names"]) if item["active_names"] else "—"
+        row_html += f"""
+        <tr>
+            <td><strong>{esc(item['sector'])}</strong></td>
+            <td>{esc(item['etf'])}</td>
+            <td class="{'positive' if item['sector_change'] >= 0 else 'negative'}">{item['sector_change']:+.2f}%</td>
+            <td class="{'positive' if item['sector_vs_spy'] >= 0 else 'negative'}">{item['sector_vs_spy']:+.2f}%</td>
+            <td><span class="sector-status-pill {get_sector_status_class(item['status'])}">{esc(item['status'])}</span></td>
+            <td>{item['count']}</td>
+            <td>{esc(names)}</td>
+        </tr>
+        """
+
+    return f"""
+    <section class="sector-snapshot">
+        <div class="section-header">
+            <div>
+                <h2>Sector Leadership Snapshot</h2>
+                <p>Ranks sectors by same-day ETF strength versus SPY. This is leadership context, not a full rotation model yet.</p>
+            </div>
+        </div>
+        <div class="table-wrap compact-table">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Sector</th>
+                        <th>ETF</th>
+                        <th>ETF %</th>
+                        <th>Vs SPY</th>
+                        <th>Status</th>
+                        <th>Names</th>
+                        <th>Active Focus</th>
+                    </tr>
+                </thead>
+                <tbody>{row_html}</tbody>
+            </table>
+        </div>
+    </section>
+    """
+
+
 def build_kpi_row(potential, active, extended, highrisk, raw, active_watchlist):
     total_focus = len(active_watchlist)
     avg_score = 0
@@ -490,6 +679,7 @@ def build_desk_table(rows):
 
     for stock in rows[:40]:
         symbol = safe_str(stock.get("symbol"), "—").upper()
+        company = shorten(safe_str(stock.get("company_name"), ""), 42)
         score = safe_int(stock.get("score"), 0)
         tier = safe_str(stock.get("tier"), "—")
         bucket = get_bucket_meta(safe_str(stock.get("setup_bucket"), "MONITOR"))["label"]
@@ -499,17 +689,23 @@ def build_desk_table(rows):
         atr = safe_float(stock.get("atr_pct"), 0)
         vwap = "Above" if truthy(stock.get("above_vwap")) else "Below/NA"
         risk = safe_str(stock.get("risk_category"), "NORMAL")
+        sector = safe_str(stock.get("sector"), get_sector(symbol))
+        sector_status = safe_str(stock.get("sector_status"), "UNKNOWN")
+        vs_sector = safe_float(stock.get("stock_vs_sector_pct"), 0)
         catalyst = get_catalyst_meta(stock)
         headline = catalyst["headline"][:85] if catalyst["headline"] else "—"
 
         html_rows += f"""
         <tr>
-            <td><strong>{esc(symbol)}</strong></td>
+            <td><strong>{esc(symbol)}</strong><br><small>{esc(company)}</small></td>
             <td>{score}</td>
             <td>{esc(tier)}</td>
             <td>{esc(bucket)}</td>
             <td>${price:.2f}</td>
             <td class="{'positive' if chg >= 0 else 'negative'}">{chg:+.2f}%</td>
+            <td>{esc(sector)}</td>
+            <td><span class="sector-status-pill {get_sector_status_class(sector_status)}">{esc(sector_status)}</span></td>
+            <td class="{'positive' if vs_sector >= 0 else 'negative'}">{vs_sector:+.2f}%</td>
             <td>{liq}</td>
             <td>{atr:.1f}%</td>
             <td>{esc(vwap)}</td>
@@ -537,6 +733,9 @@ def build_desk_table(rows):
                         <th>Bucket</th>
                         <th>Price</th>
                         <th>% Chg</th>
+                        <th>Sector</th>
+                        <th>Status</th>
+                        <th>Vs Sector</th>
                         <th>Liq</th>
                         <th>ATR</th>
                         <th>VWAP</th>
@@ -566,17 +765,18 @@ def get_times():
 
 
 def get_market_status(now_ny):
+    weekday = now_ny.weekday()
     minutes = now_ny.hour * 60 + now_ny.minute
 
-    if minutes < 9 * 60 + 30:
-        return "Pre-Market", "status-blue"
-    if minutes < 11 * 60 + 30:
-        return "Prime Window", "status-green"
-    if minutes < 14 * 60 + 30:
-        return "Lunch Lull", "status-yellow"
-    if minutes < 16 * 60:
-        return "Afternoon", "status-green"
-    return "Closed", "status-gray"
+    if weekday >= 5:
+        return "CLOSED", "status-gray"
+    if 4 * 60 <= minutes < 9 * 60 + 30:
+        return "PRE-MARKET", "status-blue"
+    if 9 * 60 + 30 <= minutes < 16 * 60:
+        return "OPEN", "status-green"
+    if 16 * 60 <= minutes < 20 * 60:
+        return "AFTER-HOURS", "status-yellow"
+    return "CLOSED", "status-gray"
 
 
 # ==============================================================
@@ -585,9 +785,10 @@ def get_market_status(now_ny):
 
 def build_dashboard(potential, active, extended, highrisk, raw, active_watchlist, regime):
     now_utc, now_ny = get_times()
-    status, status_class = get_market_status(now_ny)
+    market_status, status_class = get_market_status(now_ny)
 
     regime_html = build_regime_html(regime)
+    sector_snapshot = build_sector_snapshot(raw, active_watchlist)
     kpi_html = build_kpi_row(potential, active, extended, highrisk, raw, active_watchlist)
 
     potential_section = build_section(
@@ -646,7 +847,7 @@ def build_dashboard(potential, active, extended, highrisk, raw, active_watchlist
 
 body {
     background:
-        radial-gradient(circle at top right, rgba(16, 185, 129, 0.10), transparent 28%),
+        radial-gradient(circle at top right, rgba(16, 185, 129, 0.08), transparent 30%),
         linear-gradient(180deg, #05070b 0%, #080b12 100%);
     color: #e5e7eb;
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, sans-serif;
@@ -698,11 +899,13 @@ body {
     color: #94a3b8;
 }
 
-.status-pill {
+.status-pill,
+.scan-pill {
     padding: 5px 11px;
     border-radius: 999px;
     font-weight: 650;
     border: 1px solid rgba(148, 163, 184, 0.18);
+    background: rgba(15, 23, 42, 0.72);
 }
 
 .status-blue { color: #60a5fa; background: rgba(59, 130, 246, 0.10); }
@@ -814,7 +1017,8 @@ body {
 }
 
 .desk-section,
-.desk-table-section {
+.desk-table-section,
+.sector-snapshot {
     margin-bottom: 24px;
 }
 
@@ -884,6 +1088,10 @@ body {
     gap: 12px;
 }
 
+.card-id {
+    min-width: 0;
+}
+
 .symbol-row {
     display: flex;
     gap: 6px;
@@ -897,46 +1105,102 @@ body {
     letter-spacing: -0.03em;
 }
 
-.sector,
-.tier {
-    font-size: 10px;
-    font-weight: 500;
-    padding: 2px 6px;
-    border-radius: 999px;
-    border: 1px solid rgba(148, 163, 184, 0.18);
-    color: #94a3b8;
-}
-
-.bucket-label {
-    color: #94a3b8;
+.company-name {
+    color: #cbd5e1;
     font-size: 12px;
-    font-weight: 400;
     margin-top: 5px;
     line-height: 1.35;
 }
 
-.score-box {
-    font-size: 25px;
-    font-weight: 850;
+.sector-chip,
+.tier {
+    font-size: 10px;
+    font-weight: 500;
+    padding: 2px 7px;
+    border-radius: 999px;
+    border: 1px solid rgba(148, 163, 184, 0.18);
+    color: #94a3b8;
+    background: rgba(148, 163, 184, 0.06);
 }
 
-.price-row {
-    display: flex;
-    justify-content: space-between;
-    align-items: baseline;
-    margin-top: 12px;
-    padding-bottom: 10px;
-    border-bottom: 1px solid rgba(148, 163, 184, 0.10);
+.price-box {
+    text-align: right;
+    white-space: nowrap;
 }
 
 .price {
-    font-size: 18px;
-    font-weight: 750;
+    font-size: 20px;
+    font-weight: 800;
+    color: #f8fafc;
 }
 
 .change {
     font-size: 14px;
     font-weight: 700;
+    margin-top: 2px;
+}
+
+.score-risk-row {
+    display: flex;
+    gap: 7px;
+    flex-wrap: wrap;
+    margin-top: 11px;
+}
+
+.score-pill,
+.risk-pill,
+.sector-status-pill {
+    padding: 4px 9px;
+    border-radius: 999px;
+    font-size: 10px;
+    font-weight: 650;
+    border: 1px solid rgba(148, 163, 184, 0.16);
+    background: rgba(148, 163, 184, 0.07);
+    color: #cbd5e1;
+}
+
+.sector-leading {
+    color: #34d399;
+    border-color: rgba(16, 185, 129, 0.25);
+    background: rgba(16, 185, 129, 0.08);
+}
+
+.sector-improving {
+    color: #86efac;
+    border-color: rgba(34, 197, 94, 0.20);
+    background: rgba(34, 197, 94, 0.06);
+}
+
+.sector-neutral,
+.sector-unknown {
+    color: #94a3b8;
+}
+
+.sector-weak {
+    color: #fca5a5;
+    border-color: rgba(239, 68, 68, 0.25);
+    background: rgba(239, 68, 68, 0.08);
+}
+
+.sector-strip {
+    margin-top: 11px;
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    padding: 8px 9px;
+    border-radius: 9px;
+    border: 1px solid rgba(148, 163, 184, 0.12);
+    background: rgba(2, 6, 23, 0.36);
+}
+
+.sector-strip span {
+    font-size: 11px;
+    color: #94a3b8;
+}
+
+.sector-strip strong {
+    color: #e5e7eb;
+    font-weight: 650;
 }
 
 .catalyst-strip {
@@ -989,14 +1253,14 @@ body {
 }
 
 .catalyst-neutral {
-    border-color: rgba(59, 130, 246, 0.35);
-    background: rgba(59, 130, 246, 0.08);
+    border-color: rgba(59, 130, 246, 0.25);
+    background: rgba(59, 130, 246, 0.06);
     color: #93c5fd;
 }
 
 .catalyst-none {
-    border-color: rgba(148, 163, 184, 0.16);
-    background: rgba(148, 163, 184, 0.05);
+    border-color: rgba(148, 163, 184, 0.14);
+    background: rgba(148, 163, 184, 0.04);
     color: #94a3b8;
 }
 
@@ -1038,17 +1302,47 @@ body {
 
 .status-chip,
 .tag {
-    background: rgba(59, 130, 246, 0.10);
-    color: #93c5fd;
-    border: 1px solid rgba(59, 130, 246, 0.20);
     border-radius: 999px;
     padding: 4px 9px;
     font-size: 10px;
     font-weight: 600;
     line-height: 1.2;
+    border: 1px solid rgba(148, 163, 184, 0.18);
 }
 
-.risk-chip {
+.status-tech,
+.tag-tech {
+    background: rgba(59, 130, 246, 0.09);
+    color: #93c5fd;
+    border-color: rgba(59, 130, 246, 0.20);
+}
+
+.tag-positive {
+    background: rgba(16, 185, 129, 0.09);
+    color: #86efac;
+    border-color: rgba(16, 185, 129, 0.22);
+}
+
+.tag-caution {
+    background: rgba(245, 158, 11, 0.10);
+    color: #fbbf24;
+    border-color: rgba(245, 158, 11, 0.22);
+}
+
+.tag-squeeze {
+    background: rgba(168, 85, 247, 0.10);
+    color: #d8b4fe;
+    border-color: rgba(168, 85, 247, 0.25);
+}
+
+.tag-risk {
+    background: rgba(239, 68, 68, 0.10);
+    color: #fca5a5;
+    border-color: rgba(239, 68, 68, 0.25);
+}
+
+.status-neutral,
+.tag-neutral {
     background: rgba(148, 163, 184, 0.08);
     color: #cbd5e1;
     border-color: rgba(148, 163, 184, 0.16);
@@ -1056,8 +1350,8 @@ body {
 
 .interpretation {
     margin-top: 12px;
-    background: rgba(56, 189, 248, 0.06);
-    border: 1px solid rgba(56, 189, 248, 0.10);
+    background: rgba(148, 163, 184, 0.05);
+    border: 1px solid rgba(148, 163, 184, 0.10);
     border-radius: 8px;
     padding: 10px 11px;
     color: #cbd5e1;
@@ -1074,8 +1368,8 @@ body {
 
 .mini-panel {
     margin-top: 12px;
-    background: rgba(239, 68, 68, 0.06);
-    border: 1px solid rgba(239, 68, 68, 0.12);
+    background: rgba(168, 85, 247, 0.06);
+    border: 1px solid rgba(168, 85, 247, 0.14);
     border-radius: 8px;
     padding: 9px 10px;
 }
@@ -1140,6 +1434,10 @@ table {
     min-width: 1100px;
 }
 
+.compact-table table {
+    min-width: 760px;
+}
+
 th {
     text-align: left;
     color: #94a3b8;
@@ -1158,6 +1456,11 @@ td {
     color: #cbd5e1;
     vertical-align: top;
     line-height: 1.4;
+}
+
+td small {
+    color: #94a3b8;
+    font-size: 10px;
 }
 
 .footer-note {
@@ -1181,6 +1484,10 @@ td {
     .metrics-grid {
         grid-template-columns: repeat(2, 1fr);
     }
+
+    .card-top {
+        flex-direction: row;
+    }
 }
 </style>
 </head>
@@ -1190,18 +1497,18 @@ td {
     <div class="header-inner">
         <div class="title">
             <h1>Elite Scanner — Pro Desk</h1>
-            <p>Technical Potential Movers + Catalyst Confirmation + News Risk Filter</p>
+            <p>Technical Potential Movers + Catalyst Confirmation + Sector Context</p>
         </div>
         <div class="header-meta">
-            <span class="status-pill $status_class">$status</span>
-            <span>NY: $ny_time</span>
-            <span>UTC: $utc_time</span>
+            <span class="scan-pill">Last Scan: $scan_time</span>
+            <span class="status-pill $status_class">Market: $market_status</span>
         </div>
     </div>
 </header>
 
 <main class="container">
     $regime_html
+    $sector_snapshot
     $kpi_html
 
     <div class="nav-tabs">
@@ -1219,7 +1526,7 @@ td {
     <div id="desk">$desk_table</div>
 
     <div class="footer-note">
-        Data note: Alpaca IEX volume is non-consolidated. Confirm liquidity, spread, VWAP, and news manually before trade execution.
+        Data note: This page updates only when GitHub Actions runs. Browser refresh reloads the latest saved dashboard; it does not rescan the market. Alpaca IEX volume is non-consolidated. Confirm liquidity, spread, VWAP, and news manually before trade execution.
     </div>
 </main>
 
@@ -1227,11 +1534,11 @@ td {
 </html>""")
 
     return page.safe_substitute(
-        status=status,
+        market_status=market_status,
         status_class=status_class,
-        ny_time=now_ny.strftime("%Y-%m-%d %H:%M"),
-        utc_time=now_utc.strftime("%Y-%m-%d %H:%M"),
+        scan_time=now_ny.strftime("%Y-%m-%d %H:%M ET"),
         regime_html=regime_html,
+        sector_snapshot=sector_snapshot,
         kpi_html=kpi_html,
         potential_section=potential_section,
         active_section=active_section,
