@@ -253,7 +253,7 @@ def hard_reject(symbol, price, market_cap, avg_vol, exchange, atr_pct, earnings_
     """Returns (rejected, reason)."""
     if price < 2.0:
         return True, "price_too_low"
-    if price > 500:
+    if price > 100:
         return True, "price_too_high"
     if market_cap < 100_000_000:
         return True, "mkt_cap_too_small"
@@ -396,14 +396,15 @@ def score_execution(symbol, price, avg_vol, atr_pct, today_vol):
     elif atr_pct > 10:
         score -= 3  # Penalty for halt risk
     
-    # Price sweet spot - STRICT
-    if 10 <= price <= 200:
-        score += 4
-        reasons.append("Clean price")
-    elif 5 <= price < 10:
-        score += 1
-    elif price < 5:
-        score -= 2  # Penalty for penny-stock risk
+   # Price sweet spot - STRICT
+if 10 <= price <= 80:
+    score += 4
+    reasons.append("Clean price")
+elif 5 <= price < 10:
+    score += 2
+    reasons.append("Lower-price tradable")
+else:
+    score -= 5
     
     # RVOL requirement
     if avg_vol > 0:
