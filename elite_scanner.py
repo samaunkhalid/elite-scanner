@@ -361,21 +361,21 @@ def score_momentum(symbol, change_pct, history_df, today_vol, avg_vol):
 
 
 # ==============================================================
-# LAYER 3: EXECUTION (FIX #4 - TIGHTENED)
+# LAYER 3: EXECUTION
 # ==============================================================
 
 def score_execution(symbol, price, avg_vol, atr_pct, today_vol):
     """
     Execution Quality score (0-20 points).
-    FIX #4: Tightened to hit 50-60% of stocks, not 99%.
+    Uses price, liquidity, ATR, and RVOL.
     """
     score = 0
     reasons = []
-    
-    # Dollar volume - STRICT
+
     dollar_vol = avg_vol * price
     today_dollar_vol = today_vol * price
-    
+
+    # Dollar volume
     if dollar_vol > 100_000_000 and today_dollar_vol > 10_000_000:
         score += 8
         reasons.append(f"${dollar_vol/1e6:.0f}M liq")
@@ -385,35 +385,35 @@ def score_execution(symbol, price, avg_vol, atr_pct, today_vol):
     elif dollar_vol > 25_000_000 and today_dollar_vol > 3_000_000:
         score += 3
     elif dollar_vol < 15_000_000 or today_dollar_vol < 1_000_000:
-        score -= 5  # Penalty for poor liquidity
-    
-    # ATR sweet spot - STRICT
+        score -= 5
+
+    # ATR sweet spot
     if 2.0 <= atr_pct <= 7.0:
         score += 6
         reasons.append(f"ATR {atr_pct:.1f}% (clean)")
     elif 1.5 <= atr_pct < 2.0 or 7.0 < atr_pct <= 9.0:
         score += 3
     elif atr_pct > 10:
-        score -= 3  # Penalty for halt risk
-    
-   # Price sweet spot - STRICT
-if 10 <= price <= 80:
-    score += 4
-    reasons.append("Clean price")
-elif 5 <= price < 10:
-    score += 2
-    reasons.append("Lower-price tradable")
-else:
-    score -= 5
-    
-    # RVOL requirement
+        score -= 3
+
+    # Price sweet spot: $5–$80 scanner
+    if 10 <= price <= 80:
+        score += 4
+        reasons.append("Clean price")
+    elif 5 <= price < 10:
+        score += 2
+        reasons.append("Lower-price tradable")
+    else:
+        score -= 5
+
+    # RVOL
     if avg_vol > 0:
         rvol = today_vol / avg_vol
         if rvol > 2.5:
             score += 2
         elif rvol < 1.0:
-            score -= 2  # Penalty for dead volume
-    
+            score -= 2
+
     return max(0, min(score, 20)), reasons
 
 
