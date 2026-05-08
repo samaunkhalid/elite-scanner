@@ -724,7 +724,53 @@ def assess_extension_risk(change_pct):
     else:
         return 0, "NORMAL"
 
+def assign_tier(score):
+    """Recalculate tier after Alpaca intraday score is added."""
+    if score >= 80:
+        return "S"
+    elif score >= 65:
+        return "1"
+    elif score >= 50:
+        return "2"
+    elif score >= 35:
+        return "3"
+    return "—"
 
+
+def classify_setup_bucket(stock):
+    """
+    Classify stocks into useful trading buckets.
+    Main goal: separate potential movers from already-extended movers.
+    """
+    change = abs(float(stock.get("change_pct", 0) or 0))
+    risk = stock.get("risk_category", "NORMAL")
+
+    above_vwap = bool(stock.get("above_vwap", False))
+    near_hod = bool(stock.get("near_hod", False))
+    vwap_dist = float(stock.get("vwap_dist_pct", 999) or 999)
+    recent_range = float(stock.get("recent_range_pct", 999) or 999)
+
+    # Highest risk first
+    if risk in ["HIGH_RISK", "EXTREME_MOVE"]:
+        return "HIGH_RISK_EXTREME"
+
+    if risk == "EXTENDED" or change >= 25:
+        return "EXTENDED_CHASE_RISK"
+
+    # Active momentum = already moving, but not extreme
+    if 12 <= change < 25:
+        return "ACTIVE_MOMENTUM"
+
+    # Potential mover = cleaner, earlier setup
+    if (
+        change <= 12
+        and above_vwap
+        and vwap_dist <= 6
+        and (near_hod or recent_range <= 1.8)
+    ):
+        return "POTENTIAL_MOVER"
+
+    return "MONITOR"
 # ==============================================================
 # MAIN
 # ==============================================================
@@ -1073,37 +1119,108 @@ def main():
         print(f"  Continuing with Yahoo data only...")
     
     # Create DataFrame after enrichment
+    # Recalculate tier and setup bucket after Alpaca enrichment
+    for stock in results:
+        stock["tier"] = assign_tier(stock.get("score", 0))
+        stock["setup_bucket"] = classify_setup_bucket(stock)
+
     df = pd.DataFrame(results)
 
     if df.empty:
         print("  No stocks passed scoring threshold.")
         pd.DataFrame().to_csv("elite_watchlist_raw.csv", index=False)
+        pd.DataFrame().to_csv("elite_watchlist.csv", index=False)
+        pd.DataFrame().to_csv("potential_movers.csv", index=False)
+        pd.DataFrame().to_csv("active_momentum.csv", index=False)
+        pd.DataFrame().to_csv("extended_movers.csv", index=False)
+        pd.DataFrame().to_csv("high_risk_movers.csv", index=False)
+
         with open("elite_watchlist.json", "w") as f:
             f.write("[]")
+
         with open("market_regime.json", "w") as f:
             json.dump(regime, f, indent=2)
+
         return
 
-    # FIX #1: Separate active watchlist from raw universe
+    # Bucketed watchlists
+    potential_df = df[df["setup_bucket"] == "POTENTIAL_MOVER"].sort_values("score", ascending=False)
+    active_df = df[df["setup_bucket"] == "ACTIVE_MOMENTUM"].sort_values("score", ascending=False)
+    extended_df = df[df["setup_bucket"] == "EXTENDED_CHASE_RISK"].sort_values("score", ascending=False)
+    highrisk_df = df[df["setup_bucket"] == "HIGH_RISK_EXTREME"].sort_values("score", ascending=False)
+    monitor_df = df[df["setup_bucket"] == "MONITOR"].sort_values("score", ascending=False)
+
+    # Main active watchlist should prioritize potential movers first
+    active_watchlist = pd.concat([
+        potential_df.head(12),
+        active_df.head(5),
+        monitor_df.head(3)
+    ]).head(20)
+
     print(f"\n{'=' * 70}")
     print(f"  RAW SCORED UNIVERSE: {len(df)} names")
-    print(f"  ACTIVE WATCHLIST: Top 20")
+    print(f"  POTENTIAL MOVERS: {len(potential_df)}")
+    print(f"  ACTIVE MOMENTUM: {len(active_df)}")
+    print(f"  EXTENDED / CHASE RISK: {len(extended_df)}")
+    print(f"  HIGH RISK / EXTREME: {len(highrisk_df)}")
+    print(f"  ACTIVE WATCHLIST: Top {len(active_watchlist)}")
     print(f"{'=' * 70}\n")
-    
-    # Display top 20 only
-    display_cols = ["tier", "symbol", "price", "change_pct", "score", "risk_category", "tags"]
-    print(df[display_cols].head(20).to_string(index=False))
 
-    # Save both versions
+    display_cols = [
+        "tier",
+        "symbol",
+        "price",
+        "change_pct",
+        "score",
+        "setup_bucket",
+        "risk_category",
+        "tags"
+    ]
+
+    print("\n--- POTENTIAL MOVERS ---")
+    if not potential_df.empty:
+        print(potential_df[display_cols].head(12).to_string(index=False))
+    else:
+        print("No clean potential movers found.")
+
+    print("\n--- ACTIVE MOMENTUM ---")
+    if not active_df.empty:
+        print(active_df[display_cols].head(8).to_string(index=False))
+    else:
+        print("No active momentum names found.")
+
+    print("\n--- EXTENDED / CHASE RISK ---")
+    if not extended_df.empty:
+        print(extended_df[display_cols].head(8).to_string(index=False))
+    else:
+        print("No extended names.")
+
+    print("\n--- HIGH RISK / EXTREME ---")
+    if not highrisk_df.empty:
+        print(highrisk_df[display_cols].head(8).to_string(index=False))
+    else:
+        print("No high-risk extreme movers.")
+
+    # Save files
     df.to_csv("elite_watchlist_raw.csv", index=False)
-    df.head(20).to_csv("elite_watchlist.csv", index=False)
-    df.head(20).to_json("elite_watchlist.json", orient="records", indent=2)
+    active_watchlist.to_csv("elite_watchlist.csv", index=False)
+    active_watchlist.to_json("elite_watchlist.json", orient="records", indent=2)
+
+    potential_df.head(20).to_csv("potential_movers.csv", index=False)
+    active_df.head(20).to_csv("active_momentum.csv", index=False)
+    extended_df.head(20).to_csv("extended_movers.csv", index=False)
+    highrisk_df.head(20).to_csv("high_risk_movers.csv", index=False)
+
     with open("market_regime.json", "w") as f:
         json.dump(regime, f, indent=2)
 
     print(f"\n  Saved: elite_watchlist_raw.csv ({len(df)} stocks - full diagnostic)")
-    print(f"  Saved: elite_watchlist.csv (top 20 - active watchlist)")
-    print(f"  Saved: elite_watchlist.json (top 20)")
+    print(f"  Saved: elite_watchlist.csv (bucketed active watchlist)")
+    print(f"  Saved: elite_watchlist.json")
+    print(f"  Saved: potential_movers.csv")
+    print(f"  Saved: active_momentum.csv")
+    print(f"  Saved: extended_movers.csv")
+    print(f"  Saved: high_risk_movers.csv")
     print(f"  Saved: market_regime.json")
     print(f"\n{'=' * 70}\n")
 
