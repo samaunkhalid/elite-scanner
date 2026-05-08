@@ -32,6 +32,9 @@ jobs:
           pip install -r requirements.txt
 
       - name: Run Elite Scanner
+        env:
+          ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
+          ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
         run: python elite_scanner.py
 
       - name: Build Dashboard
