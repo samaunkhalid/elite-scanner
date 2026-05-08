@@ -237,6 +237,129 @@ def format_money_m(value):
     return "—"
 
 
+
+def get_hod_distance_pct(stock):
+    """
+    Returns distance from high of day as a negative/zero percentage.
+    Example:
+      0.0  = at HOD
+      -0.4 = 0.4% below HOD
+      -2.5 = 2.5% below HOD
+    """
+    for key in ["hod_distance_pct", "from_hod_pct", "distance_from_hod_pct"]:
+        val = stock.get(key)
+        if val not in [None, "", "—"]:
+            return safe_float(val, None)
+
+    price = safe_float(stock.get("price"), 0)
+
+    hod = (
+        safe_float(stock.get("high_of_day"), 0)
+        or safe_float(stock.get("day_high"), 0)
+        or safe_float(stock.get("intraday_high"), 0)
+        or safe_float(stock.get("hod"), 0)
+    )
+
+    if price > 0 and hod > 0:
+        return round(((price - hod) / hod) * 100, 2)
+
+    return None
+
+
+def metric_class_liquidity(dollar_vol_m):
+    """
+    Dollar volume thresholds.
+    Green = excellent, blue = good, gray = usable, orange = caution.
+    """
+    val = safe_float(dollar_vol_m, 0)
+
+    if val >= 100:
+        return "metric-good"
+    if val >= 50:
+        return "metric-ok"
+    if val >= 25:
+        return "metric-neutral"
+    return "metric-caution"
+
+
+def metric_class_atr(atr_pct):
+    """
+    ATR sweet spot for day-trade watchlist.
+    """
+    val = safe_float(atr_pct, 0)
+
+    if 2.0 <= val <= 6.5:
+        return "metric-good"
+    if 6.5 < val <= 8.0:
+        return "metric-caution"
+    if val > 8.0:
+        return "metric-risk"
+    return "metric-neutral"
+
+
+def metric_class_vwap(vwap_dist_pct):
+    """
+    VWAP distance color:
+    0 to +3% = constructive
+    +3 to +5% = getting extended
+    > +5% or below VWAP = caution/risk
+    """
+    val = safe_float(vwap_dist_pct, 0)
+
+    if 0 <= val <= 3:
+        return "metric-good"
+    if 3 < val <= 5:
+        return "metric-caution"
+    if val > 5 or val < 0:
+        return "metric-risk"
+    return "metric-neutral"
+
+
+def metric_class_hod(hod_distance_pct):
+    """
+    HOD distance color:
+    0 to -0.75% = close to high
+    -0.75 to -1.5% = acceptable
+    -1.5 to -3% = fading/caution
+    worse than -3% = weak vs HOD
+    """
+    if hod_distance_pct is None:
+        return "metric-neutral"
+
+    val = safe_float(hod_distance_pct, -999)
+
+    if val >= -0.75:
+        return "metric-good"
+    if val >= -1.5:
+        return "metric-ok"
+    if val >= -3.0:
+        return "metric-caution"
+    return "metric-risk"
+
+
+def format_hod_distance(stock):
+    """
+    Returns text + status for HOD distance.
+    """
+    hod_distance_pct = get_hod_distance_pct(stock)
+
+    if hod_distance_pct is None:
+        near_hod = truthy(stock.get("near_hod"))
+        if near_hod:
+            return "0.0%", "Near HOD", "metric-good", "status-positive"
+        return "—", "HOD N/A", "metric-neutral", "status-neutral"
+
+    metric_text = f"{hod_distance_pct:+.1f}%"
+
+    if hod_distance_pct >= -0.75:
+        status_text = "Near HOD"
+        status_cls = "status-positive"
+    else:
+        status_text = f"HOD {hod_distance_pct:+.1f}%"
+        status_cls = "status-neutral"
+
+    return metric_text, status_text, metric_class_hod(hod_distance_pct), status_cls
+
 def get_tag_class(tag):
     """
     Meaning-based tag classes.
@@ -415,7 +538,8 @@ def build_card(stock):
     change_class = "positive" if change_pct >= 0 else "negative"
     change_sign = "+" if change_pct >= 0 else ""
 
-    dollar_vol = format_money_m(stock.get("dollar_vol_M"))
+    dollar_vol_m = safe_float(stock.get("dollar_vol_M"), 0)
+    dollar_vol = format_money_m(dollar_vol_m)
     atr = safe_float(stock.get("atr_pct"), 0)
     vwap_dist = safe_float(stock.get("vwap_dist_pct"), 0)
     short_pct = safe_float(stock.get("short_pct"), 0)
@@ -423,14 +547,16 @@ def build_card(stock):
     days_to_cover = safe_float(stock.get("days_to_cover"), 0)
 
     above_vwap = truthy(stock.get("above_vwap"))
-    near_hod = truthy(stock.get("near_hod"))
 
     vwap_text = "Above VWAP" if above_vwap else "Below/Unknown"
-    hod_text = "Near HOD" if near_hod else "Not HOD"
+    hod_metric_text, hod_status_text, hod_metric_class, hod_status_class = format_hod_distance(stock)
+
+    liq_metric_class = metric_class_liquidity(dollar_vol_m)
+    atr_metric_class = metric_class_atr(atr)
+    vwap_metric_class = metric_class_vwap(vwap_dist)
 
     # More color variety in status row.
     vwap_cls = "status-tech" if above_vwap else "status-neutral"
-    hod_cls = "status-positive" if near_hod else "status-neutral"
     risk_cls = "status-risk" if risk not in ["NORMAL", "", "—"] else "status-neutral"
 
     tags_html = build_tags(stock)
@@ -500,15 +626,15 @@ def build_card(stock):
         </div>
 
         <div class="metrics-grid">
-            <div><span>Liquidity</span><strong>{dollar_vol}</strong></div>
-            <div><span>ATR</span><strong>{atr:.1f}%</strong></div>
-            <div><span>VWAP Dist</span><strong>{vwap_dist:+.1f}%</strong></div>
-            <div><span>HOD</span><strong>{esc(hod_text)}</strong></div>
+            <div><span>Liquidity</span><strong class="{liq_metric_class}">{dollar_vol}</strong></div>
+            <div><span>ATR</span><strong class="{atr_metric_class}">{atr:.1f}%</strong></div>
+            <div><span>VWAP Dist</span><strong class="{vwap_metric_class}">{vwap_dist:+.1f}%</strong></div>
+            <div><span>HOD Dist</span><strong class="{hod_metric_class}">{esc(hod_metric_text)}</strong></div>
         </div>
 
         <div class="status-row">
             {status_chip(vwap_text, vwap_cls)}
-            {status_chip(hod_text, hod_cls)}
+            {status_chip(hod_status_text, hod_status_class)}
             {status_chip(risk, risk_cls)}
         </div>
 
@@ -519,9 +645,15 @@ def build_card(stock):
         {squeeze_html}
 
         <div class="card-actions">
-            <a href="https://www.tradingview.com/chart/?symbol={esc(symbol)}" target="_blank">Chart</a>
-            <a href="https://finance.yahoo.com/quote/{esc(symbol)}" target="_blank">Yahoo</a>
-            <a href="https://stocktwits.com/symbol/{esc(symbol)}" target="_blank">Twits</a>
+            <a class="action-btn action-chart" href="https://www.tradingview.com/chart/?symbol={esc(symbol)}" target="_blank">
+                <img src="assets/tradingview.png" alt="TradingView"> Chart
+            </a>
+            <a class="action-btn action-yahoo" href="https://finance.yahoo.com/quote/{esc(symbol)}" target="_blank">
+                <img src="assets/yahoo.png" alt="Yahoo Finance"> Yahoo
+            </a>
+            <a class="action-btn action-twits" href="https://stocktwits.com/symbol/{esc(symbol)}" target="_blank">
+                <img src="assets/stocktwits.png" alt="Stocktwits"> Twits
+            </a>
         </div>
     </div>
     """
@@ -1323,6 +1455,27 @@ body {
     line-height: 1.35;
 }
 
+
+.metric-good {
+    color: #34d399 !important;
+}
+
+.metric-ok {
+    color: #60a5fa !important;
+}
+
+.metric-neutral {
+    color: #cbd5e1 !important;
+}
+
+.metric-caution {
+    color: #fbbf24 !important;
+}
+
+.metric-risk {
+    color: #f87171 !important;
+}
+
 .status-row {
     display: flex;
     gap: 7px;
@@ -1427,7 +1580,12 @@ body {
     margin-top: 14px;
 }
 
-.card-actions a {
+.card-actions a,
+.action-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 7px;
     text-align: center;
     color: #cbd5e1;
     background: rgba(15, 23, 42, 0.9);
@@ -1436,10 +1594,33 @@ body {
     padding: 8px 8px;
     text-decoration: none;
     font-size: 11px;
+    font-weight: 650;
+    transition: background 0.15s ease, transform 0.15s ease, border-color 0.15s ease;
 }
 
-.card-actions a:hover {
-    background: rgba(30, 41, 59, 0.9);
+.action-btn img {
+    width: 15px;
+    height: 15px;
+    object-fit: contain;
+    display: inline-block;
+}
+
+.action-chart {
+    border-color: rgba(59, 130, 246, 0.30);
+}
+
+.action-yahoo {
+    border-color: rgba(168, 85, 247, 0.34);
+}
+
+.action-twits {
+    border-color: rgba(59, 130, 246, 0.34);
+}
+
+.card-actions a:hover,
+.action-btn:hover {
+    background: rgba(30, 41, 59, 0.95);
+    transform: translateY(-1px);
 }
 
 .empty-section {
