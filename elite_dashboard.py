@@ -1064,8 +1064,8 @@ def build_desk_table(rows):
     <section class="desk-table-section">
         <div class="section-header">
             <div>
-                <h2>Desk View</h2>
-                <p>Compact comparison table for the full active review list.</p>
+                <h2>Table View</h2>
+                <p>Compact comparison table for visible decision candidates.</p>
             </div>
         </div>
         <div class="table-wrap">
@@ -2025,17 +2025,18 @@ td small {
 <main class="container">
     $regime_html
     $macro_html
-    $sector_snapshot
     $kpi_html
 
     <div class="nav-tabs">
         <a href="#potential">Potential Movers</a>
         <a href="#active">Active Momentum</a>
-        <a href="#desk">Desk View</a>
+        <a href="#sectors">Sector Leadership</a>
+        <a href="#desk">Table View</a>
     </div>
 
     <div id="potential">$potential_section</div>
     <div id="active">$active_section</div>
+    <div id="sectors">$sector_snapshot</div>
     <div id="desk">$desk_table</div>
 
     <div class="footer-note">
