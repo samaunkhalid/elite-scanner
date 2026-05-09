@@ -151,18 +151,25 @@ body {
     gap: 8px;
     flex-wrap: wrap;
     margin-top: 10px;
+    align-items: center;
 }
 
 .macro-event {
     display: inline-flex;
     align-items: center;
     gap: 7px;
-    padding: 6px 9px;
+    padding: 6px 10px;
     border-radius: 999px;
     background: rgba(2, 6, 23, 0.38);
     border: 1px solid rgba(148, 163, 184, 0.12);
     color: #cbd5e1;
     font-size: 11px;
+    white-space: nowrap;
+    max-width: 100%;
+}
+
+.macro-event strong {
+    font-weight: 650;
 }
 
 .macro-event.muted {
@@ -814,7 +821,7 @@ td small {
             <p>Technical Potential Movers + Catalyst Confirmation + Sector Context</p>
         </div>
         <div class="header-meta">
-            <span class="scan-pill">Last Scan: 2026-05-09 15:15 ET</span>
+            <span class="scan-pill">Last Scan: 2026-05-09 15:29 ET</span>
             <span class="status-pill status-gray">Market: CLOSED</span>
         </div>
     </div>
@@ -836,46 +843,46 @@ td small {
     </div>
     
     
-    <section class="macro-banner macro-unknown">
+    <section class="macro-banner macro-medium">
         <div class="macro-main">
             <div>
                 <strong>Macro Risk: MEDIUM — Consumer Price Index 2026-05-12 08:30 ET</strong>
                 <span>Major event upcoming this week. Keep position size conservative.</span>
             </div>
             <div class="macro-source">
-                Source: New York Fed Economic Indicators Calendar · 2026-05-09 15:15 ET
+                Source: New York Fed Economic Indicators Calendar · 2026-05-09 15:29 ET
             </div>
         </div>
         <div class="macro-events">
             
         <div class="macro-event">
             <span class="impact-pill impact-medium">MEDIUM</span>
-            <strong></strong>
-            <span>10:00</span>
+            <strong>NAR Existing Home Sales: Monday at 10:00 ET</strong>
         </div>
         
         <div class="macro-event">
             <span class="impact-pill impact-high">HIGH</span>
-            <strong></strong>
-            <span>08:30</span>
+            <strong>Consumer Price Index (CPI): Tuesday at 08:30 ET</strong>
         </div>
         
         <div class="macro-event">
             <span class="impact-pill impact-high">HIGH</span>
-            <strong></strong>
-            <span>08:30</span>
+            <strong>Producer Price Index (PPI): Wednesday at 08:30 ET</strong>
         </div>
         
         <div class="macro-event">
             <span class="impact-pill impact-medium">MEDIUM</span>
-            <strong></strong>
-            <span>08:30</span>
+            <strong>Initial Jobless Claims: Thursday at 08:30 ET</strong>
         </div>
         
         <div class="macro-event">
             <span class="impact-pill impact-high">HIGH</span>
-            <strong></strong>
-            <span>08:30</span>
+            <strong>Retail Sales: Thursday at 08:30 ET</strong>
+        </div>
+        
+        <div class="macro-event">
+            <span class="impact-pill impact-medium">MEDIUM</span>
+            <strong>Imports and Exports: Thursday at 08:30 ET</strong>
         </div>
         
         </div>
@@ -1530,79 +1537,6 @@ td small {
         <div class="card-top">
             <div class="card-id">
                 <div class="symbol-row">
-                    <span class="symbol">QURE</span>
-                    <span class="sector-chip">Healthcare</span>
-                    <span class="tier" style="color:#38bdf8;border-color:#38bdf8;">Tier 2</span>
-                </div>
-                <div class="company-name">uniQure N.V.</div>
-            </div>
-            <div class="price-box">
-                <div class="price">$27.66</div>
-                <div class="change positive">+14.53%</div>
-            </div>
-        </div>
-
-        <div class="score-risk-row">
-            <span class="score-pill">Score 60/100</span>
-            <span class="risk-pill">NORMAL</span>
-            <span class="sector-status-pill sector-weak">WEAK</span>
-        </div>
-
-        <div class="sector-strip">
-            <span>Sector <strong>Healthcare</strong></span>
-            <span>ETF <strong>XLV</strong> <b class="negative">-0.85%</b></span>
-            <span>Vs Sector <b class="positive">+15.38%</b></span>
-        </div>
-
-        <div class="catalyst-strip catalyst-none">
-            <div class="catalyst-label">⚪ Catalyst: No confirmed company-specific catalyst</div>
-            
-            
-            
-        </div>
-
-        <div class="metrics-grid">
-            <div><span>Liquidity</span><strong class="metric-ok">$54M</strong></div>
-            <div><span>ATR</span><strong class="metric-caution">6.8%</strong></div>
-            <div><span>VWAP Dist</span><strong class="metric-good">+0.0%</strong></div>
-            <div><span>HOD Dist</span><strong class="metric-neutral">—</strong></div>
-        </div>
-
-        <div class="status-row">
-            <span class="status-chip status-neutral">Below/Unknown</span>
-            <span class="status-chip status-neutral">HOD N/A</span>
-            <span class="status-chip status-neutral">NORMAL</span>
-        </div>
-
-        <div class="interpretation">Already moving; wait for pullback or tight consolidation.</div>
-
-        <div class="tags-row"><span class="tag tag-risk">Sector weak</span><span class="tag tag-caution">Big move +14.5%</span><span class="tag tag-positive">Vs sector +15.4%</span><span class="tag tag-positive">RS strong (5/20/60d)</span><span class="tag tag-squeeze">RVOL 3.4x</span></div>
-
-        
-        <div class="mini-panel">
-            <div class="mini-row"><span>Short %</span><strong>18%</strong></div>
-            <div class="mini-row"><span>Float</span><strong>49.3M</strong></div>
-            <div class="mini-row"><span>DTC</span><strong>6.2d</strong></div>
-        </div>
-        
-
-        <div class="card-actions">
-            <a class="action-btn action-chart" href="https://www.tradingview.com/chart/?symbol=QURE" target="_blank">
-                <img src="assets/tradingview.png" alt="TradingView"> Chart
-            </a>
-            <a class="action-btn action-yahoo" href="https://finance.yahoo.com/quote/QURE" target="_blank">
-                <img src="assets/yahoo.png" alt="Yahoo Finance"> Yahoo
-            </a>
-            <a class="action-btn action-twits" href="https://stocktwits.com/symbol/QURE" target="_blank">
-                <img src="assets/stocktwits.png" alt="Stocktwits"> Twits
-            </a>
-        </div>
-    </div>
-    
-    <div class="stock-card bucket-active" style="--accent:#22c55e;">
-        <div class="card-top">
-            <div class="card-id">
-                <div class="symbol-row">
                     <span class="symbol">MNST</span>
                     <span class="sector-chip">Consumer Defensive</span>
                     <span class="tier" style="color:#38bdf8;border-color:#38bdf8;">Tier 2</span>
@@ -1667,6 +1601,79 @@ td small {
                 <img src="assets/yahoo.png" alt="Yahoo Finance"> Yahoo
             </a>
             <a class="action-btn action-twits" href="https://stocktwits.com/symbol/MNST" target="_blank">
+                <img src="assets/stocktwits.png" alt="Stocktwits"> Twits
+            </a>
+        </div>
+    </div>
+    
+    <div class="stock-card bucket-active" style="--accent:#22c55e;">
+        <div class="card-top">
+            <div class="card-id">
+                <div class="symbol-row">
+                    <span class="symbol">QURE</span>
+                    <span class="sector-chip">Healthcare</span>
+                    <span class="tier" style="color:#38bdf8;border-color:#38bdf8;">Tier 2</span>
+                </div>
+                <div class="company-name">uniQure N.V.</div>
+            </div>
+            <div class="price-box">
+                <div class="price">$27.66</div>
+                <div class="change positive">+14.53%</div>
+            </div>
+        </div>
+
+        <div class="score-risk-row">
+            <span class="score-pill">Score 60/100</span>
+            <span class="risk-pill">NORMAL</span>
+            <span class="sector-status-pill sector-weak">WEAK</span>
+        </div>
+
+        <div class="sector-strip">
+            <span>Sector <strong>Healthcare</strong></span>
+            <span>ETF <strong>XLV</strong> <b class="negative">-0.85%</b></span>
+            <span>Vs Sector <b class="positive">+15.38%</b></span>
+        </div>
+
+        <div class="catalyst-strip catalyst-none">
+            <div class="catalyst-label">⚪ Catalyst: No confirmed company-specific catalyst</div>
+            
+            
+            
+        </div>
+
+        <div class="metrics-grid">
+            <div><span>Liquidity</span><strong class="metric-ok">$54M</strong></div>
+            <div><span>ATR</span><strong class="metric-caution">6.8%</strong></div>
+            <div><span>VWAP Dist</span><strong class="metric-good">+0.0%</strong></div>
+            <div><span>HOD Dist</span><strong class="metric-neutral">—</strong></div>
+        </div>
+
+        <div class="status-row">
+            <span class="status-chip status-neutral">Below/Unknown</span>
+            <span class="status-chip status-neutral">HOD N/A</span>
+            <span class="status-chip status-neutral">NORMAL</span>
+        </div>
+
+        <div class="interpretation">Already moving; wait for pullback or tight consolidation.</div>
+
+        <div class="tags-row"><span class="tag tag-risk">Sector weak</span><span class="tag tag-caution">Big move +14.5%</span><span class="tag tag-positive">Vs sector +15.4%</span><span class="tag tag-positive">RS strong (5/20/60d)</span><span class="tag tag-squeeze">RVOL 3.4x</span></div>
+
+        
+        <div class="mini-panel">
+            <div class="mini-row"><span>Short %</span><strong>18%</strong></div>
+            <div class="mini-row"><span>Float</span><strong>49.3M</strong></div>
+            <div class="mini-row"><span>DTC</span><strong>6.2d</strong></div>
+        </div>
+        
+
+        <div class="card-actions">
+            <a class="action-btn action-chart" href="https://www.tradingview.com/chart/?symbol=QURE" target="_blank">
+                <img src="assets/tradingview.png" alt="TradingView"> Chart
+            </a>
+            <a class="action-btn action-yahoo" href="https://finance.yahoo.com/quote/QURE" target="_blank">
+                <img src="assets/yahoo.png" alt="Yahoo Finance"> Yahoo
+            </a>
+            <a class="action-btn action-twits" href="https://stocktwits.com/symbol/QURE" target="_blank">
                 <img src="assets/stocktwits.png" alt="Stocktwits"> Twits
             </a>
         </div>
@@ -1889,22 +1896,6 @@ td small {
         </tr>
         
         <tr>
-            <td><strong>QURE</strong><br><small>Healthcare</small></td>
-            <td>60</td>
-            <td>2</td>
-            <td>Active Momentum</td>
-            <td>$27.66</td>
-            <td class="positive">+14.53%</td>
-            <td>$54M</td>
-            <td>6.8%</td>
-            <td>Below/NA</td>
-            <td>NORMAL</td>
-            <td>WEAK<br><small>+15.38% vs sector</small></td>
-            <td>No confirmed company-specific catalyst</td>
-            <td>—</td>
-        </tr>
-        
-        <tr>
             <td><strong>MNST</strong><br><small>Consumer Defensive</small></td>
             <td>60</td>
             <td>2</td>
@@ -1916,6 +1907,22 @@ td small {
             <td>Below/NA</td>
             <td>NORMAL</td>
             <td>NEUTRAL<br><small>+13.35% vs sector</small></td>
+            <td>No confirmed company-specific catalyst</td>
+            <td>—</td>
+        </tr>
+        
+        <tr>
+            <td><strong>QURE</strong><br><small>Healthcare</small></td>
+            <td>60</td>
+            <td>2</td>
+            <td>Active Momentum</td>
+            <td>$27.66</td>
+            <td class="positive">+14.53%</td>
+            <td>$54M</td>
+            <td>6.8%</td>
+            <td>Below/NA</td>
+            <td>NORMAL</td>
+            <td>WEAK<br><small>+15.38% vs sector</small></td>
             <td>No confirmed company-specific catalyst</td>
             <td>—</td>
         </tr>
