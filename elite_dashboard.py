@@ -785,17 +785,40 @@ def build_macro_html(macro):
     generated = safe_str(macro.get("generated_at_et"), "")
     events = macro.get("events", [])
 
-    event_rows = ""
-
-    for event in events[:6]:
+    def render_event_chip(event):
         impact = safe_str(event.get("impact"), "MEDIUM").upper()
         impact_class = "impact-high" if impact == "HIGH" else "impact-medium" if impact == "MEDIUM" else "impact-low"
         label = format_macro_event_label(event)
 
-        event_rows += f"""
+        return f"""
         <div class="macro-event">
             <span class="impact-pill {impact_class}">{esc(impact)}</span>
             <strong>{esc(label)}</strong>
+        </div>
+        """
+
+    high_events = [e for e in events if safe_str(e.get("impact"), "").upper() == "HIGH"]
+    medium_events = [e for e in events if safe_str(e.get("impact"), "").upper() == "MEDIUM"]
+
+    # Keep the dashboard readable:
+    # Row 1 = HIGH events, Row 2 = MEDIUM events.
+    # The macro_calendar.json still stores the full 7-day event list.
+    high_rows = "".join(render_event_chip(e) for e in high_events[:6])
+    medium_rows = "".join(render_event_chip(e) for e in medium_events[:6])
+
+    event_rows = ""
+
+    if high_rows:
+        event_rows += f"""
+        <div class="macro-event-row macro-high-row">
+            {high_rows}
+        </div>
+        """
+
+    if medium_rows:
+        event_rows += f"""
+        <div class="macro-event-row macro-medium-row">
+            {medium_rows}
         </div>
         """
 
@@ -813,7 +836,7 @@ def build_macro_html(macro):
                 Source: {esc(source)}{(" · " + esc(generated)) if generated else ""}
             </div>
         </div>
-        <div class="macro-events">
+        <div class="macro-events grouped">
             {event_rows}
         </div>
     </section>
@@ -1274,6 +1297,19 @@ body {
     gap: 8px;
     flex-wrap: wrap;
     margin-top: 10px;
+    align-items: center;
+}
+
+.macro-events.grouped {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+}
+
+.macro-event-row {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
     align-items: center;
 }
 
