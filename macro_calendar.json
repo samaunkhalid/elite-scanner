@@ -1,0 +1,12 @@
+{
+  "generated_at_utc": "2026-05-09T19:05:54.412933+00:00",
+  "generated_at_et": "2026-05-09 15:05 ET",
+  "source": "Unavailable",
+  "fetch_error": "Trading Economics fetch failed: HTTP Error 410: Gone",
+  "risk_level": "UNKNOWN",
+  "risk_class": "macro-unknown",
+  "headline": "Macro Risk: UNKNOWN \u2014 calendar unavailable",
+  "action": "Manually check CPI/FOMC/jobs/PCE/PPI calendar before trading.",
+  "lookahead_days": 3,
+  "events": []
+}
