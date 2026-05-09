@@ -27,6 +27,7 @@ Display:
 
 import json
 import os
+import re
 import html
 from datetime import datetime, timezone
 from string import Template
@@ -530,8 +531,202 @@ def status_chip(label, cls="status-neutral"):
     return f'<span class="status-chip {cls}">{esc(label)}</span>'
 
 
-def build_card(stock):
+
+def html_id_for_symbol(symbol):
+    """
+    Stable in-page anchor for ticker cards.
+    Example: AVPT -> card-AVPT
+    """
+    sym = safe_str(symbol, "").upper()
+    sym = re.sub(r"[^A-Z0-9_-]+", "-", sym).strip("-")
+    return f"card-{sym}" if sym else "card-UNKNOWN"
+
+
+def normalize_signal_status(status):
+    return safe_str(status, "WAIT").upper().replace(" ", "_")
+
+
+def signal_time_value(signal):
+    """
+    Pick the most relevant timestamp for a signal state.
+    """
+    status = normalize_signal_status(signal.get("signal_status"))
+
+    if status in ["ACTIVE_SIGNAL", "ACTIVE"]:
+        keys = ["triggered_at", "trigger_time", "signal_triggered_at", "activated_at", "timestamp"]
+    elif status in ["TRIGGER_READY", "READY"]:
+        keys = ["ready_since", "ready_at", "detected_at", "timestamp"]
+    elif status in ["INVALIDATED", "VOID"]:
+        keys = ["invalidated_at", "invalid_time", "last_checked", "timestamp"]
+    else:
+        keys = ["detected_at", "watch_since", "timestamp", "last_checked"]
+
+    for key in keys:
+        val = safe_str(signal.get(key), "")
+        if val:
+            return val
+
+    return ""
+
+
+def compact_time_et(value):
+    """
+    Convert a timestamp-like value to compact ET display where possible.
+    Accepts:
+      - "2026-05-09T10:18:00-04:00"
+      - "2026-05-09 10:18 ET"
+      - "10:18"
+    Falls back safely.
+    """
+    text = safe_str(value, "").strip()
+    if not text:
+        return ""
+
+    # Already compact time.
+    if re.match(r"^\d{1,2}:\d{2}", text):
+        return text[:5] + " ET"
+
+    # Try ISO or common datetime formats.
+    cleaned = text.replace("Z", "+00:00").replace(" ET", "")
+    try:
+        dt = datetime.fromisoformat(cleaned)
+        if dt.tzinfo and ZoneInfo:
+            dt = dt.astimezone(ZoneInfo("America/New_York"))
+        return dt.strftime("%H:%M ET")
+    except Exception:
+        pass
+
+    # Fallback: find HH:MM inside string.
+    m = re.search(r"(\d{1,2}:\d{2})", text)
+    if m:
+        return m.group(1) + " ET"
+
+    return text[:16]
+
+
+def signal_time_label(signal):
+    status = normalize_signal_status(signal.get("signal_status"))
+    time_text = compact_time_et(signal_time_value(signal))
+
+    if not time_text:
+        return ""
+
+    if status in ["ACTIVE_SIGNAL", "ACTIVE"]:
+        return f"Triggered {time_text}"
+    if status in ["TRIGGER_READY", "READY"]:
+        return f"Ready since {time_text}"
+    if status in ["INVALIDATED", "VOID"]:
+        return f"Invalidated {time_text}"
+    if status in ["WATCH", "WATCHLIST"]:
+        return f"Detected {time_text}"
+
+    return f"Updated {time_text}"
+
+
+def build_signal_map(signals):
+    signal_map = {}
+
+    for signal in signals:
+        symbol = safe_str(signal.get("symbol"), "").upper()
+        if not symbol:
+            continue
+
+        # Prefer the most actionable/latest state if duplicates appear.
+        existing = signal_map.get(symbol)
+        if not existing:
+            signal_map[symbol] = signal
+            continue
+
+        rank = {
+            "ACTIVE_SIGNAL": 5,
+            "ACTIVE": 5,
+            "TRIGGER_READY": 4,
+            "READY": 4,
+            "WATCH": 3,
+            "WATCHLIST": 3,
+            "INVALIDATED": 2,
+            "VOID": 2,
+            "WAIT": 1,
+        }
+
+        old_rank = rank.get(normalize_signal_status(existing.get("signal_status")), 0)
+        new_rank = rank.get(normalize_signal_status(signal.get("signal_status")), 0)
+
+        if new_rank >= old_rank:
+            signal_map[symbol] = signal
+
+    return signal_map
+
+
+def build_signal_detail_html(signal):
+    """
+    Full signal details inside the ticker card.
+    Signal Desk should stay compact; this is where setup logic is explained.
+    """
+    if not signal:
+        return ""
+
+    status = normalize_signal_status(signal.get("signal_status"))
+    status_text = status.replace("_", " ")
+    status_class = get_signal_status_class(status)
+
+    setup_type = safe_str(signal.get("setup_type"), "Setup pending")
+    time_label = signal_time_label(signal)
+
+    entry = format_signal_price(signal.get("entry_trigger") or signal.get("entry"))
+    stop = format_signal_price(signal.get("stop_loss") or signal.get("stop"))
+    target_1 = format_signal_price(signal.get("target_1") or signal.get("target1"))
+    target_2 = format_signal_price(signal.get("target_2") or signal.get("target2"))
+    rr = safe_float(signal.get("reward_risk"), 0)
+    confidence = safe_float(signal.get("confidence"), 0)
+
+    reason = safe_str(signal.get("reason") or signal.get("trigger_reason") or signal.get("setup_reason"), "")
+    invalidation = safe_str(signal.get("invalidation") or signal.get("invalidation_reason"), "")
+    last_checked = compact_time_et(signal.get("last_checked") or signal.get("updated_at"))
+
+    rr_text = f"{rr:.1f}:1" if rr > 0 else "—"
+    confidence_text = f"{confidence:.0f}%" if confidence > 0 else "—"
+
+    time_html = f'<span>{esc(time_label)}</span>' if time_label else ""
+    last_checked_html = f'<span>Last check {esc(last_checked)}</span>' if last_checked else ""
+
+    reason_html = f'<div class="signal-reason"><strong>Reason:</strong> {esc(reason)}</div>' if reason else ""
+    invalidation_html = f'<div class="signal-reason"><strong>Invalidation:</strong> {esc(invalidation)}</div>' if invalidation else ""
+
+    return f"""
+        <div class="signal-detail">
+            <div class="signal-detail-top">
+                <div>
+                    <strong>Signal Detail</strong>
+                    <span>{esc(setup_type)}</span>
+                </div>
+                <span class="signal-status {status_class}">{esc(status_text)}</span>
+            </div>
+
+            <div class="signal-detail-meta">
+                {time_html}
+                {last_checked_html}
+            </div>
+
+            <div class="signal-plan-grid">
+                <div><span>Entry</span><b>{entry}</b></div>
+                <div><span>Stop</span><b>{stop}</b></div>
+                <div><span>T1</span><b>{target_1}</b></div>
+                <div><span>T2</span><b>{target_2}</b></div>
+                <div><span>R/R</span><b>{rr_text}</b></div>
+                <div><span>Conf.</span><b>{confidence_text}</b></div>
+            </div>
+
+            {reason_html}
+            {invalidation_html}
+        </div>
+    """
+
+
+def build_card(stock, signal=None):
     symbol = safe_str(stock.get("symbol"), "—").upper()
+    card_id = html_id_for_symbol(symbol)
+
     tier = safe_str(stock.get("tier"), "—")
     score = safe_int(stock.get("score"), 0)
     price = safe_float(stock.get("price"), 0)
@@ -571,11 +766,11 @@ def build_card(stock):
     atr_metric_class = metric_class_atr(atr)
     vwap_metric_class = metric_class_vwap(vwap_dist)
 
-    # More color variety in status row.
     vwap_cls = "status-tech" if above_vwap else "status-neutral"
     risk_cls = "status-risk" if risk not in ["NORMAL", "", "—"] else "status-neutral"
 
     tags_html = build_tags(stock)
+    signal_detail_html = build_signal_detail_html(signal)
 
     headline = catalyst["headline"]
     headline_html = ""
@@ -606,7 +801,7 @@ def build_card(stock):
         """
 
     return f"""
-    <div class="stock-card {bucket_meta['class']}" style="--accent:{bucket_meta['accent']};">
+    <div class="stock-card {bucket_meta['class']}" id="{esc(card_id)}" style="--accent:{bucket_meta['accent']};">
         <div class="card-top">
             <div class="card-id">
                 <div class="symbol-row">
@@ -658,6 +853,8 @@ def build_card(stock):
 
         <div class="tags-row">{tags_html}</div>
 
+        {signal_detail_html}
+
         {squeeze_html}
 
         <div class="card-actions">
@@ -674,14 +871,19 @@ def build_card(stock):
     </div>
     """
 
-
-def build_section(title, subtitle, stocks, class_name, max_cards=10):
+def build_section(title, subtitle, stocks, class_name, max_cards=10, signal_map=None, collapse_empty=False):
     count = len(stocks)
-    cards = "".join(build_card(s) for s in stocks[:max_cards])
+    signal_map = signal_map or {}
+
+    cards = "".join(
+        build_card(s, signal=signal_map.get(safe_str(s.get("symbol"), "").upper()))
+        for s in stocks[:max_cards]
+    )
 
     if not cards:
+        empty_class = "empty-section compact-empty" if collapse_empty else "empty-section"
         cards = f"""
-        <div class="empty-section">
+        <div class="{empty_class}">
             <strong>No names in this bucket.</strong>
             <span>{esc(subtitle)}</span>
         </div>
@@ -701,7 +903,6 @@ def build_section(title, subtitle, stocks, class_name, max_cards=10):
         </div>
     </section>
     """
-
 
 
 def macro_display_name(name):
@@ -1132,7 +1333,7 @@ def get_market_status(now_ny):
 def load_signal_records(path="signal_desk.json"):
     """
     Optional future input.
-    If signal_desk.json does not exist, the dashboard shows an empty Signal Desk shell.
+    If signal_desk.json does not exist, the dashboard shows a compact Signal Desk status panel.
     Expected future formats:
       - list of signal dicts
       - {"signals": [signal dicts]}
@@ -1159,7 +1360,7 @@ def load_signal_records(path="signal_desk.json"):
 
 
 def get_signal_status_class(status):
-    status = safe_str(status, "WAIT").upper().replace(" ", "_")
+    status = normalize_signal_status(status)
 
     if status in ["ACTIVE_SIGNAL", "ACTIVE"]:
         return "signal-active"
@@ -1179,84 +1380,114 @@ def format_signal_price(value):
     return "—"
 
 
-def build_signal_card(signal):
-    symbol = safe_str(signal.get("symbol"), "—").upper()
-    setup_type = safe_str(signal.get("setup_type"), "Setup pending")
-    status = safe_str(signal.get("signal_status"), "WAIT").upper().replace("_", " ")
-    status_class = get_signal_status_class(status)
-
-    confidence = safe_float(signal.get("confidence"), 0)
-    entry = format_signal_price(signal.get("entry_trigger"))
-    stop = format_signal_price(signal.get("stop_loss"))
-    target_1 = format_signal_price(signal.get("target_1"))
-    target_2 = format_signal_price(signal.get("target_2"))
-    rr = safe_float(signal.get("reward_risk"), 0)
-
-    confidence_html = f"{confidence:.0f}%" if confidence > 0 else "—"
-    rr_html = f"{rr:.1f}:1" if rr > 0 else "—"
-
-    return f"""
-    <div class="signal-card">
-        <div class="signal-card-top">
-            <div>
-                <strong>{esc(symbol)}</strong>
-                <span>{esc(setup_type)}</span>
-            </div>
-            <span class="signal-status {status_class}">{esc(status)}</span>
-        </div>
-
-        <div class="signal-metrics">
-            <div><span>Entry</span><b>{entry}</b></div>
-            <div><span>Stop</span><b>{stop}</b></div>
-            <div><span>T1</span><b>{target_1}</b></div>
-            <div><span>T2</span><b>{target_2}</b></div>
-            <div><span>R/R</span><b>{rr_html}</b></div>
-            <div><span>Conf.</span><b>{confidence_html}</b></div>
-        </div>
-    </div>
-    """
-
-
-def build_signal_desk():
-    """
-    Dashboard shell for the future intraday signal engine.
-    No scanner logic is changed. If no signal file exists, this stays empty.
-    """
-    signals = load_signal_records()
-    active_signals = [
-        s for s in signals
-        if safe_str(s.get("signal_status"), "").upper() in ["TRIGGER_READY", "ACTIVE_SIGNAL", "ACTIVE", "READY"]
+def signal_is_actionable(signal):
+    return normalize_signal_status(signal.get("signal_status")) in [
+        "ACTIVE_SIGNAL",
+        "ACTIVE",
+        "TRIGGER_READY",
+        "READY",
     ]
 
-    if active_signals:
-        body = f"""
-        <div class="signal-grid">
-            {''.join(build_signal_card(s) for s in active_signals[:6])}
-        </div>
-        """
-        count = len(active_signals)
-        subtitle = "Actionable intraday setups from signal engine."
-    else:
-        body = """
-        <div class="signal-empty">
-            <strong>No active intraday signals yet.</strong>
-            <span>Signal engine will populate Trigger Ready / Active Signal setups here.</span>
-        </div>
-        """
-        count = 0
-        subtitle = "Execution-level signals will appear here when the signal engine is enabled."
+
+def signal_sort_key(signal):
+    status = normalize_signal_status(signal.get("signal_status"))
+
+    priority = {
+        "ACTIVE_SIGNAL": 1,
+        "ACTIVE": 1,
+        "TRIGGER_READY": 2,
+        "READY": 2,
+        "WATCH": 3,
+        "WATCHLIST": 3,
+        "INVALIDATED": 4,
+        "VOID": 4,
+    }
+
+    return (
+        priority.get(status, 9),
+        safe_str(signal_time_value(signal), ""),
+        safe_str(signal.get("symbol"), ""),
+    )
+
+
+def build_signal_summary_item(signal):
+    symbol = safe_str(signal.get("symbol"), "—").upper()
+    setup_type = safe_str(signal.get("setup_type"), "Setup pending")
+    status = normalize_signal_status(signal.get("signal_status"))
+    status_text = status.replace("_", " ")
+    status_class = get_signal_status_class(status)
+    time_label = signal_time_label(signal)
+
+    href = "#" + html_id_for_symbol(symbol)
+
+    time_html = f'<span class="signal-mini-time">{esc(time_label)}</span>' if time_label else ""
 
     return f"""
-    <section class="signal-desk-section" id="signals">
-        <div class="section-header signal-header">
-            <div>
-                <h2>Signal Desk</h2>
-                <p>{esc(subtitle)}</p>
+        <div class="signal-mini-item">
+            <a href="{esc(href)}">{esc(symbol)}</a>
+            <span class="signal-status {status_class}">{esc(status_text)}</span>
+            <span class="signal-mini-setup">{esc(setup_type)}</span>
+            {time_html}
+        </div>
+    """
+
+
+def build_signal_summary_panel(signals):
+    """
+    Compact Signal Desk that sits beside Summary Cards.
+    It prevents an empty Signal Desk section from pushing candidates down.
+    """
+    signals = sorted(signals, key=signal_sort_key)
+
+    active_count = sum(
+        1 for s in signals
+        if normalize_signal_status(s.get("signal_status")) in ["ACTIVE_SIGNAL", "ACTIVE"]
+    )
+    ready_count = sum(
+        1 for s in signals
+        if normalize_signal_status(s.get("signal_status")) in ["TRIGGER_READY", "READY"]
+    )
+    watch_count = sum(
+        1 for s in signals
+        if normalize_signal_status(s.get("signal_status")) in ["WATCH", "WATCHLIST"]
+    )
+
+    active_or_ready = [s for s in signals if signal_is_actionable(s)]
+    visible = active_or_ready[:4]
+
+    if visible:
+        items = "".join(build_signal_summary_item(s) for s in visible)
+        extra = len(active_or_ready) - len(visible)
+        extra_html = f'<div class="signal-mini-extra">+{extra} more actionable signals</div>' if extra > 0 else ""
+        body = f"""
+            <div class="signal-mini-list">
+                {items}
+                {extra_html}
             </div>
-            <span class="section-count">{count}</span>
+        """
+    else:
+        body = """
+            <div class="signal-mini-empty">
+                <strong>No active intraday signals yet.</strong>
+                <span>Future signal engine will show Trigger Ready / Active setups here.</span>
+            </div>
+        """
+
+    return f"""
+    <aside class="signal-mini-panel" id="signals">
+        <div class="signal-mini-top">
+            <div>
+                <strong>Signal Desk</strong>
+                <span>Intraday execution status</span>
+            </div>
+            <div class="signal-mini-counts">
+                <span><b>{active_count}</b> Active</span>
+                <span><b>{ready_count}</b> Ready</span>
+                <span><b>{watch_count}</b> Watch</span>
+            </div>
         </div>
         {body}
-    </section>
+    </aside>
     """
 
 # ==============================================================
@@ -1271,7 +1502,10 @@ def build_dashboard(potential, active, extended, highrisk, raw, active_watchlist
     macro = load_macro_calendar()
     macro_html = build_macro_html(macro)
     kpi_html = build_kpi_row(potential, active, extended, highrisk, raw, active_watchlist)
-    signal_desk_html = build_signal_desk()
+    signals = load_signal_records()
+    signal_map = build_signal_map(signals)
+    signal_summary_html = build_signal_summary_panel(signals)
+    summary_signal_row_html = f"""<div class="summary-signal-row">{kpi_html}{signal_summary_html}</div>"""
 
     # Main decision screen intentionally excludes Extended / High Risk names.
     # They are still generated and saved by the scanner for diagnostics,
@@ -1288,6 +1522,8 @@ def build_dashboard(potential, active, extended, highrisk, raw, active_watchlist
         potential,
         "section-potential",
         max_cards=10,
+        signal_map=signal_map,
+        collapse_empty=True,
     )
 
     active_section = build_section(
@@ -1296,6 +1532,8 @@ def build_dashboard(potential, active, extended, highrisk, raw, active_watchlist
         active,
         "section-active",
         max_cards=10,
+        signal_map=signal_map,
+        collapse_empty=True,
     )
 
     desk_table = build_desk_table(focus_rows)
@@ -1600,6 +1838,131 @@ body {
 .kpi-card.active span { color: #22c55e; }
 .kpi-card.extended span { color: #f59e0b; }
 .kpi-card.risk span { color: #ef4444; }
+
+
+.summary-signal-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 360px;
+    gap: 12px;
+    align-items: stretch;
+    margin-bottom: 16px;
+}
+
+.summary-signal-row .kpi-grid {
+    margin-bottom: 0;
+}
+
+.signal-mini-panel {
+    background: rgba(15, 23, 42, 0.82);
+    border: 1px solid rgba(148, 163, 184, 0.12);
+    border-radius: 12px;
+    padding: 12px;
+    min-height: 92px;
+}
+
+.signal-mini-top {
+    display: flex;
+    justify-content: space-between;
+    gap: 10px;
+    align-items: flex-start;
+    margin-bottom: 10px;
+}
+
+.signal-mini-top strong {
+    display: block;
+    font-size: 13px;
+    font-weight: 750;
+}
+
+.signal-mini-top span {
+    display: block;
+    color: #94a3b8;
+    font-size: 10px;
+    margin-top: 2px;
+}
+
+.signal-mini-counts {
+    display: flex;
+    gap: 5px;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+}
+
+.signal-mini-counts span {
+    padding: 3px 7px;
+    border-radius: 999px;
+    border: 1px solid rgba(148, 163, 184, 0.14);
+    background: rgba(2, 6, 23, 0.38);
+    color: #94a3b8;
+    font-size: 9px;
+    font-weight: 650;
+    white-space: nowrap;
+}
+
+.signal-mini-counts b {
+    color: #e5e7eb;
+}
+
+.signal-mini-empty {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    color: #94a3b8;
+    font-size: 11px;
+}
+
+.signal-mini-empty strong {
+    color: #cbd5e1;
+    font-size: 12px;
+}
+
+.signal-mini-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.signal-mini-item {
+    display: grid;
+    grid-template-columns: 52px auto 1fr;
+    gap: 6px;
+    align-items: center;
+    padding: 5px 6px;
+    border-radius: 8px;
+    background: rgba(2, 6, 23, 0.36);
+    border: 1px solid rgba(148, 163, 184, 0.08);
+}
+
+.signal-mini-item a {
+    color: #38bdf8;
+    font-size: 12px;
+    font-weight: 800;
+    text-decoration: none;
+}
+
+.signal-mini-item a:hover {
+    text-decoration: underline;
+}
+
+.signal-mini-setup {
+    color: #cbd5e1;
+    font-size: 10px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.signal-mini-time {
+    grid-column: 2 / 4;
+    color: #94a3b8;
+    font-size: 10px;
+}
+
+.signal-mini-extra {
+    color: #94a3b8;
+    font-size: 10px;
+    padding-left: 6px;
+}
 
 .nav-tabs {
     display: flex;
@@ -2014,6 +2377,100 @@ body {
     font-weight: 700;
 }
 
+
+.stock-card:target {
+    border-color: rgba(251, 191, 36, 0.65);
+    box-shadow:
+        0 0 0 2px rgba(251, 191, 36, 0.18),
+        0 18px 38px rgba(0, 0, 0, 0.28);
+}
+
+.signal-detail {
+    margin-top: 12px;
+    padding: 11px;
+    border-radius: 10px;
+    border: 1px solid rgba(56, 189, 248, 0.20);
+    background: rgba(14, 165, 233, 0.055);
+}
+
+.signal-detail-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 10px;
+    margin-bottom: 8px;
+}
+
+.signal-detail-top strong {
+    display: block;
+    font-size: 12px;
+    font-weight: 750;
+}
+
+.signal-detail-top span {
+    color: #94a3b8;
+    font-size: 10px;
+}
+
+.signal-detail-meta {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    color: #94a3b8;
+    font-size: 10px;
+    margin-bottom: 8px;
+}
+
+.signal-plan-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 7px;
+    margin-bottom: 8px;
+}
+
+.signal-plan-grid div {
+    background: rgba(2, 6, 23, 0.45);
+    border: 1px solid rgba(148, 163, 184, 0.10);
+    border-radius: 7px;
+    padding: 7px;
+}
+
+.signal-plan-grid span {
+    display: block;
+    color: #94a3b8;
+    font-size: 9px;
+    margin-bottom: 2px;
+}
+
+.signal-plan-grid b {
+    color: #e5e7eb;
+    font-size: 11px;
+}
+
+.signal-reason {
+    color: #cbd5e1;
+    font-size: 11px;
+    line-height: 1.45;
+    margin-top: 5px;
+}
+
+.signal-reason strong {
+    color: #e5e7eb;
+}
+
+.compact-empty {
+    padding: 14px 16px;
+    max-width: 420px;
+}
+
+.compact-empty strong {
+    font-size: 13px;
+}
+
+.compact-empty span {
+    font-size: 12px;
+}
+
 .card-actions {
     display: grid;
     grid-template-columns: repeat(3, 1fr);
@@ -2249,6 +2706,16 @@ td small {
 }
 
 @media (max-width: 760px) {
+
+    .summary-signal-row {
+        grid-template-columns: 1fr;
+    }
+
+    .signal-plan-grid {
+        grid-template-columns: repeat(2, 1fr);
+    }
+
+
     .header-inner {
         align-items: flex-start;
         flex-direction: column;
@@ -2286,7 +2753,7 @@ td small {
 <main class="container">
     $regime_html
     $macro_html
-    $kpi_html
+    $summary_signal_row_html
 
     <div class="nav-tabs">
         <a href="#signals">Signal Desk</a>
@@ -2296,7 +2763,6 @@ td small {
         <a href="#desk">Table View</a>
     </div>
 
-    $signal_desk_html
     <div id="potential">$potential_section</div>
     <div id="active">$active_section</div>
     <div id="sectors">$sector_snapshot</div>
@@ -2318,8 +2784,7 @@ td small {
         regime_html=regime_html,
         macro_html=macro_html,
         sector_snapshot=sector_snapshot,
-        kpi_html=kpi_html,
-        signal_desk_html=signal_desk_html,
+        summary_signal_row_html=summary_signal_row_html,
         potential_section=potential_section,
         active_section=active_section,
         desk_table=desk_table,
