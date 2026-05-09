@@ -1,12 +1,103 @@
 {
-  "generated_at_utc": "2026-05-09T19:05:54.412933+00:00",
-  "generated_at_et": "2026-05-09 15:05 ET",
-  "source": "Unavailable",
-  "fetch_error": "Trading Economics fetch failed: HTTP Error 410: Gone",
-  "risk_level": "UNKNOWN",
-  "risk_class": "macro-unknown",
-  "headline": "Macro Risk: UNKNOWN \u2014 calendar unavailable",
-  "action": "Manually check CPI/FOMC/jobs/PCE/PPI calendar before trading.",
-  "lookahead_days": 3,
-  "events": []
+  "risk_level": "MEDIUM",
+  "headline": "Macro Risk: MEDIUM \u2014 Consumer Price Index 2026-05-12 08:30 ET",
+  "action": "Major event upcoming this week. Keep position size conservative.",
+  "events": [
+    {
+      "name": "NAR Existing Home Sales",
+      "date": "2026-05-11",
+      "time_et": "10:00",
+      "datetime_et": "2026-05-11T10:00:00-04:00",
+      "impact": "MEDIUM",
+      "source": "New York Fed",
+      "source_url": "https://www.newyorkfed.org/research/calendars/nationalecon_cal",
+      "minutes_until": 2564
+    },
+    {
+      "name": "Consumer Price Index",
+      "date": "2026-05-12",
+      "time_et": "08:30",
+      "datetime_et": "2026-05-12T08:30:00-04:00",
+      "impact": "HIGH",
+      "source": "New York Fed",
+      "source_url": "https://www.newyorkfed.org/research/calendars/nationalecon_cal",
+      "minutes_until": 3914
+    },
+    {
+      "name": "Producer Price Index (PPI)",
+      "date": "2026-05-13",
+      "time_et": "08:30",
+      "datetime_et": "2026-05-13T08:30:00-04:00",
+      "impact": "HIGH",
+      "source": "New York Fed",
+      "source_url": "https://www.newyorkfed.org/research/calendars/nationalecon_cal",
+      "minutes_until": 5354
+    },
+    {
+      "name": "Initial Claims",
+      "date": "2026-05-14",
+      "time_et": "08:30",
+      "datetime_et": "2026-05-14T08:30:00-04:00",
+      "impact": "MEDIUM",
+      "source": "New York Fed",
+      "source_url": "https://www.newyorkfed.org/research/calendars/nationalecon_cal",
+      "minutes_until": 6794
+    },
+    {
+      "name": "Advance Retail Sales",
+      "date": "2026-05-14",
+      "time_et": "08:30",
+      "datetime_et": "2026-05-14T08:30:00-04:00",
+      "impact": "HIGH",
+      "source": "New York Fed",
+      "source_url": "https://www.newyorkfed.org/research/calendars/nationalecon_cal",
+      "minutes_until": 6794
+    },
+    {
+      "name": "Imports and Exports",
+      "date": "2026-05-14",
+      "time_et": "08:30",
+      "datetime_et": "2026-05-14T08:30:00-04:00",
+      "impact": "MEDIUM",
+      "source": "New York Fed",
+      "source_url": "https://www.newyorkfed.org/research/calendars/nationalecon_cal",
+      "minutes_until": 6794
+    },
+    {
+      "name": "Business Inventories",
+      "date": "2026-05-14",
+      "time_et": "10:00",
+      "datetime_et": "2026-05-14T10:00:00-04:00",
+      "impact": "MEDIUM",
+      "source": "New York Fed",
+      "source_url": "https://www.newyorkfed.org/research/calendars/nationalecon_cal",
+      "minutes_until": 6884
+    },
+    {
+      "name": "Empire State Manufacturing Survey",
+      "date": "2026-05-15",
+      "time_et": "08:30",
+      "datetime_et": "2026-05-15T08:30:00-04:00",
+      "impact": "MEDIUM",
+      "source": "New York Fed",
+      "source_url": "https://www.newyorkfed.org/research/calendars/nationalecon_cal",
+      "minutes_until": 8234
+    },
+    {
+      "name": "Industrial Production and Capacity Utilization",
+      "date": "2026-05-15",
+      "time_et": "09:15",
+      "datetime_et": "2026-05-15T09:15:00-04:00",
+      "impact": "MEDIUM",
+      "source": "New York Fed",
+      "source_url": "https://www.newyorkfed.org/research/calendars/nationalecon_cal",
+      "minutes_until": 8279
+    }
+  ],
+  "source": "New York Fed Economic Indicators Calendar",
+  "source_url": "https://www.newyorkfed.org/research/calendars/nationalecon_cal",
+  "generated_at_et": "2026-05-09 15:15 ET",
+  "generated_at": "2026-05-09 15:15 ET",
+  "lookahead_days": 7,
+  "fetch_error": ""
 }
