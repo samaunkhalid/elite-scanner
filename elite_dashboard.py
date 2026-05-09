@@ -1123,6 +1123,142 @@ def get_market_status(now_ny):
     return "CLOSED", "status-gray"
 
 
+
+
+# ==============================================================
+# SIGNAL DESK SHELL
+# ==============================================================
+
+def load_signal_records(path="signal_desk.json"):
+    """
+    Optional future input.
+    If signal_desk.json does not exist, the dashboard shows an empty Signal Desk shell.
+    Expected future formats:
+      - list of signal dicts
+      - {"signals": [signal dicts]}
+    """
+    if not os.path.exists(path):
+        return []
+
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+
+        if isinstance(data, list):
+            return data
+
+        if isinstance(data, dict):
+            signals = data.get("signals", [])
+            if isinstance(signals, list):
+                return signals
+
+        return []
+    except Exception as e:
+        print(f"  ⚠ Failed to load {path}: {e}")
+        return []
+
+
+def get_signal_status_class(status):
+    status = safe_str(status, "WAIT").upper().replace(" ", "_")
+
+    if status in ["ACTIVE_SIGNAL", "ACTIVE"]:
+        return "signal-active"
+    if status in ["TRIGGER_READY", "READY"]:
+        return "signal-ready"
+    if status in ["WATCH", "WATCHLIST"]:
+        return "signal-watch"
+    if status in ["INVALIDATED", "VOID"]:
+        return "signal-invalid"
+    return "signal-wait"
+
+
+def format_signal_price(value):
+    val = safe_float(value, 0)
+    if val > 0:
+        return f"${val:.2f}"
+    return "—"
+
+
+def build_signal_card(signal):
+    symbol = safe_str(signal.get("symbol"), "—").upper()
+    setup_type = safe_str(signal.get("setup_type"), "Setup pending")
+    status = safe_str(signal.get("signal_status"), "WAIT").upper().replace("_", " ")
+    status_class = get_signal_status_class(status)
+
+    confidence = safe_float(signal.get("confidence"), 0)
+    entry = format_signal_price(signal.get("entry_trigger"))
+    stop = format_signal_price(signal.get("stop_loss"))
+    target_1 = format_signal_price(signal.get("target_1"))
+    target_2 = format_signal_price(signal.get("target_2"))
+    rr = safe_float(signal.get("reward_risk"), 0)
+
+    confidence_html = f"{confidence:.0f}%" if confidence > 0 else "—"
+    rr_html = f"{rr:.1f}:1" if rr > 0 else "—"
+
+    return f"""
+    <div class="signal-card">
+        <div class="signal-card-top">
+            <div>
+                <strong>{esc(symbol)}</strong>
+                <span>{esc(setup_type)}</span>
+            </div>
+            <span class="signal-status {status_class}">{esc(status)}</span>
+        </div>
+
+        <div class="signal-metrics">
+            <div><span>Entry</span><b>{entry}</b></div>
+            <div><span>Stop</span><b>{stop}</b></div>
+            <div><span>T1</span><b>{target_1}</b></div>
+            <div><span>T2</span><b>{target_2}</b></div>
+            <div><span>R/R</span><b>{rr_html}</b></div>
+            <div><span>Conf.</span><b>{confidence_html}</b></div>
+        </div>
+    </div>
+    """
+
+
+def build_signal_desk():
+    """
+    Dashboard shell for the future intraday signal engine.
+    No scanner logic is changed. If no signal file exists, this stays empty.
+    """
+    signals = load_signal_records()
+    active_signals = [
+        s for s in signals
+        if safe_str(s.get("signal_status"), "").upper() in ["TRIGGER_READY", "ACTIVE_SIGNAL", "ACTIVE", "READY"]
+    ]
+
+    if active_signals:
+        body = f"""
+        <div class="signal-grid">
+            {''.join(build_signal_card(s) for s in active_signals[:6])}
+        </div>
+        """
+        count = len(active_signals)
+        subtitle = "Actionable intraday setups from signal engine."
+    else:
+        body = """
+        <div class="signal-empty">
+            <strong>No active intraday signals yet.</strong>
+            <span>Signal engine will populate Trigger Ready / Active Signal setups here.</span>
+        </div>
+        """
+        count = 0
+        subtitle = "Execution-level signals will appear here when the signal engine is enabled."
+
+    return f"""
+    <section class="signal-desk-section" id="signals">
+        <div class="section-header signal-header">
+            <div>
+                <h2>Signal Desk</h2>
+                <p>{esc(subtitle)}</p>
+            </div>
+            <span class="section-count">{count}</span>
+        </div>
+        {body}
+    </section>
+    """
+
 # ==============================================================
 # HTML BUILDER
 # ==============================================================
@@ -1135,6 +1271,7 @@ def build_dashboard(potential, active, extended, highrisk, raw, active_watchlist
     macro = load_macro_calendar()
     macro_html = build_macro_html(macro)
     kpi_html = build_kpi_row(potential, active, extended, highrisk, raw, active_watchlist)
+    signal_desk_html = build_signal_desk()
 
     # Main decision screen intentionally excludes Extended / High Risk names.
     # They are still generated and saved by the scanner for diagnostics,
@@ -1483,7 +1620,8 @@ body {
 
 .desk-section,
 .desk-table-section,
-.sector-snapshot {
+.sector-snapshot,
+.signal-desk-section {
     margin-bottom: 24px;
 }
 
@@ -1926,6 +2064,129 @@ body {
     transform: translateY(-1px);
 }
 
+
+.signal-empty {
+    padding: 14px 16px;
+    border-radius: 12px;
+    border: 1px dashed rgba(148, 163, 184, 0.18);
+    background: rgba(15, 23, 42, 0.54);
+    color: #94a3b8;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.signal-empty strong {
+    color: #e2e8f0;
+    font-size: 13px;
+}
+
+.signal-empty span {
+    font-size: 12px;
+    line-height: 1.4;
+}
+
+.signal-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 12px;
+}
+
+.signal-card {
+    border-radius: 12px;
+    border: 1px solid rgba(16, 185, 129, 0.18);
+    background: rgba(15, 23, 42, 0.78);
+    padding: 13px;
+}
+
+.signal-card-top {
+    display: flex;
+    justify-content: space-between;
+    gap: 10px;
+    align-items: flex-start;
+    margin-bottom: 10px;
+}
+
+.signal-card-top strong {
+    display: block;
+    font-size: 17px;
+    font-weight: 800;
+    letter-spacing: -0.02em;
+}
+
+.signal-card-top span {
+    display: block;
+    color: #94a3b8;
+    font-size: 11px;
+    line-height: 1.35;
+    margin-top: 2px;
+}
+
+.signal-status {
+    white-space: nowrap;
+    border-radius: 999px;
+    padding: 4px 8px;
+    font-size: 10px;
+    font-weight: 700;
+    border: 1px solid rgba(148, 163, 184, 0.18);
+}
+
+.signal-active {
+    color: #34d399;
+    background: rgba(16, 185, 129, 0.12);
+    border-color: rgba(16, 185, 129, 0.30);
+}
+
+.signal-ready {
+    color: #fbbf24;
+    background: rgba(245, 158, 11, 0.12);
+    border-color: rgba(245, 158, 11, 0.30);
+}
+
+.signal-watch {
+    color: #60a5fa;
+    background: rgba(59, 130, 246, 0.10);
+    border-color: rgba(59, 130, 246, 0.26);
+}
+
+.signal-wait {
+    color: #cbd5e1;
+    background: rgba(148, 163, 184, 0.08);
+    border-color: rgba(148, 163, 184, 0.18);
+}
+
+.signal-invalid {
+    color: #f87171;
+    background: rgba(239, 68, 68, 0.12);
+    border-color: rgba(239, 68, 68, 0.30);
+}
+
+.signal-metrics {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 7px;
+}
+
+.signal-metrics div {
+    background: rgba(2, 6, 23, 0.42);
+    border: 1px solid rgba(148, 163, 184, 0.10);
+    border-radius: 8px;
+    padding: 7px 8px;
+}
+
+.signal-metrics span {
+    display: block;
+    color: #94a3b8;
+    font-size: 9px;
+    margin-bottom: 3px;
+}
+
+.signal-metrics b {
+    color: #e5e7eb;
+    font-size: 11px;
+}
+
+
 .empty-section {
     padding: 26px;
     border-radius: 12px;
@@ -2028,12 +2289,14 @@ td small {
     $kpi_html
 
     <div class="nav-tabs">
+        <a href="#signals">Signal Desk</a>
         <a href="#potential">Potential Movers</a>
         <a href="#active">Active Momentum</a>
         <a href="#sectors">Sector Leadership</a>
         <a href="#desk">Table View</a>
     </div>
 
+    $signal_desk_html
     <div id="potential">$potential_section</div>
     <div id="active">$active_section</div>
     <div id="sectors">$sector_snapshot</div>
@@ -2056,6 +2319,7 @@ td small {
         macro_html=macro_html,
         sector_snapshot=sector_snapshot,
         kpi_html=kpi_html,
+        signal_desk_html=signal_desk_html,
         potential_section=potential_section,
         active_section=active_section,
         desk_table=desk_table,
