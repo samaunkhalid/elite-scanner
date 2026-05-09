@@ -704,6 +704,60 @@ def build_section(title, subtitle, stocks, class_name, max_cards=10):
 
 
 
+def macro_display_name(name):
+    """
+    Compact but readable macro event labels for the dashboard.
+    """
+    raw = safe_str(name, "").strip()
+
+    aliases = {
+        "Consumer Price Index": "Consumer Price Index (CPI)",
+        "Producer Price Index": "Producer Price Index (PPI)",
+        "Personal Income and Outlays": "Personal Income and Outlays (PCE)",
+        "Employment Situation": "Employment Situation (Jobs)",
+        "Advance Retail Sales": "Retail Sales",
+        "Initial Claims": "Initial Jobless Claims",
+        "ISM Manufacturing": "ISM Manufacturing",
+        "ISM Services": "ISM Services",
+        "Gross Domestic Product": "Gross Domestic Product (GDP)",
+        "FOMC Meeting Announcement": "FOMC Rate Decision",
+        "FOMC Minutes": "FOMC Minutes",
+    }
+
+    return aliases.get(raw, raw)
+
+
+def macro_weekday(event):
+    """
+    Return weekday name from event date/datetime.
+    """
+    date_text = safe_str(event.get("date"), "")
+
+    if not date_text:
+        dt_text = safe_str(event.get("datetime_et"), "")
+        date_text = dt_text[:10] if len(dt_text) >= 10 else ""
+
+    try:
+        return datetime.fromisoformat(date_text).strftime("%A")
+    except Exception:
+        return ""
+
+
+def format_macro_event_label(event):
+    """
+    Example:
+    Consumer Price Index (CPI): Tuesday at 08:30 ET
+    """
+    name = macro_display_name(event.get("name") or event.get("event") or "Macro Event")
+    weekday = macro_weekday(event)
+    time_et = safe_str(event.get("time_et"), "TBD")
+
+    if weekday:
+        return f"{name}: {weekday} at {time_et} ET"
+
+    return f"{name}: {time_et} ET"
+
+
 def build_macro_html(macro):
     if not macro:
         return """
@@ -715,7 +769,16 @@ def build_macro_html(macro):
         </div>
         """
 
-    risk_class = safe_str(macro.get("risk_class"), "macro-unknown")
+    risk_level = safe_str(macro.get("risk_level"), "UNKNOWN").upper()
+    risk_class = safe_str(macro.get("risk_class"), "")
+    if not risk_class:
+        risk_class = {
+            "HIGH": "macro-high",
+            "MEDIUM": "macro-medium",
+            "LOW": "macro-low",
+            "UNKNOWN": "macro-unknown",
+        }.get(risk_level, "macro-unknown")
+
     headline = safe_str(macro.get("headline"), "Macro Risk: Unknown")
     action = safe_str(macro.get("action"), "Check the economic calendar manually before trading.")
     source = safe_str(macro.get("source"), "Unknown source")
@@ -724,14 +787,15 @@ def build_macro_html(macro):
 
     event_rows = ""
 
-    for event in events[:5]:
-        impact = safe_str(event.get("impact"), "MEDIUM")
+    for event in events[:6]:
+        impact = safe_str(event.get("impact"), "MEDIUM").upper()
         impact_class = "impact-high" if impact == "HIGH" else "impact-medium" if impact == "MEDIUM" else "impact-low"
+        label = format_macro_event_label(event)
+
         event_rows += f"""
         <div class="macro-event">
             <span class="impact-pill {impact_class}">{esc(impact)}</span>
-            <strong>{esc(event.get("event", ""))}</strong>
-            <span>{esc(event.get("time_et", "TBD"))}</span>
+            <strong>{esc(label)}</strong>
         </div>
         """
 
@@ -1210,18 +1274,25 @@ body {
     gap: 8px;
     flex-wrap: wrap;
     margin-top: 10px;
+    align-items: center;
 }
 
 .macro-event {
     display: inline-flex;
     align-items: center;
     gap: 7px;
-    padding: 6px 9px;
+    padding: 6px 10px;
     border-radius: 999px;
     background: rgba(2, 6, 23, 0.38);
     border: 1px solid rgba(148, 163, 184, 0.12);
     color: #cbd5e1;
     font-size: 11px;
+    white-space: nowrap;
+    max-width: 100%;
+}
+
+.macro-event strong {
+    font-weight: 650;
 }
 
 .macro-event.muted {
