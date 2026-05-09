@@ -318,7 +318,8 @@ body {
 
 .desk-section,
 .desk-table-section,
-.sector-snapshot {
+.sector-snapshot,
+.signal-desk-section {
     margin-bottom: 24px;
 }
 
@@ -761,6 +762,129 @@ body {
     transform: translateY(-1px);
 }
 
+
+.signal-empty {
+    padding: 14px 16px;
+    border-radius: 12px;
+    border: 1px dashed rgba(148, 163, 184, 0.18);
+    background: rgba(15, 23, 42, 0.54);
+    color: #94a3b8;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.signal-empty strong {
+    color: #e2e8f0;
+    font-size: 13px;
+}
+
+.signal-empty span {
+    font-size: 12px;
+    line-height: 1.4;
+}
+
+.signal-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 12px;
+}
+
+.signal-card {
+    border-radius: 12px;
+    border: 1px solid rgba(16, 185, 129, 0.18);
+    background: rgba(15, 23, 42, 0.78);
+    padding: 13px;
+}
+
+.signal-card-top {
+    display: flex;
+    justify-content: space-between;
+    gap: 10px;
+    align-items: flex-start;
+    margin-bottom: 10px;
+}
+
+.signal-card-top strong {
+    display: block;
+    font-size: 17px;
+    font-weight: 800;
+    letter-spacing: -0.02em;
+}
+
+.signal-card-top span {
+    display: block;
+    color: #94a3b8;
+    font-size: 11px;
+    line-height: 1.35;
+    margin-top: 2px;
+}
+
+.signal-status {
+    white-space: nowrap;
+    border-radius: 999px;
+    padding: 4px 8px;
+    font-size: 10px;
+    font-weight: 700;
+    border: 1px solid rgba(148, 163, 184, 0.18);
+}
+
+.signal-active {
+    color: #34d399;
+    background: rgba(16, 185, 129, 0.12);
+    border-color: rgba(16, 185, 129, 0.30);
+}
+
+.signal-ready {
+    color: #fbbf24;
+    background: rgba(245, 158, 11, 0.12);
+    border-color: rgba(245, 158, 11, 0.30);
+}
+
+.signal-watch {
+    color: #60a5fa;
+    background: rgba(59, 130, 246, 0.10);
+    border-color: rgba(59, 130, 246, 0.26);
+}
+
+.signal-wait {
+    color: #cbd5e1;
+    background: rgba(148, 163, 184, 0.08);
+    border-color: rgba(148, 163, 184, 0.18);
+}
+
+.signal-invalid {
+    color: #f87171;
+    background: rgba(239, 68, 68, 0.12);
+    border-color: rgba(239, 68, 68, 0.30);
+}
+
+.signal-metrics {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 7px;
+}
+
+.signal-metrics div {
+    background: rgba(2, 6, 23, 0.42);
+    border: 1px solid rgba(148, 163, 184, 0.10);
+    border-radius: 8px;
+    padding: 7px 8px;
+}
+
+.signal-metrics span {
+    display: block;
+    color: #94a3b8;
+    font-size: 9px;
+    margin-bottom: 3px;
+}
+
+.signal-metrics b {
+    color: #e5e7eb;
+    font-size: 11px;
+}
+
+
 .empty-section {
     padding: 26px;
     border-radius: 12px;
@@ -851,7 +975,7 @@ td small {
             <p>Technical Potential Movers + Catalyst Confirmation + Sector Context</p>
         </div>
         <div class="header-meta">
-            <span class="scan-pill">Last Scan: 2026-05-09 16:05 ET</span>
+            <span class="scan-pill">Last Scan: 2026-05-09 16:12 ET</span>
             <span class="status-pill status-gray">Market: CLOSED</span>
         </div>
     </div>
@@ -880,7 +1004,7 @@ td small {
                 <span>Major event upcoming this week. Keep position size conservative.</span>
             </div>
             <div class="macro-source">
-                Source: New York Fed Economic Indicators Calendar · 2026-05-09 16:05 ET
+                Source: New York Fed Economic Indicators Calendar · 2026-05-09 16:12 ET
             </div>
         </div>
         <div class="macro-events grouped">
@@ -942,12 +1066,30 @@ td small {
     
 
     <div class="nav-tabs">
+        <a href="#signals">Signal Desk</a>
         <a href="#potential">Potential Movers</a>
         <a href="#active">Active Momentum</a>
         <a href="#sectors">Sector Leadership</a>
         <a href="#desk">Table View</a>
     </div>
 
+    
+    <section class="signal-desk-section" id="signals">
+        <div class="section-header signal-header">
+            <div>
+                <h2>Signal Desk</h2>
+                <p>Execution-level signals will appear here when the signal engine is enabled.</p>
+            </div>
+            <span class="section-count">0</span>
+        </div>
+        
+        <div class="signal-empty">
+            <strong>No active intraday signals yet.</strong>
+            <span>Signal engine will populate Trigger Ready / Active Signal setups here.</span>
+        </div>
+        
+    </section>
+    
     <div id="potential">
     <section class="desk-section section-potential">
         <div class="section-header">
@@ -1049,79 +1191,6 @@ td small {
         <div class="card-top">
             <div class="card-id">
                 <div class="symbol-row">
-                    <span class="symbol">WSC</span>
-                    <span class="sector-chip">Industrials</span>
-                    <span class="tier" style="color:#10b981;border-color:#10b981;">Tier 1</span>
-                </div>
-                <div class="company-name">WillScot Holdings Corporation</div>
-            </div>
-            <div class="price-box">
-                <div class="price">$28.10</div>
-                <div class="change positive">+20.60%</div>
-            </div>
-        </div>
-
-        <div class="score-risk-row">
-            <span class="score-pill">Score 68/100</span>
-            <span class="risk-pill">NORMAL</span>
-            <span class="sector-status-pill sector-weak">WEAK</span>
-        </div>
-
-        <div class="sector-strip">
-            <span>Sector <strong>Industrials</strong></span>
-            <span>ETF <strong>XLI</strong> <b class="negative">-0.46%</b></span>
-            <span>Vs Sector <b class="positive">+21.06%</b></span>
-        </div>
-
-        <div class="catalyst-strip catalyst-none">
-            <div class="catalyst-label">⚪ Catalyst: No confirmed company-specific catalyst</div>
-            
-            
-            
-        </div>
-
-        <div class="metrics-grid">
-            <div><span>Liquidity</span><strong class="metric-ok">$90M</strong></div>
-            <div><span>ATR</span><strong class="metric-good">4.4%</strong></div>
-            <div><span>VWAP Dist</span><strong class="metric-good">+0.0%</strong></div>
-            <div><span>HOD Dist</span><strong class="metric-neutral">—</strong></div>
-        </div>
-
-        <div class="status-row">
-            <span class="status-chip status-neutral">Below/Unknown</span>
-            <span class="status-chip status-neutral">HOD N/A</span>
-            <span class="status-chip status-neutral">NORMAL</span>
-        </div>
-
-        <div class="interpretation">Already moving; wait for pullback or tight consolidation.</div>
-
-        <div class="tags-row"><span class="tag tag-risk">Sector weak</span><span class="tag tag-caution">Major move +20.6%</span><span class="tag tag-positive">Vs sector +21.1%</span><span class="tag tag-squeeze">RVOL 4.2x</span><span class="tag tag-neutral">$90M liq</span></div>
-
-        
-        <div class="mini-panel">
-            <div class="mini-row"><span>Short %</span><strong>23%</strong></div>
-            <div class="mini-row"><span>Float</span><strong>175.4M</strong></div>
-            <div class="mini-row"><span>DTC</span><strong>12.6d</strong></div>
-        </div>
-        
-
-        <div class="card-actions">
-            <a class="action-btn action-chart" href="https://www.tradingview.com/chart/?symbol=WSC" target="_blank">
-                <img src="assets/tradingview.png" alt="TradingView"> Chart
-            </a>
-            <a class="action-btn action-yahoo" href="https://finance.yahoo.com/quote/WSC" target="_blank">
-                <img src="assets/yahoo.png" alt="Yahoo Finance"> Yahoo
-            </a>
-            <a class="action-btn action-twits" href="https://stocktwits.com/symbol/WSC" target="_blank">
-                <img src="assets/stocktwits.png" alt="Stocktwits"> Twits
-            </a>
-        </div>
-    </div>
-    
-    <div class="stock-card bucket-active" style="--accent:#22c55e;">
-        <div class="card-top">
-            <div class="card-id">
-                <div class="symbol-row">
                     <span class="symbol">DBX</span>
                     <span class="sector-chip">Technology</span>
                     <span class="tier" style="color:#10b981;border-color:#10b981;">Tier 1</span>
@@ -1186,6 +1255,79 @@ td small {
                 <img src="assets/yahoo.png" alt="Yahoo Finance"> Yahoo
             </a>
             <a class="action-btn action-twits" href="https://stocktwits.com/symbol/DBX" target="_blank">
+                <img src="assets/stocktwits.png" alt="Stocktwits"> Twits
+            </a>
+        </div>
+    </div>
+    
+    <div class="stock-card bucket-active" style="--accent:#22c55e;">
+        <div class="card-top">
+            <div class="card-id">
+                <div class="symbol-row">
+                    <span class="symbol">WSC</span>
+                    <span class="sector-chip">Industrials</span>
+                    <span class="tier" style="color:#10b981;border-color:#10b981;">Tier 1</span>
+                </div>
+                <div class="company-name">WillScot Holdings Corporation</div>
+            </div>
+            <div class="price-box">
+                <div class="price">$28.10</div>
+                <div class="change positive">+20.60%</div>
+            </div>
+        </div>
+
+        <div class="score-risk-row">
+            <span class="score-pill">Score 68/100</span>
+            <span class="risk-pill">NORMAL</span>
+            <span class="sector-status-pill sector-weak">WEAK</span>
+        </div>
+
+        <div class="sector-strip">
+            <span>Sector <strong>Industrials</strong></span>
+            <span>ETF <strong>XLI</strong> <b class="negative">-0.46%</b></span>
+            <span>Vs Sector <b class="positive">+21.06%</b></span>
+        </div>
+
+        <div class="catalyst-strip catalyst-none">
+            <div class="catalyst-label">⚪ Catalyst: No confirmed company-specific catalyst</div>
+            
+            
+            
+        </div>
+
+        <div class="metrics-grid">
+            <div><span>Liquidity</span><strong class="metric-ok">$90M</strong></div>
+            <div><span>ATR</span><strong class="metric-good">4.4%</strong></div>
+            <div><span>VWAP Dist</span><strong class="metric-good">+0.0%</strong></div>
+            <div><span>HOD Dist</span><strong class="metric-neutral">—</strong></div>
+        </div>
+
+        <div class="status-row">
+            <span class="status-chip status-neutral">Below/Unknown</span>
+            <span class="status-chip status-neutral">HOD N/A</span>
+            <span class="status-chip status-neutral">NORMAL</span>
+        </div>
+
+        <div class="interpretation">Already moving; wait for pullback or tight consolidation.</div>
+
+        <div class="tags-row"><span class="tag tag-risk">Sector weak</span><span class="tag tag-caution">Major move +20.6%</span><span class="tag tag-positive">Vs sector +21.1%</span><span class="tag tag-squeeze">RVOL 4.2x</span><span class="tag tag-neutral">$90M liq</span></div>
+
+        
+        <div class="mini-panel">
+            <div class="mini-row"><span>Short %</span><strong>23%</strong></div>
+            <div class="mini-row"><span>Float</span><strong>175.4M</strong></div>
+            <div class="mini-row"><span>DTC</span><strong>12.6d</strong></div>
+        </div>
+        
+
+        <div class="card-actions">
+            <a class="action-btn action-chart" href="https://www.tradingview.com/chart/?symbol=WSC" target="_blank">
+                <img src="assets/tradingview.png" alt="TradingView"> Chart
+            </a>
+            <a class="action-btn action-yahoo" href="https://finance.yahoo.com/quote/WSC" target="_blank">
+                <img src="assets/yahoo.png" alt="Yahoo Finance"> Yahoo
+            </a>
+            <a class="action-btn action-twits" href="https://stocktwits.com/symbol/WSC" target="_blank">
                 <img src="assets/stocktwits.png" alt="Stocktwits"> Twits
             </a>
         </div>
@@ -1335,6 +1477,73 @@ td small {
         <div class="card-top">
             <div class="card-id">
                 <div class="symbol-row">
+                    <span class="symbol">CALY</span>
+                    <span class="sector-chip">Consumer Cyclical</span>
+                    <span class="tier" style="color:#38bdf8;border-color:#38bdf8;">Tier 2</span>
+                </div>
+                <div class="company-name">Callaway Golf Company</div>
+            </div>
+            <div class="price-box">
+                <div class="price">$17.52</div>
+                <div class="change positive">+18.62%</div>
+            </div>
+        </div>
+
+        <div class="score-risk-row">
+            <span class="score-pill">Score 62/100</span>
+            <span class="risk-pill">NORMAL</span>
+            <span class="sector-status-pill sector-neutral">NEUTRAL</span>
+        </div>
+
+        <div class="sector-strip">
+            <span>Sector <strong>Consumer Cyclical</strong></span>
+            <span>ETF <strong>XLY</strong> <b class="positive">+0.27%</b></span>
+            <span>Vs Sector <b class="positive">+18.35%</b></span>
+        </div>
+
+        <div class="catalyst-strip catalyst-none">
+            <div class="catalyst-label">⚪ Catalyst: No confirmed company-specific catalyst</div>
+            
+            
+            
+        </div>
+
+        <div class="metrics-grid">
+            <div><span>Liquidity</span><strong class="metric-ok">$52M</strong></div>
+            <div><span>ATR</span><strong class="metric-good">3.9%</strong></div>
+            <div><span>VWAP Dist</span><strong class="metric-good">+0.0%</strong></div>
+            <div><span>HOD Dist</span><strong class="metric-neutral">—</strong></div>
+        </div>
+
+        <div class="status-row">
+            <span class="status-chip status-neutral">Below/Unknown</span>
+            <span class="status-chip status-neutral">HOD N/A</span>
+            <span class="status-chip status-neutral">NORMAL</span>
+        </div>
+
+        <div class="interpretation">Already moving; wait for pullback or tight consolidation.</div>
+
+        <div class="tags-row"><span class="tag tag-caution">Big move +18.6%</span><span class="tag tag-positive">Vs sector +18.4%</span><span class="tag tag-positive">RS strong (5/20/60d)</span><span class="tag tag-squeeze">Float 148M</span><span class="tag tag-neutral">$52M liq</span></div>
+
+        
+
+        <div class="card-actions">
+            <a class="action-btn action-chart" href="https://www.tradingview.com/chart/?symbol=CALY" target="_blank">
+                <img src="assets/tradingview.png" alt="TradingView"> Chart
+            </a>
+            <a class="action-btn action-yahoo" href="https://finance.yahoo.com/quote/CALY" target="_blank">
+                <img src="assets/yahoo.png" alt="Yahoo Finance"> Yahoo
+            </a>
+            <a class="action-btn action-twits" href="https://stocktwits.com/symbol/CALY" target="_blank">
+                <img src="assets/stocktwits.png" alt="Stocktwits"> Twits
+            </a>
+        </div>
+    </div>
+    
+    <div class="stock-card bucket-active" style="--accent:#22c55e;">
+        <div class="card-top">
+            <div class="card-id">
+                <div class="symbol-row">
                     <span class="symbol">CSIQ</span>
                     <span class="sector-chip">Solar</span>
                     <span class="tier" style="color:#38bdf8;border-color:#38bdf8;">Tier 2</span>
@@ -1399,73 +1608,6 @@ td small {
                 <img src="assets/yahoo.png" alt="Yahoo Finance"> Yahoo
             </a>
             <a class="action-btn action-twits" href="https://stocktwits.com/symbol/CSIQ" target="_blank">
-                <img src="assets/stocktwits.png" alt="Stocktwits"> Twits
-            </a>
-        </div>
-    </div>
-    
-    <div class="stock-card bucket-active" style="--accent:#22c55e;">
-        <div class="card-top">
-            <div class="card-id">
-                <div class="symbol-row">
-                    <span class="symbol">CALY</span>
-                    <span class="sector-chip">Consumer Cyclical</span>
-                    <span class="tier" style="color:#38bdf8;border-color:#38bdf8;">Tier 2</span>
-                </div>
-                <div class="company-name">Callaway Golf Company</div>
-            </div>
-            <div class="price-box">
-                <div class="price">$17.52</div>
-                <div class="change positive">+18.62%</div>
-            </div>
-        </div>
-
-        <div class="score-risk-row">
-            <span class="score-pill">Score 62/100</span>
-            <span class="risk-pill">NORMAL</span>
-            <span class="sector-status-pill sector-neutral">NEUTRAL</span>
-        </div>
-
-        <div class="sector-strip">
-            <span>Sector <strong>Consumer Cyclical</strong></span>
-            <span>ETF <strong>XLY</strong> <b class="positive">+0.27%</b></span>
-            <span>Vs Sector <b class="positive">+18.35%</b></span>
-        </div>
-
-        <div class="catalyst-strip catalyst-none">
-            <div class="catalyst-label">⚪ Catalyst: No confirmed company-specific catalyst</div>
-            
-            
-            
-        </div>
-
-        <div class="metrics-grid">
-            <div><span>Liquidity</span><strong class="metric-ok">$52M</strong></div>
-            <div><span>ATR</span><strong class="metric-good">3.9%</strong></div>
-            <div><span>VWAP Dist</span><strong class="metric-good">+0.0%</strong></div>
-            <div><span>HOD Dist</span><strong class="metric-neutral">—</strong></div>
-        </div>
-
-        <div class="status-row">
-            <span class="status-chip status-neutral">Below/Unknown</span>
-            <span class="status-chip status-neutral">HOD N/A</span>
-            <span class="status-chip status-neutral">NORMAL</span>
-        </div>
-
-        <div class="interpretation">Already moving; wait for pullback or tight consolidation.</div>
-
-        <div class="tags-row"><span class="tag tag-caution">Big move +18.6%</span><span class="tag tag-positive">Vs sector +18.4%</span><span class="tag tag-positive">RS strong (5/20/60d)</span><span class="tag tag-squeeze">Float 148M</span><span class="tag tag-neutral">$52M liq</span></div>
-
-        
-
-        <div class="card-actions">
-            <a class="action-btn action-chart" href="https://www.tradingview.com/chart/?symbol=CALY" target="_blank">
-                <img src="assets/tradingview.png" alt="TradingView"> Chart
-            </a>
-            <a class="action-btn action-yahoo" href="https://finance.yahoo.com/quote/CALY" target="_blank">
-                <img src="assets/yahoo.png" alt="Yahoo Finance"> Yahoo
-            </a>
-            <a class="action-btn action-twits" href="https://stocktwits.com/symbol/CALY" target="_blank">
                 <img src="assets/stocktwits.png" alt="Stocktwits"> Twits
             </a>
         </div>
@@ -1844,22 +1986,6 @@ td small {
         </tr>
         
         <tr>
-            <td><strong>WSC</strong><br><small>Industrials</small></td>
-            <td>68</td>
-            <td>1</td>
-            <td>Active Momentum</td>
-            <td>$28.10</td>
-            <td class="positive">+20.60%</td>
-            <td>$90M</td>
-            <td>4.4%</td>
-            <td>Below/NA</td>
-            <td>NORMAL</td>
-            <td>WEAK<br><small>+21.06% vs sector</small></td>
-            <td>No confirmed company-specific catalyst</td>
-            <td>—</td>
-        </tr>
-        
-        <tr>
             <td><strong>DBX</strong><br><small>Technology</small></td>
             <td>68</td>
             <td>1</td>
@@ -1871,6 +1997,22 @@ td small {
             <td>Below/NA</td>
             <td>NORMAL</td>
             <td>LEADING<br><small>+11.57% vs sector</small></td>
+            <td>No confirmed company-specific catalyst</td>
+            <td>—</td>
+        </tr>
+        
+        <tr>
+            <td><strong>WSC</strong><br><small>Industrials</small></td>
+            <td>68</td>
+            <td>1</td>
+            <td>Active Momentum</td>
+            <td>$28.10</td>
+            <td class="positive">+20.60%</td>
+            <td>$90M</td>
+            <td>4.4%</td>
+            <td>Below/NA</td>
+            <td>NORMAL</td>
+            <td>WEAK<br><small>+21.06% vs sector</small></td>
             <td>No confirmed company-specific catalyst</td>
             <td>—</td>
         </tr>
@@ -1908,22 +2050,6 @@ td small {
         </tr>
         
         <tr>
-            <td><strong>CSIQ</strong><br><small>Solar</small></td>
-            <td>62</td>
-            <td>2</td>
-            <td>Active Momentum</td>
-            <td>$20.06</td>
-            <td class="positive">+13.46%</td>
-            <td>$60M</td>
-            <td>6.6%</td>
-            <td>Below/NA</td>
-            <td>NORMAL</td>
-            <td>LEADING<br><small>+9.81% vs sector</small></td>
-            <td>No confirmed company-specific catalyst</td>
-            <td>—</td>
-        </tr>
-        
-        <tr>
             <td><strong>CALY</strong><br><small>Consumer Cyclical</small></td>
             <td>62</td>
             <td>2</td>
@@ -1935,6 +2061,22 @@ td small {
             <td>Below/NA</td>
             <td>NORMAL</td>
             <td>NEUTRAL<br><small>+18.35% vs sector</small></td>
+            <td>No confirmed company-specific catalyst</td>
+            <td>—</td>
+        </tr>
+        
+        <tr>
+            <td><strong>CSIQ</strong><br><small>Solar</small></td>
+            <td>62</td>
+            <td>2</td>
+            <td>Active Momentum</td>
+            <td>$20.06</td>
+            <td class="positive">+13.46%</td>
+            <td>$60M</td>
+            <td>6.6%</td>
+            <td>Below/NA</td>
+            <td>NORMAL</td>
+            <td>LEADING<br><small>+9.81% vs sector</small></td>
             <td>No confirmed company-specific catalyst</td>
             <td>—</td>
         </tr>
