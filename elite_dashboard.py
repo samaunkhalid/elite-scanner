@@ -797,14 +797,33 @@ def build_macro_html(macro):
         </div>
         """
 
+    def render_more_chip(count, impact):
+        if count <= 0:
+            return ""
+        impact = impact.upper()
+        impact_class = "impact-high" if impact == "HIGH" else "impact-medium"
+        return f"""
+        <div class="macro-event macro-more">
+            <span class="impact-pill {impact_class}">+{count}</span>
+            <strong>more {esc(impact.lower())} events</strong>
+        </div>
+        """
+
     high_events = [e for e in events if safe_str(e.get("impact"), "").upper() == "HIGH"]
     medium_events = [e for e in events if safe_str(e.get("impact"), "").upper() == "MEDIUM"]
 
-    # Keep the dashboard readable:
+    # Compact display:
     # Row 1 = HIGH events, Row 2 = MEDIUM events.
-    # The macro_calendar.json still stores the full 7-day event list.
-    high_rows = "".join(render_event_chip(e) for e in high_events[:6])
-    medium_rows = "".join(render_event_chip(e) for e in medium_events[:6])
+    # Limit visible chips so the trade candidates stay near the top.
+    # The full 7-day list remains stored in macro_calendar.json.
+    high_limit = 3
+    medium_limit = 3
+
+    high_rows = "".join(render_event_chip(e) for e in high_events[:high_limit])
+    high_rows += render_more_chip(len(high_events) - high_limit, "HIGH")
+
+    medium_rows = "".join(render_event_chip(e) for e in medium_events[:medium_limit])
+    medium_rows += render_more_chip(len(medium_events) - medium_limit, "MEDIUM")
 
     event_rows = ""
 
@@ -1265,8 +1284,8 @@ body {
 .macro-banner {
     border-radius: 14px;
     border: 1px solid rgba(148, 163, 184, 0.14);
-    padding: 14px 16px;
-    margin-bottom: 16px;
+    padding: 12px 16px;
+    margin-bottom: 14px;
     background: rgba(15, 23, 42, 0.82);
 }
 
@@ -1282,49 +1301,61 @@ body {
     display: block;
     font-size: 14px;
     font-weight: 750;
-    margin-bottom: 4px;
+    margin-bottom: 3px;
 }
 
 .macro-main span,
 .macro-source {
     color: #94a3b8;
     font-size: 12px;
-    line-height: 1.45;
+    line-height: 1.35;
 }
 
 .macro-events {
     display: flex;
-    gap: 8px;
+    gap: 6px;
     flex-wrap: wrap;
-    margin-top: 10px;
+    margin-top: 8px;
     align-items: center;
 }
 
 .macro-events.grouped {
     flex-direction: column;
     align-items: stretch;
-    gap: 8px;
+    gap: 6px;
 }
 
 .macro-event-row {
     display: flex;
-    gap: 8px;
-    flex-wrap: wrap;
+    gap: 7px;
+    flex-wrap: nowrap;
     align-items: center;
+    overflow-x: auto;
+    padding-bottom: 1px;
+}
+
+.macro-event-row::-webkit-scrollbar {
+    height: 4px;
+}
+
+.macro-event-row::-webkit-scrollbar-thumb {
+    background: rgba(148, 163, 184, 0.18);
+    border-radius: 999px;
 }
 
 .macro-event {
     display: inline-flex;
     align-items: center;
     gap: 7px;
-    padding: 6px 10px;
+    padding: 5px 9px;
     border-radius: 999px;
     background: rgba(2, 6, 23, 0.38);
     border: 1px solid rgba(148, 163, 184, 0.12);
     color: #cbd5e1;
-    font-size: 11px;
+    font-size: 10.5px;
     white-space: nowrap;
     max-width: 100%;
+    flex: 0 0 auto;
 }
 
 .macro-event strong {
@@ -1333,6 +1364,11 @@ body {
 
 .macro-event.muted {
     color: #94a3b8;
+}
+
+.macro-more {
+    color: #94a3b8;
+    background: rgba(148, 163, 184, 0.055);
 }
 
 .impact-pill {
