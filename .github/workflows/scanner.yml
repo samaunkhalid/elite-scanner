@@ -6,13 +6,13 @@ on:
     # 30 min before market open
     - cron: '0 13 * * 1-5'
 
-    # Mid-morning at 10:30 AM ET (14:30 UTC) = 9:30 PM Bangkok
+    # Also run mid-morning at 10:30 AM ET (14:30 UTC) = 9:30 PM Bangkok
     - cron: '30 14 * * 1-5'
 
     # Afternoon update at 1:00 PM ET (17:00 UTC) = 12:00 AM Bangkok
     - cron: '0 17 * * 1-5'
 
-  workflow_dispatch:
+  workflow_dispatch:  # Manual trigger button in Actions tab
 
 jobs:
   scan:
@@ -41,6 +41,9 @@ jobs:
           ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
         run: python elite_scanner.py
 
+      - name: Build Macro Calendar
+        run: python macro_calendar.py
+
       - name: Build Dashboard
         run: python elite_dashboard.py
 
@@ -48,6 +51,6 @@ jobs:
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git add elite_watchlist.csv elite_watchlist_raw.csv elite_watchlist.json market_regime.json dashboard.html potential_movers.csv active_momentum.csv extended_movers.csv high_risk_movers.csv || true
+          git add elite_watchlist.csv elite_watchlist_raw.csv elite_watchlist.json market_regime.json macro_calendar.json dashboard.html potential_movers.csv active_momentum.csv extended_movers.csv high_risk_movers.csv || true
           git diff --staged --quiet || git commit -m "scan: $(date -u '+%Y-%m-%d %H:%M UTC')"
           git push
