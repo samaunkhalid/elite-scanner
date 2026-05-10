@@ -11,7 +11,7 @@
       "impact": "MEDIUM",
       "source": "New York Fed",
       "source_url": "https://www.newyorkfed.org/research/calendars/nationalecon_cal",
-      "minutes_until": 2482
+      "minutes_until": 1171
     },
     {
       "name": "Consumer Price Index",
@@ -21,7 +21,7 @@
       "impact": "HIGH",
       "source": "New York Fed",
       "source_url": "https://www.newyorkfed.org/research/calendars/nationalecon_cal",
-      "minutes_until": 3832
+      "minutes_until": 2521
     },
     {
       "name": "Producer Price Index (PPI)",
@@ -31,7 +31,7 @@
       "impact": "HIGH",
       "source": "New York Fed",
       "source_url": "https://www.newyorkfed.org/research/calendars/nationalecon_cal",
-      "minutes_until": 5272
+      "minutes_until": 3961
     },
     {
       "name": "Initial Claims",
@@ -41,7 +41,7 @@
       "impact": "MEDIUM",
       "source": "New York Fed",
       "source_url": "https://www.newyorkfed.org/research/calendars/nationalecon_cal",
-      "minutes_until": 6712
+      "minutes_until": 5401
     },
     {
       "name": "Advance Retail Sales",
@@ -51,7 +51,7 @@
       "impact": "HIGH",
       "source": "New York Fed",
       "source_url": "https://www.newyorkfed.org/research/calendars/nationalecon_cal",
-      "minutes_until": 6712
+      "minutes_until": 5401
     },
     {
       "name": "Imports and Exports",
@@ -61,7 +61,7 @@
       "impact": "MEDIUM",
       "source": "New York Fed",
       "source_url": "https://www.newyorkfed.org/research/calendars/nationalecon_cal",
-      "minutes_until": 6712
+      "minutes_until": 5401
     },
     {
       "name": "Business Inventories",
@@ -71,7 +71,7 @@
       "impact": "MEDIUM",
       "source": "New York Fed",
       "source_url": "https://www.newyorkfed.org/research/calendars/nationalecon_cal",
-      "minutes_until": 6802
+      "minutes_until": 5491
     },
     {
       "name": "Empire State Manufacturing Survey",
@@ -81,7 +81,7 @@
       "impact": "MEDIUM",
       "source": "New York Fed",
       "source_url": "https://www.newyorkfed.org/research/calendars/nationalecon_cal",
-      "minutes_until": 8152
+      "minutes_until": 6841
     },
     {
       "name": "Industrial Production and Capacity Utilization",
@@ -91,13 +91,13 @@
       "impact": "MEDIUM",
       "source": "New York Fed",
       "source_url": "https://www.newyorkfed.org/research/calendars/nationalecon_cal",
-      "minutes_until": 8197
+      "minutes_until": 6886
     }
   ],
   "source": "New York Fed Economic Indicators Calendar",
   "source_url": "https://www.newyorkfed.org/research/calendars/nationalecon_cal",
-  "generated_at_et": "2026-05-09 16:37 ET",
-  "generated_at": "2026-05-09 16:37 ET",
+  "generated_at_et": "2026-05-10 14:28 ET",
+  "generated_at": "2026-05-10 14:28 ET",
   "lookahead_days": 7,
   "fetch_error": ""
 }
