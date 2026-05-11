@@ -25,6 +25,8 @@ Display:
   - Dashboard hides Extended / High Risk sections from the main decision screen
   - Full-width Signal Desk replaces KPI summary row
   - Signal Desk collapses when no live signals exist
+  - Potential Movers loads 12; Active Momentum loads 8
+  - WATCH rows are compact in Signal Desk to reduce height
 """
 
 import json
@@ -1400,10 +1402,14 @@ def signal_status_group(signal):
     return "other"
 
 
-def build_signal_desk_item(signal):
+def build_signal_desk_item(signal, compact=False):
     """
     Compact signal row for the full-width Signal Desk.
-    The detailed trade plan still lives inside the matching ticker card.
+
+    Display rule:
+      - ACTIVE_SIGNAL / TRIGGER_READY show the mini trade plan.
+      - WATCH is monitor-only, so it stays compact and does not show Entry/Stop/T1/R:R.
+        Full details still appear inside the ticker card.
     """
     symbol = safe_str(signal.get("symbol"), "—").upper()
     setup_type = safe_str(signal.get("setup_type"), "Setup pending")
@@ -1413,15 +1419,31 @@ def build_signal_desk_item(signal):
     time_label = signal_time_label(signal)
     href = "#" + html_id_for_symbol(symbol)
 
+    confidence = safe_float(signal.get("confidence"), 0)
+    confidence_text = f"{confidence:.0f}%" if confidence > 0 else "—"
+    time_html = f'<span class="signal-desk-time">{esc(time_label)}</span>' if time_label else ""
+
+    if compact or status in ["WATCH", "WATCHLIST"]:
+        return f"""
+        <div class="signal-desk-item signal-desk-watch-compact">
+            <div class="signal-desk-item-top">
+                <a class="signal-desk-symbol" href="{esc(href)}">{esc(symbol)}</a>
+                <span class="signal-status {status_class}">{esc(status_text)}</span>
+            </div>
+            <div class="signal-desk-compact-line">
+                <span>{esc(setup_type)}</span>
+                <b>{confidence_text}</b>
+            </div>
+            {time_html}
+        </div>
+        """
+
     entry = format_signal_price(signal.get("entry_trigger") or signal.get("entry"))
     stop = format_signal_price(signal.get("stop_loss") or signal.get("stop"))
     target_1 = format_signal_price(signal.get("target_1") or signal.get("target1"))
     rr = safe_float(signal.get("reward_risk"), 0)
-    confidence = safe_float(signal.get("confidence"), 0)
 
     rr_text = f"{rr:.1f}:1" if rr > 0 else "—"
-    confidence_text = f"{confidence:.0f}%" if confidence > 0 else "—"
-    time_html = f'<span class="signal-desk-time">{esc(time_label)}</span>' if time_label else ""
 
     return f"""
         <div class="signal-desk-item">
@@ -1442,12 +1464,12 @@ def build_signal_desk_item(signal):
     """
 
 
-def build_signal_desk_column(title, subtitle, signals, column_class, max_items=8):
+def build_signal_desk_column(title, subtitle, signals, column_class, max_items=8, compact_items=False):
     count = len(signals)
     visible = signals[:max_items]
 
     if visible:
-        items = "".join(build_signal_desk_item(s) for s in visible)
+        items = "".join(build_signal_desk_item(s, compact=compact_items) for s in visible)
         extra = count - len(visible)
         extra_html = f'<div class="signal-desk-extra">+{extra} more in this bucket</div>' if extra > 0 else ""
         body = f"""
@@ -1542,7 +1564,8 @@ def build_signal_desk_panel(signals):
         "Developing setups; monitor until conditions improve.",
         watch_signals,
         "signal-col-watch",
-        max_items=8,
+        max_items=6,
+        compact_items=True,
     )
 
     return f"""
@@ -1958,6 +1981,7 @@ body {
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 10px;
+    align-items: start;
 }
 
 .signal-desk-column {
@@ -2025,6 +2049,37 @@ body {
     border-radius: 10px;
     background: rgba(15, 23, 42, 0.54);
     border: 1px solid rgba(148, 163, 184, 0.08);
+}
+
+.signal-desk-watch-compact {
+    padding: 6px 8px;
+}
+
+.signal-desk-watch-compact .signal-desk-item-top {
+    margin-bottom: 3px;
+}
+
+.signal-desk-compact-line {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+    align-items: center;
+    color: #94a3b8;
+    font-size: 10px;
+    line-height: 1.25;
+}
+
+.signal-desk-compact-line span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.signal-desk-compact-line b {
+    color: #cbd5e1;
+    font-size: 10px;
+    white-space: nowrap;
 }
 
 .signal-desk-item-top {
@@ -2951,12 +3006,12 @@ def main():
     print("BUILDING ELITE PRO DESK DASHBOARD")
     print("=" * 70)
 
-    potential = load_csv_records("potential_movers.csv", limit=8)
+    potential = load_csv_records("potential_movers.csv", limit=12)
     active = load_csv_records("active_momentum.csv", limit=8)
     extended = load_csv_records("extended_movers.csv", limit=10)
     highrisk = load_csv_records("high_risk_movers.csv", limit=10)
     raw = load_csv_records("elite_watchlist_raw.csv")
-    active_watchlist = load_csv_records("elite_watchlist.csv", limit=10)
+    active_watchlist = load_csv_records("elite_watchlist.csv", limit=20)
 
     if not active_watchlist:
         active_watchlist = load_json_records("elite_watchlist.json")
