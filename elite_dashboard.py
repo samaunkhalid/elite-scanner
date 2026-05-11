@@ -27,6 +27,7 @@ Display:
   - Signal Desk collapses when no live signals exist
   - Potential Movers loads 12; Active Momentum loads 8
   - WATCH rows are compact in Signal Desk to reduce height
+  - Ticker sections are hidden outside regular market OPEN status
 """
 
 import json
@@ -1359,6 +1360,43 @@ def get_market_status(now_ny):
     return "CLOSED", "status-gray"
 
 
+def is_regular_market_open(status):
+    """
+    Dashboard safety gate.
+
+    Only regular market OPEN can display ticker candidates.
+    PRE-MARKET, AFTER-HOURS, CLOSED, and weekends must not show ticker cards,
+    ticker tables, sector ticker context, or Signal Desk ticker rows.
+    """
+    return safe_str(status).upper() == "OPEN"
+
+
+def build_market_inactive_signal_panel(status):
+    """
+    Signal Desk replacement outside regular market hours.
+
+    This intentionally shows no ticker symbols. It prevents after-hours or
+    pre-market scanner output from looking actionable.
+    """
+    return f"""
+    <section class="signal-desk-panel signal-desk-compact" id="signals">
+        <div class="signal-desk-top">
+            <div>
+                <strong>Signal Desk</strong>
+                <span>Intraday execution status</span>
+            </div>
+            <div class="signal-desk-counts">
+                <span><b>0</b> Active</span>
+                <span><b>0</b> Ready</span>
+                <span><b>0</b> Watch</span>
+            </div>
+        </div>
+        <div class="signal-desk-empty">
+            <strong>Market is {esc(status)}.</strong>
+            <span>Intraday scanner inactive. Ticker candidates are hidden outside regular market hours.</span>
+        </div>
+    </section>
+    """
 
 
 # ==============================================================
@@ -1753,45 +1791,71 @@ def build_signal_desk_panel(signals):
 def build_dashboard(potential, active, extended, highrisk, raw, active_watchlist, regime):
     now_utc, now_ny = get_times()
     status, status_class = get_market_status(now_ny)
+    market_open = is_regular_market_open(status)
 
     regime_html = build_regime_html(regime)
     macro = load_macro_calendar()
     macro_html = build_macro_html(macro)
-    signals = load_signal_records()
-    signal_map = build_signal_map(signals)
-    signal_desk_html = build_signal_desk_panel(signals)
 
-    # Main decision screen intentionally excludes Extended / High Risk names.
-    # They are still generated and saved by the scanner for diagnostics,
-    # but the dashboard focuses on actionable candidates only.
-    # Match the visible card limit so table/sector context reflects the decision screen.
-    focus_rows = []
-    focus_rows.extend(potential[:12])
-    focus_rows.extend(active[:8])
+    if market_open:
+        signals = load_signal_records()
+        signal_map = build_signal_map(signals)
+        signal_desk_html = build_signal_desk_panel(signals)
 
-    sector_snapshot = build_sector_snapshot(raw, focus_rows, regime)
+        # Main decision screen intentionally excludes Extended / High Risk names.
+        # They are still generated and saved by the scanner for diagnostics,
+        # but the dashboard focuses on actionable candidates only.
+        # Match the visible card limit so table/sector context reflects the decision screen.
+        focus_rows = []
+        focus_rows.extend(potential[:12])
+        focus_rows.extend(active[:8])
 
-    potential_section = build_section(
-        "Primary Focus — Potential Movers",
-        "Cleanest technical setups. Review this section first.",
-        potential,
-        "section-potential",
-        max_cards=12,
-        signal_map=signal_map,
-        collapse_empty=True,
-    )
+        sector_snapshot = build_sector_snapshot(raw, focus_rows, regime)
 
-    active_section = build_section(
-        "Active Momentum",
-        "Already moving. Wait for pullback or tight consolidation before entry.",
-        active,
-        "section-active",
-        max_cards=8,
-        signal_map=signal_map,
-        collapse_empty=True,
-    )
+        potential_section = build_section(
+            "Primary Focus — Potential Movers",
+            "Cleanest technical setups. Review this section first.",
+            potential,
+            "section-potential",
+            max_cards=12,
+            signal_map=signal_map,
+            collapse_empty=True,
+        )
 
-    desk_table = build_desk_table(focus_rows)
+        active_section = build_section(
+            "Active Momentum",
+            "Already moving. Wait for pullback or tight consolidation before entry.",
+            active,
+            "section-active",
+            max_cards=8,
+            signal_map=signal_map,
+            collapse_empty=True,
+        )
+
+        desk_table = build_desk_table(focus_rows)
+
+        nav_tabs = """
+        <div class="nav-tabs">
+            <a href="#signals">Signal Desk</a>
+            <a href="#potential">Potential Movers</a>
+            <a href="#active">Active Momentum</a>
+            <a href="#sectors">Sector Leadership</a>
+            <a href="#desk">Table View</a>
+        </div>
+        """
+    else:
+        # Hard display gate outside regular market hours.
+        # No ticker symbols should appear in Signal Desk, cards, table, or sector context.
+        signal_desk_html = build_market_inactive_signal_panel(status)
+        potential_section = ""
+        active_section = ""
+        sector_snapshot = ""
+        desk_table = ""
+        nav_tabs = """
+        <div class="nav-tabs">
+            <a href="#signals">Signal Desk</a>
+        </div>
+        """
 
     page = Template("""<!DOCTYPE html>
 <html lang="en">
@@ -3125,13 +3189,7 @@ td small {
     $macro_html
     $signal_desk_html
 
-    <div class="nav-tabs">
-        <a href="#signals">Signal Desk</a>
-        <a href="#potential">Potential Movers</a>
-        <a href="#active">Active Momentum</a>
-        <a href="#sectors">Sector Leadership</a>
-        <a href="#desk">Table View</a>
-    </div>
+    $nav_tabs
 
     <div id="potential">$potential_section</div>
     <div id="active">$active_section</div>
@@ -3155,6 +3213,7 @@ td small {
         macro_html=macro_html,
         sector_snapshot=sector_snapshot,
         signal_desk_html=signal_desk_html,
+        nav_tabs=nav_tabs,
         potential_section=potential_section,
         active_section=active_section,
         desk_table=desk_table,
