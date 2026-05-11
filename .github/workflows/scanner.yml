@@ -2,34 +2,41 @@ name: Elite Scanner
 
 on:
   schedule:
-    # ==============================
-    # FULL SCANNER SCHEDULE — EDT / New York UTC-4
-    # ==============================
+    # Full scanner schedule.
+    # Timezone-aware New York schedule. GitHub handles EDT/EST automatically.
 
     # Pre-market: 8:30, 8:45 ET
-    - cron: "30,45 12 * * 1-5"
+    - cron: "30,45 8 * * 1-5"
+      timezone: "America/New_York"
 
     # Pre-market: 9:00, 9:15, 9:25 ET
     # Morning discovery: 9:35, 9:45, 9:55 ET
-    - cron: "0,15,25,35,45,55 13 * * 1-5"
+    - cron: "0,15,25,35,45,55 9 * * 1-5"
+      timezone: "America/New_York"
 
     # Morning discovery: 10:05, 10:15, 10:30 ET
-    - cron: "5,15,30 14 * * 1-5"
+    - cron: "5,15,30 10 * * 1-5"
+      timezone: "America/New_York"
 
     # Late morning: 11:00 ET
-    - cron: "0 15 * * 1-5"
+    - cron: "0 11 * * 1-5"
+      timezone: "America/New_York"
 
     # Lunch checkpoint: 12:30 ET
-    - cron: "30 16 * * 1-5"
+    - cron: "30 12 * * 1-5"
+      timezone: "America/New_York"
 
     # Afternoon restart: 1:30 ET
-    - cron: "30 17 * * 1-5"
+    - cron: "30 13 * * 1-5"
+      timezone: "America/New_York"
 
     # Afternoon: 2:00, 2:30 ET
-    - cron: "0,30 18 * * 1-5"
+    - cron: "0,30 14 * * 1-5"
+      timezone: "America/New_York"
 
     # Afternoon: 3:00 ET
-    - cron: "0 19 * * 1-5"
+    - cron: "0 15 * * 1-5"
+      timezone: "America/New_York"
 
   workflow_dispatch:
 
