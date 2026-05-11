@@ -50,6 +50,11 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Show scanner time
+        run: |
+          echo "UTC time: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+          echo "NY time:  $(TZ='America/New_York' date '+%Y-%m-%d %H:%M:%S ET')"
+
       - name: Set up Python 3.11
         uses: actions/setup-python@v5
         with:
