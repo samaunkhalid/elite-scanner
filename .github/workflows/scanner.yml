@@ -2,16 +2,40 @@ name: Elite Scanner
 
 on:
   schedule:
-    # 9:00 AM ET during EDT
-    - cron: '0 13 * * 1-5'
+    # ==============================
+    # FULL SCANNER SCHEDULE — EDT / New York UTC-4
+    # ==============================
 
-    # 10:30 AM ET during EDT
-    - cron: '30 14 * * 1-5'
+    # Pre-market: 8:30, 8:45 ET
+    - cron: "30,45 12 * * 1-5"
 
-    # 1:00 PM ET during EDT
-    - cron: '0 17 * * 1-5'
+    # Pre-market: 9:00, 9:15, 9:25 ET
+    # Morning discovery: 9:35, 9:45, 9:55 ET
+    - cron: "0,15,25,35,45,55 13 * * 1-5"
+
+    # Morning discovery: 10:05, 10:15, 10:30 ET
+    - cron: "5,15,30 14 * * 1-5"
+
+    # Late morning: 11:00 ET
+    - cron: "0 15 * * 1-5"
+
+    # Lunch checkpoint: 12:30 ET
+    - cron: "30 16 * * 1-5"
+
+    # Afternoon restart: 1:30 ET
+    - cron: "30 17 * * 1-5"
+
+    # Afternoon: 2:00, 2:30 ET
+    - cron: "0,30 18 * * 1-5"
+
+    # Afternoon: 3:00 ET
+    - cron: "0 19 * * 1-5"
 
   workflow_dispatch:
+
+concurrency:
+  group: elite-scanner-publish
+  cancel-in-progress: false
 
 jobs:
   scan:
@@ -23,11 +47,13 @@ jobs:
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Python 3.11
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: "3.11"
 
       - name: Install dependencies
         run: |
@@ -58,10 +84,12 @@ jobs:
         run: |
           cp dashboard.html index.html
 
-      - name: Commit results
+      - name: Commit scanner results
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
+
+          git pull --rebase origin main || true
 
           git add index.html || true
           git add dashboard.html || true
@@ -82,5 +110,9 @@ jobs:
           git add signal_state.json || true
           git add suppressed_signals.csv || true
 
-          git diff --staged --quiet || git commit -m "scan: $(date -u '+%Y-%m-%d %H:%M UTC')"
-          git push
+          if git diff --staged --quiet; then
+            echo "No scanner/dashboard changes to commit"
+          else
+            git commit -m "scan: $(date -u '+%Y-%m-%d %H:%M UTC')"
+            git push
+          fi
