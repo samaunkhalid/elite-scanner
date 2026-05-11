@@ -1424,7 +1424,54 @@ def signal_is_actionable(signal):
     ]
 
 
+def signal_timestamp_sort_value(signal):
+    """
+    Numeric timestamp used only for dashboard display sorting.
+    Higher value = newer signal.
+    """
+    text = safe_str(signal_time_value(signal), "").strip()
+    if not text:
+        return 0.0
+
+    cleaned = text.replace("Z", "+00:00").replace(" ET", "")
+
+    try:
+        dt = datetime.fromisoformat(cleaned)
+        if dt.tzinfo:
+            return dt.timestamp()
+        return dt.replace(tzinfo=timezone.utc).timestamp()
+    except Exception:
+        pass
+
+    # Fallback for compact HH:MM style values.
+    m = re.search(r"(\d{1,2}):(\d{2})", cleaned)
+    if m:
+        try:
+            hour = int(m.group(1))
+            minute = int(m.group(2))
+            now_utc, now_ny = get_times()
+            if ZoneInfo:
+                dt = datetime(
+                    now_ny.year,
+                    now_ny.month,
+                    now_ny.day,
+                    hour,
+                    minute,
+                    tzinfo=ZoneInfo("America/New_York"),
+                )
+                return dt.timestamp()
+        except Exception:
+            return 0.0
+
+    return 0.0
+
+
 def signal_sort_key(signal):
+    """
+    General status sort used as a safe fallback.
+    Signal Desk columns use signal_display_sort_key() so each bucket is ranked
+    by usefulness instead of alphabetically.
+    """
     status = normalize_signal_status(signal.get("signal_status"))
 
     priority = {
@@ -1440,9 +1487,51 @@ def signal_sort_key(signal):
 
     return (
         priority.get(status, 9),
-        safe_str(signal_time_value(signal), ""),
+        -safe_float(signal.get("confidence"), 0),
         safe_str(signal.get("symbol"), ""),
     )
+
+
+def signal_display_sort_key(signal):
+    """
+    Signal Desk display priority.
+
+    ACTIVE_SIGNAL:
+      1. Highest confidence
+      2. Best reward/risk
+      3. Newest trigger
+
+    TRIGGER_READY:
+      1. Highest confidence
+      2. Best reward/risk
+      3. Newest ready time
+
+    WATCH:
+      1. Highest confidence
+      2. Scanner score
+      3. Original scanner rank
+    """
+    status = normalize_signal_status(signal.get("signal_status"))
+    confidence = safe_float(signal.get("confidence"), 0)
+    rr = safe_float(signal.get("reward_risk"), 0)
+    scanner_score = safe_float(signal.get("scanner_score"), 0)
+    signal_rank = safe_int(signal.get("signal_rank"), 9999)
+    timestamp = signal_timestamp_sort_value(signal)
+    symbol = safe_str(signal.get("symbol"), "")
+
+    if status in ["ACTIVE_SIGNAL", "ACTIVE"]:
+        return (-confidence, -rr, -timestamp, symbol)
+
+    if status in ["TRIGGER_READY", "READY"]:
+        return (-confidence, -rr, -timestamp, symbol)
+
+    if status in ["WATCH", "WATCHLIST"]:
+        return (-confidence, -scanner_score, signal_rank, symbol)
+
+    if status in ["INVALIDATED", "VOID"]:
+        return (-timestamp, symbol)
+
+    return (999, symbol)
 
 
 def signal_status_group(signal):
@@ -1572,9 +1661,18 @@ def build_signal_desk_panel(signals):
     """
     signals = sorted(signals, key=signal_sort_key)
 
-    active_signals = [s for s in signals if signal_status_group(s) == "active"]
-    ready_signals = [s for s in signals if signal_status_group(s) == "ready"]
-    watch_signals = [s for s in signals if signal_status_group(s) == "watch"]
+    active_signals = sorted(
+        [s for s in signals if signal_status_group(s) == "active"],
+        key=signal_display_sort_key,
+    )
+    ready_signals = sorted(
+        [s for s in signals if signal_status_group(s) == "ready"],
+        key=signal_display_sort_key,
+    )
+    watch_signals = sorted(
+        [s for s in signals if signal_status_group(s) == "watch"],
+        key=signal_display_sort_key,
+    )
 
     active_count = len(active_signals)
     ready_count = len(ready_signals)
