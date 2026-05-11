@@ -4,14 +4,18 @@ on:
   schedule:
     # ==========================================================
     # SIGNAL DESK REFRESH — EVERY 5 MINUTES
-    # New York EDT = UTC-4
+    # Uses UTC because GitHub schedule timing is easiest to verify.
     #
-    # Market hours:
-    # 9:30 AM–4:00 PM ET = 13:30–20:00 UTC during EDT
+    # During EDT:
+    # 9:30 AM–4:00 PM ET = 13:30–20:00 UTC
     #
-    # This refresh DOES NOT run the full scanner.
-    # It only updates signal_desk.json, signal_state.json,
-    # dashboard.html, and index.html.
+    # This workflow DOES NOT run the full scanner.
+    # It only updates:
+    # - signal_desk.json
+    # - signal_state.json
+    # - suppressed_signals.csv
+    # - dashboard.html
+    # - index.html
     # ==========================================================
 
     # 9:30 AM–9:55 AM ET
