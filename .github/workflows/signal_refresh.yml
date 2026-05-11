@@ -2,13 +2,23 @@ name: Signal Desk Refresh
 
 on:
   schedule:
-    # Every 5 minutes during regular market hours, New York time.
-    # Offset avoids the top of the hour where GitHub scheduled jobs can delay.
-    - cron: '32-57/5 9 * * 1-5'
-      timezone: "America/New_York"
+    # ==========================================================
+    # SIGNAL DESK REFRESH — EVERY 5 MINUTES
+    # New York EDT = UTC-4
+    #
+    # Market hours:
+    # 9:30 AM–4:00 PM ET = 13:30–20:00 UTC during EDT
+    #
+    # This refresh DOES NOT run the full scanner.
+    # It only updates signal_desk.json, signal_state.json,
+    # dashboard.html, and index.html.
+    # ==========================================================
 
-    - cron: '2-57/5 10-15 * * 1-5'
-      timezone: "America/New_York"
+    # 9:30 AM–9:55 AM ET
+    - cron: "30,35,40,45,50,55 13 * * 1-5"
+
+    # 10:00 AM–3:55 PM ET
+    - cron: "*/5 14-19 * * 1-5"
 
   workflow_dispatch:
 
@@ -29,10 +39,15 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Show refresh time
+        run: |
+          echo "UTC time: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+          echo "NY time:  $(TZ='America/New_York' date '+%Y-%m-%d %H:%M:%S ET')"
+
       - name: Set up Python 3.11
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: "3.11"
 
       - name: Install dependencies
         run: |
@@ -59,6 +74,8 @@ jobs:
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
 
+          git pull --rebase origin main || true
+
           git add index.html || true
           git add dashboard.html || true
           git add signal_desk.json || true
@@ -69,6 +86,5 @@ jobs:
             echo "No signal/dashboard changes to commit"
           else
             git commit -m "signal refresh: $(date -u '+%Y-%m-%d %H:%M UTC')"
-            git pull --rebase origin main
             git push
           fi
