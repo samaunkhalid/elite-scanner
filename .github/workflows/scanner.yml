@@ -2,17 +2,16 @@ name: Elite Scanner
 
 on:
   schedule:
-    # Runs at 9:00 AM ET (13:00 UTC) Mon-Fri = 8:00 PM Bangkok
-    # 30 min before market open
+    # Runs at 9:00 AM ET during EDT / market season
     - cron: '0 13 * * 1-5'
 
-    # Also run mid-morning at 10:30 AM ET (14:30 UTC) = 9:30 PM Bangkok
+    # Runs at 10:30 AM ET during EDT
     - cron: '30 14 * * 1-5'
 
-    # Afternoon update at 1:00 PM ET (17:00 UTC) = 12:00 AM Bangkok
+    # Runs at 1:00 PM ET during EDT
     - cron: '0 17 * * 1-5'
 
-  workflow_dispatch:  # Manual trigger button in Actions tab
+  workflow_dispatch:
 
 jobs:
   scan:
@@ -44,6 +43,14 @@ jobs:
       - name: Build Macro Calendar
         run: python macro_calendar.py
 
+      - name: Run Signal Engine
+        env:
+          ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
+          ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
+          ALPACA_DATA_FEED: iex
+          SIGNAL_DEBUG: "1"
+        run: python signal_engine.py
+
       - name: Build Dashboard
         run: python elite_dashboard.py
 
@@ -51,6 +58,20 @@ jobs:
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git add elite_watchlist.csv elite_watchlist_raw.csv elite_watchlist.json market_regime.json macro_calendar.json dashboard.html potential_movers.csv active_momentum.csv extended_movers.csv high_risk_movers.csv || true
+
+          git add elite_watchlist.csv || true
+          git add elite_watchlist_raw.csv || true
+          git add elite_watchlist.json || true
+          git add market_regime.json || true
+          git add macro_calendar.json || true
+          git add dashboard.html || true
+          git add potential_movers.csv || true
+          git add active_momentum.csv || true
+          git add extended_movers.csv || true
+          git add high_risk_movers.csv || true
+          git add signal_desk.json || true
+          git add signal_state.json || true
+          git add suppressed_signals.csv || true
+
           git diff --staged --quiet || git commit -m "scan: $(date -u '+%Y-%m-%d %H:%M UTC')"
           git push
