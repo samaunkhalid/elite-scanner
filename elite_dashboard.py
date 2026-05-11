@@ -1586,7 +1586,7 @@ def build_dashboard(potential, active, extended, highrisk, raw, active_watchlist
     # but the dashboard focuses on actionable candidates only.
     # Match the visible card limit so table/sector context reflects the decision screen.
     focus_rows = []
-    focus_rows.extend(potential[:8])
+    focus_rows.extend(potential[:12])
     focus_rows.extend(active[:8])
 
     sector_snapshot = build_sector_snapshot(raw, focus_rows, regime)
@@ -1596,7 +1596,7 @@ def build_dashboard(potential, active, extended, highrisk, raw, active_watchlist
         "Cleanest technical setups. Review this section first.",
         potential,
         "section-potential",
-        max_cards=8,
+        max_cards=12,
         signal_map=signal_map,
         collapse_empty=True,
     )
