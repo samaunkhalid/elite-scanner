@@ -11,7 +11,7 @@
       "impact": "HIGH",
       "source": "New York Fed",
       "source_url": "https://www.newyorkfed.org/research/calendars/nationalecon_cal",
-      "minutes_until": 1012
+      "minutes_until": 955
     },
     {
       "name": "Producer Price Index (PPI)",
@@ -21,7 +21,7 @@
       "impact": "HIGH",
       "source": "New York Fed",
       "source_url": "https://www.newyorkfed.org/research/calendars/nationalecon_cal",
-      "minutes_until": 2452
+      "minutes_until": 2395
     },
     {
       "name": "Initial Claims",
@@ -31,7 +31,7 @@
       "impact": "MEDIUM",
       "source": "New York Fed",
       "source_url": "https://www.newyorkfed.org/research/calendars/nationalecon_cal",
-      "minutes_until": 3892
+      "minutes_until": 3835
     },
     {
       "name": "Advance Retail Sales",
@@ -41,7 +41,7 @@
       "impact": "HIGH",
       "source": "New York Fed",
       "source_url": "https://www.newyorkfed.org/research/calendars/nationalecon_cal",
-      "minutes_until": 3892
+      "minutes_until": 3835
     },
     {
       "name": "Imports and Exports",
@@ -51,7 +51,7 @@
       "impact": "MEDIUM",
       "source": "New York Fed",
       "source_url": "https://www.newyorkfed.org/research/calendars/nationalecon_cal",
-      "minutes_until": 3892
+      "minutes_until": 3835
     },
     {
       "name": "Business Inventories",
@@ -61,7 +61,7 @@
       "impact": "MEDIUM",
       "source": "New York Fed",
       "source_url": "https://www.newyorkfed.org/research/calendars/nationalecon_cal",
-      "minutes_until": 3982
+      "minutes_until": 3925
     },
     {
       "name": "Empire State Manufacturing Survey",
@@ -71,7 +71,7 @@
       "impact": "MEDIUM",
       "source": "New York Fed",
       "source_url": "https://www.newyorkfed.org/research/calendars/nationalecon_cal",
-      "minutes_until": 5332
+      "minutes_until": 5275
     },
     {
       "name": "Industrial Production and Capacity Utilization",
@@ -81,13 +81,13 @@
       "impact": "MEDIUM",
       "source": "New York Fed",
       "source_url": "https://www.newyorkfed.org/research/calendars/nationalecon_cal",
-      "minutes_until": 5377
+      "minutes_until": 5320
     }
   ],
   "source": "New York Fed Economic Indicators Calendar",
   "source_url": "https://www.newyorkfed.org/research/calendars/nationalecon_cal",
-  "generated_at_et": "2026-05-11 15:37 ET",
-  "generated_at": "2026-05-11 15:37 ET",
+  "generated_at_et": "2026-05-11 16:34 ET",
+  "generated_at": "2026-05-11 16:34 ET",
   "lookahead_days": 7,
   "fetch_error": ""
 }
