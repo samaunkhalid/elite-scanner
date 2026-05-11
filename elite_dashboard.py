@@ -664,8 +664,12 @@ def build_signal_map(signals):
 
 def build_signal_detail_html(signal):
     """
-    Full signal details inside the ticker card.
-    Signal Desk should stay compact; this is where setup logic is explained.
+    Signal detail shown inside the ticker card.
+
+    Display rules:
+      - WATCH: monitoring context only. No entry/stop/targets/R:R/invalidation.
+      - TRIGGER_READY / ACTIVE_SIGNAL: full trade plan.
+      - INVALIDATED: show why it failed.
     """
     if not signal:
         return ""
@@ -676,25 +680,81 @@ def build_signal_detail_html(signal):
 
     setup_type = safe_str(signal.get("setup_type"), "Setup pending")
     time_label = signal_time_label(signal)
+    confidence = safe_float(signal.get("confidence"), 0)
 
+    reason = safe_str(signal.get("reason") or signal.get("trigger_reason") or signal.get("setup_reason"), "")
+    invalidation_reason = safe_str(signal.get("invalidation_reason"), "")
+    invalidation = safe_str(signal.get("invalidation"), "")
+    last_checked = compact_time_et(signal.get("last_checked") or signal.get("updated_at"))
+
+    confidence_text = f"{confidence:.0f}%" if confidence > 0 else "—"
+
+    time_html = f'<span>{esc(time_label)}</span>' if time_label else ""
+    last_checked_html = f'<span>Last check {esc(last_checked)}</span>' if last_checked else ""
+    confidence_html = f'<span>Confidence {esc(confidence_text)}</span>'
+
+    reason_html = f'<div class="signal-reason"><strong>Reason:</strong> {esc(reason)}</div>' if reason else ""
+
+    # WATCH is not a trade setup yet. Keep it intentionally minimal so it does
+    # not look actionable.
+    if status in ["WATCH", "WATCHLIST"]:
+        return f"""
+        <div class="signal-detail">
+            <div class="signal-detail-top">
+                <div>
+                    <strong>Signal Detail</strong>
+                    <span>{esc(setup_type)}</span>
+                </div>
+                <span class="signal-status {status_class}">{esc(status_text)}</span>
+            </div>
+
+            <div class="signal-detail-meta">
+                {time_html}
+                {last_checked_html}
+                {confidence_html}
+            </div>
+
+            {reason_html}
+        </div>
+        """
+
+    # INVALIDATED should explain why it failed. No active trade plan is needed.
+    if status in ["INVALIDATED", "VOID"]:
+        failed_reason = invalidation_reason or reason or invalidation
+        failed_html = (
+            f'<div class="signal-reason"><strong>Why invalidated:</strong> {esc(failed_reason)}</div>'
+            if failed_reason else ""
+        )
+
+        return f"""
+        <div class="signal-detail">
+            <div class="signal-detail-top">
+                <div>
+                    <strong>Signal Detail</strong>
+                    <span>{esc(setup_type)}</span>
+                </div>
+                <span class="signal-status {status_class}">{esc(status_text)}</span>
+            </div>
+
+            <div class="signal-detail-meta">
+                {time_html}
+                {last_checked_html}
+                {confidence_html}
+            </div>
+
+            {failed_html}
+        </div>
+        """
+
+    # TRIGGER_READY / ACTIVE_SIGNAL get the full execution plan.
     entry = format_signal_price(signal.get("entry_trigger") or signal.get("entry"))
     stop = format_signal_price(signal.get("stop_loss") or signal.get("stop"))
     target_1 = format_signal_price(signal.get("target_1") or signal.get("target1"))
     target_2 = format_signal_price(signal.get("target_2") or signal.get("target2"))
     rr = safe_float(signal.get("reward_risk"), 0)
-    confidence = safe_float(signal.get("confidence"), 0)
-
-    reason = safe_str(signal.get("reason") or signal.get("trigger_reason") or signal.get("setup_reason"), "")
-    invalidation = safe_str(signal.get("invalidation") or signal.get("invalidation_reason"), "")
-    last_checked = compact_time_et(signal.get("last_checked") or signal.get("updated_at"))
 
     rr_text = f"{rr:.1f}:1" if rr > 0 else "—"
-    confidence_text = f"{confidence:.0f}%" if confidence > 0 else "—"
 
-    time_html = f'<span>{esc(time_label)}</span>' if time_label else ""
-    last_checked_html = f'<span>Last check {esc(last_checked)}</span>' if last_checked else ""
-
-    reason_html = f'<div class="signal-reason"><strong>Reason:</strong> {esc(reason)}</div>' if reason else ""
     invalidation_html = f'<div class="signal-reason"><strong>Invalidation:</strong> {esc(invalidation)}</div>' if invalidation else ""
 
     return f"""
@@ -725,7 +785,6 @@ def build_signal_detail_html(signal):
             {invalidation_html}
         </div>
     """
-
 
 def build_card(stock, signal=None):
     symbol = safe_str(stock.get("symbol"), "—").upper()
