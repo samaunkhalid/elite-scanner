@@ -1,11 +1,11 @@
 {
-  "spy_change": 0.32266004000000004,
-  "qqq_change": 0.38070201,
-  "iwm_change": 0.7442693,
-  "vix_level": 17.94,
-  "vix_change": 4.363002,
+  "spy_change": 0.21421304,
+  "qqq_change": 0.23482289999999997,
+  "iwm_change": 0.56303465,
+  "vix_level": 17.98,
+  "vix_change": 4.5956895,
   "regime": "NORMAL",
   "bias": "NEUTRAL",
-  "label": "\u26aa Normal (+0.3%)",
+  "label": "\u26aa Normal (+0.2%)",
   "smallcap_caution": false
 }

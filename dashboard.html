@@ -1280,7 +1280,7 @@ td small {
             <p>Technical Potential Movers + Catalyst Confirmation + Sector Context</p>
         </div>
         <div class="header-meta">
-            <span class="scan-pill">Last Scan: 2026-05-11 11:53 ET</span>
+            <span class="scan-pill">Last Scan: 2026-05-11 12:56 ET</span>
             <span class="status-pill status-green">Market: OPEN</span>
         </div>
     </div>
@@ -1290,14 +1290,14 @@ td small {
     
     <div class="regime-banner neutral">
         <div>
-            <strong>⚪ Normal (+0.3%)</strong>
+            <strong>⚪ Normal (+0.2%)</strong>
             <span>Bias: NEUTRAL · Data: Yahoo + Alpaca IEX + Alpaca News</span>
         </div>
         <div class="regime-metrics">
-            <span>SPY <b class="positive">+0.32%</b></span>
-            <span>QQQ <b class="positive">+0.38%</b></span>
-            <span>IWM <b class="positive">+0.74%</b></span>
-            <span>VIX <b>17.9</b></span>
+            <span>SPY <b class="positive">+0.21%</b></span>
+            <span>QQQ <b class="positive">+0.23%</b></span>
+            <span>IWM <b class="positive">+0.56%</b></span>
+            <span>VIX <b>18.0</b></span>
         </div>
     </div>
     
@@ -1309,7 +1309,7 @@ td small {
                 <span>Reduce size or wait until after the release/initial volatility clears.</span>
             </div>
             <div class="macro-source">
-                Source: New York Fed Economic Indicators Calendar · 2026-05-11 11:53 ET
+                Source: New York Fed Economic Indicators Calendar · 2026-05-11 12:56 ET
             </div>
         </div>
         <div class="macro-events grouped">
@@ -1361,24 +1361,105 @@ td small {
     </section>
     
     
-        <section class="signal-desk-panel signal-desk-compact" id="signals">
-            <div class="signal-desk-top">
+    <section class="signal-desk-panel" id="signals">
+        <div class="signal-desk-top">
+            <div>
+                <strong>Signal Desk</strong>
+                <span>Intraday execution status. Click a ticker to jump to its full card details.</span>
+            </div>
+            <div class="signal-desk-counts">
+                <span><b>0</b> Active</span>
+                <span><b>0</b> Ready</span>
+                <span><b>2</b> Watch</span>
+            </div>
+        </div>
+        <div class="signal-desk-columns">
+            
+        <div class="signal-desk-column signal-col-active">
+            <div class="signal-desk-column-top">
                 <div>
-                    <strong>Signal Desk</strong>
-                    <span>Intraday execution status</span>
+                    <strong>Active</strong>
+                    <span>Triggered setups that need immediate execution review.</span>
                 </div>
-                <div class="signal-desk-counts">
-                    <span><b>0</b> Active</span>
-                    <span><b>0</b> Ready</span>
-                    <span><b>0</b> Watch</span>
-                </div>
+                <b>0</b>
             </div>
-            <div class="signal-desk-empty">
-                <strong>No signal at this moment.</strong>
-                <span>Scanner is monitoring for Watch, Trigger Ready, and Active setups.</span>
+            
+            <div class="signal-desk-column-empty">
+                <strong>None</strong>
+                <span>Triggered setups that need immediate execution review.</span>
             </div>
-        </section>
         
+        </div>
+    
+            
+        <div class="signal-desk-column signal-col-ready">
+            <div class="signal-desk-column-top">
+                <div>
+                    <strong>Trigger Ready</strong>
+                    <span>Near-entry setups waiting for confirmation.</span>
+                </div>
+                <b>0</b>
+            </div>
+            
+            <div class="signal-desk-column-empty">
+                <strong>None</strong>
+                <span>Near-entry setups waiting for confirmation.</span>
+            </div>
+        
+        </div>
+    
+            
+        <div class="signal-desk-column signal-col-watch">
+            <div class="signal-desk-column-top">
+                <div>
+                    <strong>Watch</strong>
+                    <span>Developing setups; monitor until conditions improve.</span>
+                </div>
+                <b>2</b>
+            </div>
+            
+            <div class="signal-desk-list">
+                
+        <div class="signal-desk-item">
+            <div class="signal-desk-item-top">
+                <a class="signal-desk-symbol" href="#card-HIMX">HIMX</a>
+                <span class="signal-status signal-watch">WATCH</span>
+            </div>
+            <div class="signal-desk-setup">BLACKOUT_MONITOR</div>
+            <span class="signal-desk-time">Detected 12:56 ET</span>
+            <div class="signal-desk-plan">
+                <span>Entry <b>$21.50</b></span>
+                <span>Stop <b>$21.20</b></span>
+                <span>T1 <b>$21.76</b></span>
+                <span>R/R <b>0.8:1</b></span>
+                <span>Conf <b>64%</b></span>
+            </div>
+        </div>
+    
+        <div class="signal-desk-item">
+            <div class="signal-desk-item-top">
+                <a class="signal-desk-symbol" href="#card-RIOT">RIOT</a>
+                <span class="signal-status signal-watch">WATCH</span>
+            </div>
+            <div class="signal-desk-setup">BLACKOUT_MONITOR</div>
+            <span class="signal-desk-time">Detected 12:56 ET</span>
+            <div class="signal-desk-plan">
+                <span>Entry <b>$25.54</b></span>
+                <span>Stop <b>$24.99</b></span>
+                <span>T1 <b>$25.59</b></span>
+                <span>R/R <b>0.1:1</b></span>
+                <span>Conf <b>60%</b></span>
+            </div>
+        </div>
+    
+                
+            </div>
+        
+        </div>
+    
+        </div>
+    </section>
+    
 
     <div class="nav-tabs">
         <a href="#signals">Signal Desk</a>
@@ -1399,81 +1480,6 @@ td small {
         </div>
         <div class="cards-grid">
             
-    <div class="stock-card bucket-potential" id="card-APLD" style="--accent:#38bdf8;">
-        <div class="card-top">
-            <div class="card-id">
-                <div class="symbol-row">
-                    <span class="symbol">APLD</span>
-                    <span class="sector-chip">Technology</span>
-                    <span class="tier" style="color:#10b981;border-color:#10b981;">Tier 1</span>
-                </div>
-                <div class="company-name">Applied Digital Corporation</div>
-            </div>
-            <div class="price-box">
-                <div class="price">$45.74</div>
-                <div class="change positive">+10.88%</div>
-            </div>
-        </div>
-
-        <div class="score-risk-row">
-            <span class="score-pill">Score 72/100</span>
-            <span class="risk-pill">NORMAL</span>
-            <span class="sector-status-pill sector-leading">LEADING</span>
-        </div>
-
-        <div class="sector-strip">
-            <span>Sector <strong>Technology</strong></span>
-            <span>ETF <strong>XLK</strong> <b class="positive">+1.30%</b></span>
-            <span>Vs Sector <b class="positive">+9.58%</b></span>
-        </div>
-
-        <div class="catalyst-strip catalyst-neutral">
-            <div class="catalyst-label">📰 Catalyst: Company-specific fresh news</div>
-            <div class="catalyst-headline">Why Applied Digital Stock Is Up Following Cloud Spin-Off</div>
-            <div class="catalyst-source">benzinga · 2026-05-11T14:42:47</div>
-            
-        </div>
-
-        <div class="metrics-grid">
-            <div><span>Liquidity</span><strong class="metric-good">$1.1B</strong></div>
-            <div><span>ATR</span><strong class="metric-caution">7.7%</strong></div>
-            <div><span>VWAP Dist</span><strong class="metric-caution">+4.5%</strong></div>
-            <div><span>HOD Dist</span><strong class="metric-ok">-1.0%</strong></div>
-        </div>
-
-        <div class="status-row">
-            <span class="status-chip status-tech">Above VWAP</span>
-            <span class="status-chip status-neutral">HOD -1.0%</span>
-            <span class="status-chip status-neutral">NORMAL</span>
-        </div>
-
-        <div class="interpretation">Clean continuation candidate; confirm VWAP hold and breakout structure.</div>
-
-        <div class="tags-row"><span class="tag tag-caution">Above VWAP extended</span><span class="tag tag-positive">Sector leading</span><span class="tag tag-positive">Vs sector +9.6%</span><span class="tag tag-neutral">📰 Company-specific news</span><span class="tag tag-positive">Upper range</span></div>
-
-        
-
-        
-        <div class="mini-panel">
-            <div class="mini-row"><span>Short %</span><strong>30%</strong></div>
-            <div class="mini-row"><span>Float</span><strong>253.9M</strong></div>
-            <div class="mini-row"><span>DTC</span><strong>3.8d</strong></div>
-        </div>
-        
-
-        <div class="card-actions">
-            <a class="action-btn action-chart" href="https://www.tradingview.com/chart/?symbol=APLD" target="_blank">
-                <img src="assets/tradingview.png" alt="TradingView"> Chart
-            </a>
-            <a class="action-btn action-yahoo" href="https://finance.yahoo.com/quote/APLD" target="_blank">
-                <img src="assets/yahoo.png" alt="Yahoo Finance"> Yahoo
-            </a>
-            <a class="action-btn action-twits" href="https://stocktwits.com/symbol/APLD" target="_blank">
-                <img src="assets/stocktwits.png" alt="Stocktwits"> Twits
-            </a>
-        </div>
-    </div>
-    
     <div class="stock-card bucket-potential" id="card-KGS" style="--accent:#38bdf8;">
         <div class="card-top">
             <div class="card-id">
@@ -1485,21 +1491,21 @@ td small {
                 <div class="company-name">Kodiak Gas Services, Inc.</div>
             </div>
             <div class="price-box">
-                <div class="price">$76.26</div>
-                <div class="change positive">+9.49%</div>
+                <div class="price">$75.56</div>
+                <div class="change positive">+8.49%</div>
             </div>
         </div>
 
         <div class="score-risk-row">
-            <span class="score-pill">Score 71/100</span>
+            <span class="score-pill">Score 73/100</span>
             <span class="risk-pill">NORMAL</span>
             <span class="sector-status-pill sector-leading">LEADING</span>
         </div>
 
         <div class="sector-strip">
             <span>Sector <strong>Energy</strong></span>
-            <span>ETF <strong>XLE</strong> <b class="positive">+1.98%</b></span>
-            <span>Vs Sector <b class="positive">+7.51%</b></span>
+            <span>ETF <strong>XLE</strong> <b class="positive">+2.49%</b></span>
+            <span>Vs Sector <b class="positive">+6.00%</b></span>
         </div>
 
         <div class="catalyst-strip catalyst-none">
@@ -1510,21 +1516,21 @@ td small {
         </div>
 
         <div class="metrics-grid">
-            <div><span>Liquidity</span><strong class="metric-good">$101M</strong></div>
+            <div><span>Liquidity</span><strong class="metric-good">$100M</strong></div>
             <div><span>ATR</span><strong class="metric-good">3.2%</strong></div>
-            <div><span>VWAP Dist</span><strong class="metric-caution">+3.4%</strong></div>
-            <div><span>HOD Dist</span><strong class="metric-good">+0.0%</strong></div>
+            <div><span>VWAP Dist</span><strong class="metric-good">+2.5%</strong></div>
+            <div><span>HOD Dist</span><strong class="metric-ok">-0.9%</strong></div>
         </div>
 
         <div class="status-row">
             <span class="status-chip status-tech">Above VWAP</span>
-            <span class="status-chip status-positive">Near HOD</span>
+            <span class="status-chip status-neutral">HOD -0.9%</span>
             <span class="status-chip status-neutral">NORMAL</span>
         </div>
 
         <div class="interpretation">Clean continuation candidate; confirm VWAP hold and breakout structure.</div>
 
-        <div class="tags-row"><span class="tag tag-positive">Sector leading</span><span class="tag tag-positive">Vs sector +7.5%</span><span class="tag tag-tech">Above VWAP</span><span class="tag tag-squeeze">Float 85M</span><span class="tag tag-neutral">$101M liq</span></div>
+        <div class="tags-row"><span class="tag tag-positive">Sector leading</span><span class="tag tag-positive">Vs sector +6.0%</span><span class="tag tag-tech">Above VWAP</span><span class="tag tag-neutral">$100M liq</span><span class="tag tag-positive">Upper range</span></div>
 
         
 
@@ -1549,121 +1555,121 @@ td small {
         </div>
     </div>
     
-    <div class="stock-card bucket-potential" id="card-ASTS" style="--accent:#38bdf8;">
+    <div class="stock-card bucket-potential" id="card-APLD" style="--accent:#38bdf8;">
         <div class="card-top">
             <div class="card-id">
                 <div class="symbol-row">
-                    <span class="symbol">ASTS</span>
-                    <span class="sector-chip">Aerospace &amp; Defense</span>
+                    <span class="symbol">APLD</span>
+                    <span class="sector-chip">Technology</span>
                     <span class="tier" style="color:#10b981;border-color:#10b981;">Tier 1</span>
                 </div>
-                <div class="company-name">AST SpaceMobile, Inc.</div>
+                <div class="company-name">Applied Digital Corporation</div>
             </div>
             <div class="price-box">
-                <div class="price">$82.95</div>
-                <div class="change positive">+10.53%</div>
+                <div class="price">$45.88</div>
+                <div class="change positive">+11.22%</div>
             </div>
         </div>
 
         <div class="score-risk-row">
-            <span class="score-pill">Score 68/100</span>
+            <span class="score-pill">Score 70/100</span>
             <span class="risk-pill">NORMAL</span>
             <span class="sector-status-pill sector-leading">LEADING</span>
         </div>
 
         <div class="sector-strip">
-            <span>Sector <strong>Aerospace &amp; Defense</strong></span>
-            <span>ETF <strong>ITA</strong> <b class="positive">+1.40%</b></span>
-            <span>Vs Sector <b class="positive">+9.13%</b></span>
+            <span>Sector <strong>Technology</strong></span>
+            <span>ETF <strong>XLK</strong> <b class="positive">+1.14%</b></span>
+            <span>Vs Sector <b class="positive">+10.08%</b></span>
         </div>
 
         <div class="catalyst-strip catalyst-neutral">
             <div class="catalyst-label">📰 Catalyst: Company-specific fresh news</div>
-            <div class="catalyst-headline">Is AST SpaceMobile A Buy? Stock Climbs As Major Shareholder Sale Ends</div>
-            <div class="catalyst-source">benzinga · 2026-05-11T14:07:58</div>
+            <div class="catalyst-headline">Why Applied Digital Stock Is Up Following Cloud Spin-Off</div>
+            <div class="catalyst-source">benzinga · 2026-05-11T14:42:47</div>
             
         </div>
 
         <div class="metrics-grid">
-            <div><span>Liquidity</span><strong class="metric-good">$1.6B</strong></div>
-            <div><span>ATR</span><strong class="metric-caution">7.3%</strong></div>
-            <div><span>VWAP Dist</span><strong class="metric-caution">+3.3%</strong></div>
-            <div><span>HOD Dist</span><strong class="metric-good">-0.2%</strong></div>
+            <div><span>Liquidity</span><strong class="metric-good">$1.2B</strong></div>
+            <div><span>ATR</span><strong class="metric-caution">7.7%</strong></div>
+            <div><span>VWAP Dist</span><strong class="metric-caution">+4.0%</strong></div>
+            <div><span>HOD Dist</span><strong class="metric-ok">-0.9%</strong></div>
         </div>
 
         <div class="status-row">
             <span class="status-chip status-tech">Above VWAP</span>
-            <span class="status-chip status-positive">Near HOD</span>
+            <span class="status-chip status-neutral">HOD -0.9%</span>
             <span class="status-chip status-neutral">NORMAL</span>
         </div>
 
         <div class="interpretation">Clean continuation candidate; confirm VWAP hold and breakout structure.</div>
 
-        <div class="tags-row"><span class="tag tag-caution">Big move +10.5%</span><span class="tag tag-positive">Sector leading</span><span class="tag tag-positive">Vs sector +9.1%</span><span class="tag tag-tech">Above VWAP</span><span class="tag tag-neutral">📰 Company-specific news</span></div>
+        <div class="tags-row"><span class="tag tag-caution">Above VWAP extended</span><span class="tag tag-positive">Sector leading</span><span class="tag tag-positive">Vs sector +10.1%</span><span class="tag tag-neutral">📰 Company-specific news</span><span class="tag tag-positive">Upper range</span></div>
 
         
 
         
         <div class="mini-panel">
-            <div class="mini-row"><span>Short %</span><strong>21%</strong></div>
-            <div class="mini-row"><span>Float</span><strong>259.9M</strong></div>
-            <div class="mini-row"><span>DTC</span><strong>3.5d</strong></div>
+            <div class="mini-row"><span>Short %</span><strong>30%</strong></div>
+            <div class="mini-row"><span>Float</span><strong>253.9M</strong></div>
+            <div class="mini-row"><span>DTC</span><strong>3.8d</strong></div>
         </div>
         
 
         <div class="card-actions">
-            <a class="action-btn action-chart" href="https://www.tradingview.com/chart/?symbol=ASTS" target="_blank">
+            <a class="action-btn action-chart" href="https://www.tradingview.com/chart/?symbol=APLD" target="_blank">
                 <img src="assets/tradingview.png" alt="TradingView"> Chart
             </a>
-            <a class="action-btn action-yahoo" href="https://finance.yahoo.com/quote/ASTS" target="_blank">
+            <a class="action-btn action-yahoo" href="https://finance.yahoo.com/quote/APLD" target="_blank">
                 <img src="assets/yahoo.png" alt="Yahoo Finance"> Yahoo
             </a>
-            <a class="action-btn action-twits" href="https://stocktwits.com/symbol/ASTS" target="_blank">
+            <a class="action-btn action-twits" href="https://stocktwits.com/symbol/APLD" target="_blank">
                 <img src="assets/stocktwits.png" alt="Stocktwits"> Twits
             </a>
         </div>
     </div>
     
-    <div class="stock-card bucket-potential" id="card-HIMS" style="--accent:#38bdf8;">
+    <div class="stock-card bucket-potential" id="card-FPS" style="--accent:#38bdf8;">
         <div class="card-top">
             <div class="card-id">
                 <div class="symbol-row">
-                    <span class="symbol">HIMS</span>
-                    <span class="sector-chip">Healthcare</span>
+                    <span class="symbol">FPS</span>
+                    <span class="sector-chip">Industrials</span>
                     <span class="tier" style="color:#10b981;border-color:#10b981;">Tier 1</span>
                 </div>
-                <div class="company-name">Hims &amp; Hers Health, Inc.</div>
+                <div class="company-name">Forgent Power Solutions, Inc.</div>
             </div>
             <div class="price-box">
-                <div class="price">$29.82</div>
-                <div class="change positive">+5.48%</div>
+                <div class="price">$42.71</div>
+                <div class="change positive">+5.77%</div>
             </div>
         </div>
 
         <div class="score-risk-row">
             <span class="score-pill">Score 66/100</span>
             <span class="risk-pill">NORMAL</span>
-            <span class="sector-status-pill sector-neutral">NEUTRAL</span>
+            <span class="sector-status-pill sector-leading">LEADING</span>
         </div>
 
         <div class="sector-strip">
-            <span>Sector <strong>Healthcare</strong></span>
-            <span>ETF <strong>XLV</strong> <b class="negative">-0.04%</b></span>
-            <span>Vs Sector <b class="positive">+5.52%</b></span>
+            <span>Sector <strong>Industrials</strong></span>
+            <span>ETF <strong>XLI</strong> <b class="positive">+0.98%</b></span>
+            <span>Vs Sector <b class="positive">+4.79%</b></span>
         </div>
 
-        <div class="catalyst-strip catalyst-neutral">
-            <div class="catalyst-label">📰 Catalyst: Company-specific fresh news</div>
-            <div class="catalyst-headline">Why Is Hims &amp; Hers Health Stock Trading Higher On Monday?</div>
-            <div class="catalyst-source">benzinga · 2026-05-11T15:21:51</div>
+        <div class="catalyst-strip catalyst-none">
+            <div class="catalyst-label">⚪ Catalyst: No confirmed company-specific catalyst</div>
+            
+            
             
         </div>
 
         <div class="metrics-grid">
-            <div><span>Liquidity</span><strong class="metric-good">$981M</strong></div>
-            <div><span>ATR</span><strong class="metric-caution">6.8%</strong></div>
-            <div><span>VWAP Dist</span><strong class="metric-good">+1.9%</strong></div>
-            <div><span>HOD Dist</span><strong class="metric-good">-0.3%</strong></div>
+            <div><span>Liquidity</span><strong class="metric-good">$175M</strong></div>
+            <div><span>ATR</span><strong class="metric-good">6.0%</strong></div>
+            <div><span>VWAP Dist</span><strong class="metric-good">+1.1%</strong></div>
+            <div><span>HOD Dist</span><strong class="metric-good">-0.5%</strong></div>
         </div>
 
         <div class="status-row">
@@ -1674,26 +1680,233 @@ td small {
 
         <div class="interpretation">Clean continuation candidate; confirm VWAP hold and breakout structure.</div>
 
-        <div class="tags-row"><span class="tag tag-positive">Vs sector +5.5%</span><span class="tag tag-positive">Upper range</span><span class="tag tag-tech">Above VWAP</span><span class="tag tag-neutral">📰 Company-specific news</span><span class="tag tag-positive">Near HOD</span></div>
+        <div class="tags-row"><span class="tag tag-positive">Sector leading</span><span class="tag tag-positive">Vs sector +4.8%</span><span class="tag tag-tech">Above VWAP</span><span class="tag tag-neutral">$175M liq</span><span class="tag tag-positive">Upper range</span></div>
 
         
 
         
         <div class="mini-panel">
-            <div class="mini-row"><span>Short %</span><strong>37%</strong></div>
-            <div class="mini-row"><span>Float</span><strong>207.7M</strong></div>
-            <div class="mini-row"><span>DTC</span><strong>2.7d</strong></div>
+            <div class="mini-row"><span>Short %</span><strong>18%</strong></div>
+            <div class="mini-row"><span>Float</span><strong>93.6M</strong></div>
+            <div class="mini-row"><span>DTC</span><strong>1.0d</strong></div>
         </div>
         
 
         <div class="card-actions">
-            <a class="action-btn action-chart" href="https://www.tradingview.com/chart/?symbol=HIMS" target="_blank">
+            <a class="action-btn action-chart" href="https://www.tradingview.com/chart/?symbol=FPS" target="_blank">
                 <img src="assets/tradingview.png" alt="TradingView"> Chart
             </a>
-            <a class="action-btn action-yahoo" href="https://finance.yahoo.com/quote/HIMS" target="_blank">
+            <a class="action-btn action-yahoo" href="https://finance.yahoo.com/quote/FPS" target="_blank">
                 <img src="assets/yahoo.png" alt="Yahoo Finance"> Yahoo
             </a>
-            <a class="action-btn action-twits" href="https://stocktwits.com/symbol/HIMS" target="_blank">
+            <a class="action-btn action-twits" href="https://stocktwits.com/symbol/FPS" target="_blank">
+                <img src="assets/stocktwits.png" alt="Stocktwits"> Twits
+            </a>
+        </div>
+    </div>
+    
+    <div class="stock-card bucket-potential" id="card-B" style="--accent:#38bdf8;">
+        <div class="card-top">
+            <div class="card-id">
+                <div class="symbol-row">
+                    <span class="symbol">B</span>
+                    <span class="sector-chip">Basic Materials</span>
+                    <span class="tier" style="color:#10b981;border-color:#10b981;">Tier 1</span>
+                </div>
+                <div class="company-name">Barrick Mining Corporation</div>
+            </div>
+            <div class="price-box">
+                <div class="price">$46.69</div>
+                <div class="change positive">+8.25%</div>
+            </div>
+        </div>
+
+        <div class="score-risk-row">
+            <span class="score-pill">Score 65/100</span>
+            <span class="risk-pill">NORMAL</span>
+            <span class="sector-status-pill sector-leading">LEADING</span>
+        </div>
+
+        <div class="sector-strip">
+            <span>Sector <strong>Basic Materials</strong></span>
+            <span>ETF <strong>XLB</strong> <b class="positive">+1.32%</b></span>
+            <span>Vs Sector <b class="positive">+6.94%</b></span>
+        </div>
+
+        <div class="catalyst-strip catalyst-neutral">
+            <div class="catalyst-label">📰 Catalyst: Company-specific fresh news</div>
+            <div class="catalyst-headline">Gold Prices Are Booming, And Barrick Is Cashing In Big</div>
+            <div class="catalyst-source">benzinga · 2026-05-11T13:33:21</div>
+            
+        </div>
+
+        <div class="metrics-grid">
+            <div><span>Liquidity</span><strong class="metric-good">$543M</strong></div>
+            <div><span>ATR</span><strong class="metric-good">3.2%</strong></div>
+            <div><span>VWAP Dist</span><strong class="metric-good">+0.5%</strong></div>
+            <div><span>HOD Dist</span><strong class="metric-good">-0.7%</strong></div>
+        </div>
+
+        <div class="status-row">
+            <span class="status-chip status-tech">Above VWAP</span>
+            <span class="status-chip status-positive">Near HOD</span>
+            <span class="status-chip status-neutral">NORMAL</span>
+        </div>
+
+        <div class="interpretation">Clean continuation candidate; confirm VWAP hold and breakout structure.</div>
+
+        <div class="tags-row"><span class="tag tag-positive">Sector leading</span><span class="tag tag-positive">Vs sector +6.9%</span><span class="tag tag-tech">Above VWAP</span><span class="tag tag-neutral">📰 Company-specific news</span><span class="tag tag-positive">Upper range</span></div>
+
+        
+
+        
+
+        <div class="card-actions">
+            <a class="action-btn action-chart" href="https://www.tradingview.com/chart/?symbol=B" target="_blank">
+                <img src="assets/tradingview.png" alt="TradingView"> Chart
+            </a>
+            <a class="action-btn action-yahoo" href="https://finance.yahoo.com/quote/B" target="_blank">
+                <img src="assets/yahoo.png" alt="Yahoo Finance"> Yahoo
+            </a>
+            <a class="action-btn action-twits" href="https://stocktwits.com/symbol/B" target="_blank">
+                <img src="assets/stocktwits.png" alt="Stocktwits"> Twits
+            </a>
+        </div>
+    </div>
+    
+    <div class="stock-card bucket-potential" id="card-NESR" style="--accent:#38bdf8;">
+        <div class="card-top">
+            <div class="card-id">
+                <div class="symbol-row">
+                    <span class="symbol">NESR</span>
+                    <span class="sector-chip">Energy</span>
+                    <span class="tier" style="color:#38bdf8;border-color:#38bdf8;">Tier 2</span>
+                </div>
+                <div class="company-name">National Energy Services Reunit</div>
+            </div>
+            <div class="price-box">
+                <div class="price">$25.54</div>
+                <div class="change positive">+10.56%</div>
+            </div>
+        </div>
+
+        <div class="score-risk-row">
+            <span class="score-pill">Score 64/100</span>
+            <span class="risk-pill">NORMAL</span>
+            <span class="sector-status-pill sector-leading">LEADING</span>
+        </div>
+
+        <div class="sector-strip">
+            <span>Sector <strong>Energy</strong></span>
+            <span>ETF <strong>XLE</strong> <b class="positive">+2.49%</b></span>
+            <span>Vs Sector <b class="positive">+8.08%</b></span>
+        </div>
+
+        <div class="catalyst-strip catalyst-none">
+            <div class="catalyst-label">⚪ Catalyst: No confirmed company-specific catalyst</div>
+            
+            
+            
+        </div>
+
+        <div class="metrics-grid">
+            <div><span>Liquidity</span><strong class="metric-neutral">$45M</strong></div>
+            <div><span>ATR</span><strong class="metric-good">4.8%</strong></div>
+            <div><span>VWAP Dist</span><strong class="metric-caution">+3.6%</strong></div>
+            <div><span>HOD Dist</span><strong class="metric-good">-0.1%</strong></div>
+        </div>
+
+        <div class="status-row">
+            <span class="status-chip status-tech">Above VWAP</span>
+            <span class="status-chip status-positive">Near HOD</span>
+            <span class="status-chip status-neutral">NORMAL</span>
+        </div>
+
+        <div class="interpretation">Clean continuation candidate; confirm VWAP hold and breakout structure.</div>
+
+        <div class="tags-row"><span class="tag tag-caution">Big move +10.6%</span><span class="tag tag-positive">Sector leading</span><span class="tag tag-positive">Vs sector +8.1%</span><span class="tag tag-tech">Above VWAP</span><span class="tag tag-neutral">ATR 4.8% (clean)</span></div>
+
+        
+
+        
+
+        <div class="card-actions">
+            <a class="action-btn action-chart" href="https://www.tradingview.com/chart/?symbol=NESR" target="_blank">
+                <img src="assets/tradingview.png" alt="TradingView"> Chart
+            </a>
+            <a class="action-btn action-yahoo" href="https://finance.yahoo.com/quote/NESR" target="_blank">
+                <img src="assets/yahoo.png" alt="Yahoo Finance"> Yahoo
+            </a>
+            <a class="action-btn action-twits" href="https://stocktwits.com/symbol/NESR" target="_blank">
+                <img src="assets/stocktwits.png" alt="Stocktwits"> Twits
+            </a>
+        </div>
+    </div>
+    
+    <div class="stock-card bucket-potential" id="card-RGTI" style="--accent:#38bdf8;">
+        <div class="card-top">
+            <div class="card-id">
+                <div class="symbol-row">
+                    <span class="symbol">RGTI</span>
+                    <span class="sector-chip">Technology</span>
+                    <span class="tier" style="color:#38bdf8;border-color:#38bdf8;">Tier 2</span>
+                </div>
+                <div class="company-name">Rigetti Computing, Inc.</div>
+            </div>
+            <div class="price-box">
+                <div class="price">$20.34</div>
+                <div class="change positive">+7.39%</div>
+            </div>
+        </div>
+
+        <div class="score-risk-row">
+            <span class="score-pill">Score 64/100</span>
+            <span class="risk-pill">NORMAL</span>
+            <span class="sector-status-pill sector-leading">LEADING</span>
+        </div>
+
+        <div class="sector-strip">
+            <span>Sector <strong>Technology</strong></span>
+            <span>ETF <strong>XLK</strong> <b class="positive">+1.14%</b></span>
+            <span>Vs Sector <b class="positive">+6.25%</b></span>
+        </div>
+
+        <div class="catalyst-strip catalyst-none">
+            <div class="catalyst-label">⚪ Catalyst: No confirmed company-specific catalyst</div>
+            
+            
+            
+        </div>
+
+        <div class="metrics-grid">
+            <div><span>Liquidity</span><strong class="metric-good">$656M</strong></div>
+            <div><span>ATR</span><strong class="metric-caution">6.8%</strong></div>
+            <div><span>VWAP Dist</span><strong class="metric-good">+1.8%</strong></div>
+            <div><span>HOD Dist</span><strong class="metric-good">-0.8%</strong></div>
+        </div>
+
+        <div class="status-row">
+            <span class="status-chip status-tech">Above VWAP</span>
+            <span class="status-chip status-positive">Near HOD</span>
+            <span class="status-chip status-neutral">NORMAL</span>
+        </div>
+
+        <div class="interpretation">Clean continuation candidate; confirm VWAP hold and breakout structure.</div>
+
+        <div class="tags-row"><span class="tag tag-positive">Sector leading</span><span class="tag tag-positive">Vs sector +6.2%</span><span class="tag tag-tech">Above VWAP</span><span class="tag tag-neutral">$656M liq</span><span class="tag tag-positive">Upper range</span></div>
+
+        
+
+        
+
+        <div class="card-actions">
+            <a class="action-btn action-chart" href="https://www.tradingview.com/chart/?symbol=RGTI" target="_blank">
+                <img src="assets/tradingview.png" alt="TradingView"> Chart
+            </a>
+            <a class="action-btn action-yahoo" href="https://finance.yahoo.com/quote/RGTI" target="_blank">
+                <img src="assets/yahoo.png" alt="Yahoo Finance"> Yahoo
+            </a>
+            <a class="action-btn action-twits" href="https://stocktwits.com/symbol/RGTI" target="_blank">
                 <img src="assets/stocktwits.png" alt="Stocktwits"> Twits
             </a>
         </div>
@@ -1705,26 +1918,26 @@ td small {
                 <div class="symbol-row">
                     <span class="symbol">RIOT</span>
                     <span class="sector-chip">Crypto</span>
-                    <span class="tier" style="color:#10b981;border-color:#10b981;">Tier 1</span>
+                    <span class="tier" style="color:#38bdf8;border-color:#38bdf8;">Tier 2</span>
                 </div>
                 <div class="company-name">Riot Platforms, Inc.</div>
             </div>
             <div class="price-box">
-                <div class="price">$25.41</div>
-                <div class="change positive">+5.50%</div>
+                <div class="price">$25.52</div>
+                <div class="change positive">+5.96%</div>
             </div>
         </div>
 
         <div class="score-risk-row">
-            <span class="score-pill">Score 66/100</span>
+            <span class="score-pill">Score 64/100</span>
             <span class="risk-pill">NORMAL</span>
             <span class="sector-status-pill sector-leading">LEADING</span>
         </div>
 
         <div class="sector-strip">
             <span>Sector <strong>Crypto</strong></span>
-            <span>ETF <strong>IBIT</strong> <b class="positive">+1.41%</b></span>
-            <span>Vs Sector <b class="positive">+4.09%</b></span>
+            <span>ETF <strong>IBIT</strong> <b class="positive">+1.75%</b></span>
+            <span>Vs Sector <b class="positive">+4.21%</b></span>
         </div>
 
         <div class="catalyst-strip catalyst-none">
@@ -1735,10 +1948,10 @@ td small {
         </div>
 
         <div class="metrics-grid">
-            <div><span>Liquidity</span><strong class="metric-good">$538M</strong></div>
+            <div><span>Liquidity</span><strong class="metric-good">$544M</strong></div>
             <div><span>ATR</span><strong class="metric-good">5.9%</strong></div>
-            <div><span>VWAP Dist</span><strong class="metric-good">+1.5%</strong></div>
-            <div><span>HOD Dist</span><strong class="metric-good">-0.3%</strong></div>
+            <div><span>VWAP Dist</span><strong class="metric-good">+1.6%</strong></div>
+            <div><span>HOD Dist</span><strong class="metric-good">-0.1%</strong></div>
         </div>
 
         <div class="status-row">
@@ -1749,9 +1962,36 @@ td small {
 
         <div class="interpretation">Clean continuation candidate; confirm VWAP hold and breakout structure.</div>
 
-        <div class="tags-row"><span class="tag tag-positive">Sector leading</span><span class="tag tag-positive">Vs sector +4.1%</span><span class="tag tag-tech">Above VWAP</span><span class="tag tag-neutral">$538M liq</span><span class="tag tag-positive">Upper range</span></div>
+        <div class="tags-row"><span class="tag tag-positive">Sector leading</span><span class="tag tag-positive">Vs sector +4.2%</span><span class="tag tag-tech">Above VWAP</span><span class="tag tag-neutral">$543M liq</span><span class="tag tag-positive">Upper range</span></div>
 
         
+        <div class="signal-detail">
+            <div class="signal-detail-top">
+                <div>
+                    <strong>Signal Detail</strong>
+                    <span>BLACKOUT_MONITOR</span>
+                </div>
+                <span class="signal-status signal-watch">WATCH</span>
+            </div>
+
+            <div class="signal-detail-meta">
+                <span>Detected 12:56 ET</span>
+                <span>Last check 12:56 ET</span>
+            </div>
+
+            <div class="signal-plan-grid">
+                <div><span>Entry</span><b>$25.54</b></div>
+                <div><span>Stop</span><b>$24.99</b></div>
+                <div><span>T1</span><b>$25.59</b></div>
+                <div><span>T2</span><b>$25.62</b></div>
+                <div><span>R/R</span><b>0.1:1</b></div>
+                <div><span>Conf.</span><b>60%</b></div>
+            </div>
+
+            <div class="signal-reason"><strong>Reason:</strong> Valid monitor candidate, but lunch blackout prevents new signals.</div>
+            <div class="signal-reason"><strong>Invalidation:</strong> Lose VWAP, lose trigger, break pullback low, stop would hit, or signal becomes stale.</div>
+        </div>
+    
 
         
 
@@ -1768,32 +2008,32 @@ td small {
         </div>
     </div>
     
-    <div class="stock-card bucket-potential" id="card-QBTS" style="--accent:#38bdf8;">
+    <div class="stock-card bucket-potential" id="card-MARA" style="--accent:#38bdf8;">
         <div class="card-top">
             <div class="card-id">
                 <div class="symbol-row">
-                    <span class="symbol">QBTS</span>
-                    <span class="sector-chip">Technology</span>
+                    <span class="symbol">MARA</span>
+                    <span class="sector-chip">Crypto</span>
                     <span class="tier" style="color:#38bdf8;border-color:#38bdf8;">Tier 2</span>
                 </div>
-                <div class="company-name">D-Wave Quantum Inc.</div>
+                <div class="company-name">MARA Holdings, Inc.</div>
             </div>
             <div class="price-box">
-                <div class="price">$24.11</div>
-                <div class="change positive">+6.82%</div>
+                <div class="price">$13.61</div>
+                <div class="change positive">+5.14%</div>
             </div>
         </div>
 
         <div class="score-risk-row">
-            <span class="score-pill">Score 64/100</span>
+            <span class="score-pill">Score 63/100</span>
             <span class="risk-pill">NORMAL</span>
             <span class="sector-status-pill sector-leading">LEADING</span>
         </div>
 
         <div class="sector-strip">
-            <span>Sector <strong>Technology</strong></span>
-            <span>ETF <strong>XLK</strong> <b class="positive">+1.30%</b></span>
-            <span>Vs Sector <b class="positive">+5.52%</b></span>
+            <span>Sector <strong>Crypto</strong></span>
+            <span>ETF <strong>IBIT</strong> <b class="positive">+1.75%</b></span>
+            <span>Vs Sector <b class="positive">+3.39%</b></span>
         </div>
 
         <div class="catalyst-strip catalyst-none">
@@ -1804,190 +2044,40 @@ td small {
         </div>
 
         <div class="metrics-grid">
-            <div><span>Liquidity</span><strong class="metric-good">$836M</strong></div>
-            <div><span>ATR</span><strong class="metric-caution">7.0%</strong></div>
-            <div><span>VWAP Dist</span><strong class="metric-good">+1.5%</strong></div>
-            <div><span>HOD Dist</span><strong class="metric-ok">-1.0%</strong></div>
+            <div><span>Liquidity</span><strong class="metric-good">$612M</strong></div>
+            <div><span>ATR</span><strong class="metric-good">6.3%</strong></div>
+            <div><span>VWAP Dist</span><strong class="metric-good">+1.6%</strong></div>
+            <div><span>HOD Dist</span><strong class="metric-ok">-0.9%</strong></div>
         </div>
 
         <div class="status-row">
             <span class="status-chip status-tech">Above VWAP</span>
-            <span class="status-chip status-neutral">HOD -1.0%</span>
+            <span class="status-chip status-neutral">HOD -0.9%</span>
             <span class="status-chip status-neutral">NORMAL</span>
         </div>
 
         <div class="interpretation">Clean continuation candidate; confirm VWAP hold and breakout structure.</div>
 
-        <div class="tags-row"><span class="tag tag-positive">Sector leading</span><span class="tag tag-positive">Vs sector +5.5%</span><span class="tag tag-tech">Above VWAP</span><span class="tag tag-neutral">$836M liq</span><span class="tag tag-positive">Upper range</span></div>
+        <div class="tags-row"><span class="tag tag-positive">Sector leading</span><span class="tag tag-positive">Vs sector +3.4%</span><span class="tag tag-tech">Above VWAP</span><span class="tag tag-neutral">$612M liq</span><span class="tag tag-positive">Upper range</span></div>
 
         
 
         
         <div class="mini-panel">
-            <div class="mini-row"><span>Short %</span><strong>16%</strong></div>
-            <div class="mini-row"><span>Float</span><strong>360.0M</strong></div>
-            <div class="mini-row"><span>DTC</span><strong>2.1d</strong></div>
+            <div class="mini-row"><span>Short %</span><strong>35%</strong></div>
+            <div class="mini-row"><span>Float</span><strong>371.6M</strong></div>
+            <div class="mini-row"><span>DTC</span><strong>2.3d</strong></div>
         </div>
         
 
         <div class="card-actions">
-            <a class="action-btn action-chart" href="https://www.tradingview.com/chart/?symbol=QBTS" target="_blank">
+            <a class="action-btn action-chart" href="https://www.tradingview.com/chart/?symbol=MARA" target="_blank">
                 <img src="assets/tradingview.png" alt="TradingView"> Chart
             </a>
-            <a class="action-btn action-yahoo" href="https://finance.yahoo.com/quote/QBTS" target="_blank">
+            <a class="action-btn action-yahoo" href="https://finance.yahoo.com/quote/MARA" target="_blank">
                 <img src="assets/yahoo.png" alt="Yahoo Finance"> Yahoo
             </a>
-            <a class="action-btn action-twits" href="https://stocktwits.com/symbol/QBTS" target="_blank">
-                <img src="assets/stocktwits.png" alt="Stocktwits"> Twits
-            </a>
-        </div>
-    </div>
-    
-    <div class="stock-card bucket-potential" id="card-VOYG" style="--accent:#38bdf8;">
-        <div class="card-top">
-            <div class="card-id">
-                <div class="symbol-row">
-                    <span class="symbol">VOYG</span>
-                    <span class="sector-chip">Industrials</span>
-                    <span class="tier" style="color:#38bdf8;border-color:#38bdf8;">Tier 2</span>
-                </div>
-                <div class="company-name">Voyager Technologies, Inc.</div>
-            </div>
-            <div class="price-box">
-                <div class="price">$33.09</div>
-                <div class="change positive">+11.26%</div>
-            </div>
-        </div>
-
-        <div class="score-risk-row">
-            <span class="score-pill">Score 62/100</span>
-            <span class="risk-pill">NORMAL</span>
-            <span class="sector-status-pill sector-improving">IMPROVING</span>
-        </div>
-
-        <div class="sector-strip">
-            <span>Sector <strong>Industrials</strong></span>
-            <span>ETF <strong>XLI</strong> <b class="positive">+0.89%</b></span>
-            <span>Vs Sector <b class="positive">+10.38%</b></span>
-        </div>
-
-        <div class="catalyst-strip catalyst-none">
-            <div class="catalyst-label">⚪ Catalyst: No confirmed company-specific catalyst</div>
-            
-            
-            
-        </div>
-
-        <div class="metrics-grid">
-            <div><span>Liquidity</span><strong class="metric-ok">$53M</strong></div>
-            <div><span>ATR</span><strong class="metric-caution">7.0%</strong></div>
-            <div><span>VWAP Dist</span><strong class="metric-caution">+3.7%</strong></div>
-            <div><span>HOD Dist</span><strong class="metric-good">-0.6%</strong></div>
-        </div>
-
-        <div class="status-row">
-            <span class="status-chip status-tech">Above VWAP</span>
-            <span class="status-chip status-positive">Near HOD</span>
-            <span class="status-chip status-neutral">NORMAL</span>
-        </div>
-
-        <div class="interpretation">Clean continuation candidate; confirm VWAP hold and breakout structure.</div>
-
-        <div class="tags-row"><span class="tag tag-caution">Big move +11.3%</span><span class="tag tag-positive">Sector supportive</span><span class="tag tag-positive">Vs sector +10.4%</span><span class="tag tag-tech">Above VWAP</span><span class="tag tag-neutral">$53M liq</span></div>
-
-        
-
-        
-        <div class="mini-panel">
-            <div class="mini-row"><span>Short %</span><strong>16%</strong></div>
-            <div class="mini-row"><span>Float</span><strong>45.6M</strong></div>
-            <div class="mini-row"><span>DTC</span><strong>4.6d</strong></div>
-        </div>
-        
-
-        <div class="card-actions">
-            <a class="action-btn action-chart" href="https://www.tradingview.com/chart/?symbol=VOYG" target="_blank">
-                <img src="assets/tradingview.png" alt="TradingView"> Chart
-            </a>
-            <a class="action-btn action-yahoo" href="https://finance.yahoo.com/quote/VOYG" target="_blank">
-                <img src="assets/yahoo.png" alt="Yahoo Finance"> Yahoo
-            </a>
-            <a class="action-btn action-twits" href="https://stocktwits.com/symbol/VOYG" target="_blank">
-                <img src="assets/stocktwits.png" alt="Stocktwits"> Twits
-            </a>
-        </div>
-    </div>
-    
-    <div class="stock-card bucket-potential" id="card-PUMP" style="--accent:#38bdf8;">
-        <div class="card-top">
-            <div class="card-id">
-                <div class="symbol-row">
-                    <span class="symbol">PUMP</span>
-                    <span class="sector-chip">Energy</span>
-                    <span class="tier" style="color:#38bdf8;border-color:#38bdf8;">Tier 2</span>
-                </div>
-                <div class="company-name">ProPetro Holding Corp.</div>
-            </div>
-            <div class="price-box">
-                <div class="price">$16.48</div>
-                <div class="change positive">+5.10%</div>
-            </div>
-        </div>
-
-        <div class="score-risk-row">
-            <span class="score-pill">Score 62/100</span>
-            <span class="risk-pill">NORMAL</span>
-            <span class="sector-status-pill sector-leading">LEADING</span>
-        </div>
-
-        <div class="sector-strip">
-            <span>Sector <strong>Energy</strong></span>
-            <span>ETF <strong>XLE</strong> <b class="positive">+1.98%</b></span>
-            <span>Vs Sector <b class="positive">+3.11%</b></span>
-        </div>
-
-        <div class="catalyst-strip catalyst-none">
-            <div class="catalyst-label">⚪ Catalyst: No confirmed company-specific catalyst</div>
-            
-            
-            
-        </div>
-
-        <div class="metrics-grid">
-            <div><span>Liquidity</span><strong class="metric-ok">$82M</strong></div>
-            <div><span>ATR</span><strong class="metric-good">6.5%</strong></div>
-            <div><span>VWAP Dist</span><strong class="metric-good">+1.5%</strong></div>
-            <div><span>HOD Dist</span><strong class="metric-good">-0.3%</strong></div>
-        </div>
-
-        <div class="status-row">
-            <span class="status-chip status-tech">Above VWAP</span>
-            <span class="status-chip status-positive">Near HOD</span>
-            <span class="status-chip status-neutral">NORMAL</span>
-        </div>
-
-        <div class="interpretation">Clean continuation candidate; confirm VWAP hold and breakout structure.</div>
-
-        <div class="tags-row"><span class="tag tag-positive">Sector leading</span><span class="tag tag-positive">Vs sector +3.1%</span><span class="tag tag-tech">Above VWAP</span><span class="tag tag-neutral">$82M liq</span><span class="tag tag-positive">Upper range</span></div>
-
-        
-
-        
-        <div class="mini-panel">
-            <div class="mini-row"><span>Short %</span><strong>10%</strong></div>
-            <div class="mini-row"><span>Float</span><strong>90.5M</strong></div>
-            <div class="mini-row"><span>DTC</span><strong>4.0d</strong></div>
-        </div>
-        
-
-        <div class="card-actions">
-            <a class="action-btn action-chart" href="https://www.tradingview.com/chart/?symbol=PUMP" target="_blank">
-                <img src="assets/tradingview.png" alt="TradingView"> Chart
-            </a>
-            <a class="action-btn action-yahoo" href="https://finance.yahoo.com/quote/PUMP" target="_blank">
-                <img src="assets/yahoo.png" alt="Yahoo Finance"> Yahoo
-            </a>
-            <a class="action-btn action-twits" href="https://stocktwits.com/symbol/PUMP" target="_blank">
+            <a class="action-btn action-twits" href="https://stocktwits.com/symbol/MARA" target="_blank">
                 <img src="assets/stocktwits.png" alt="Stocktwits"> Twits
             </a>
         </div>
@@ -2018,21 +2108,21 @@ td small {
                 <div class="company-name">Himax Technologies, Inc.</div>
             </div>
             <div class="price-box">
-                <div class="price">$21.47</div>
-                <div class="change positive">+20.69%</div>
+                <div class="price">$21.43</div>
+                <div class="change positive">+20.49%</div>
             </div>
         </div>
 
         <div class="score-risk-row">
-            <span class="score-pill">Score 83/100</span>
+            <span class="score-pill">Score 87/100</span>
             <span class="risk-pill">NORMAL</span>
             <span class="sector-status-pill sector-leading">LEADING</span>
         </div>
 
         <div class="sector-strip">
             <span>Sector <strong>Technology</strong></span>
-            <span>ETF <strong>XLK</strong> <b class="positive">+1.30%</b></span>
-            <span>Vs Sector <b class="positive">+19.38%</b></span>
+            <span>ETF <strong>XLK</strong> <b class="positive">+1.14%</b></span>
+            <span>Vs Sector <b class="positive">+19.35%</b></span>
         </div>
 
         <div class="catalyst-strip catalyst-none">
@@ -2043,23 +2133,50 @@ td small {
         </div>
 
         <div class="metrics-grid">
-            <div><span>Liquidity</span><strong class="metric-good">$107M</strong></div>
-            <div><span>ATR</span><strong class="metric-caution">7.4%</strong></div>
-            <div><span>VWAP Dist</span><strong class="metric-caution">+3.5%</strong></div>
-            <div><span>HOD Dist</span><strong class="metric-ok">-1.4%</strong></div>
+            <div><span>Liquidity</span><strong class="metric-good">$108M</strong></div>
+            <div><span>ATR</span><strong class="metric-caution">7.5%</strong></div>
+            <div><span>VWAP Dist</span><strong class="metric-good">+2.4%</strong></div>
+            <div><span>HOD Dist</span><strong class="metric-caution">-2.0%</strong></div>
         </div>
 
         <div class="status-row">
             <span class="status-chip status-tech">Above VWAP</span>
-            <span class="status-chip status-neutral">HOD -1.4%</span>
+            <span class="status-chip status-neutral">HOD -2.0%</span>
             <span class="status-chip status-neutral">NORMAL</span>
         </div>
 
         <div class="interpretation">Already moving; wait for pullback or tight consolidation.</div>
 
-        <div class="tags-row"><span class="tag tag-caution">Major move +20.7%</span><span class="tag tag-positive">Sector leading</span><span class="tag tag-positive">Vs sector +19.4%</span><span class="tag tag-tech">Above VWAP</span><span class="tag tag-squeeze">Vol surge 5.5x</span></div>
+        <div class="tags-row"><span class="tag tag-caution">Major move +20.5%</span><span class="tag tag-positive">Sector leading</span><span class="tag tag-positive">Vs sector +19.4%</span><span class="tag tag-tech">Above VWAP</span><span class="tag tag-squeeze">Vol surge 5.7x</span></div>
 
         
+        <div class="signal-detail">
+            <div class="signal-detail-top">
+                <div>
+                    <strong>Signal Detail</strong>
+                    <span>BLACKOUT_MONITOR</span>
+                </div>
+                <span class="signal-status signal-watch">WATCH</span>
+            </div>
+
+            <div class="signal-detail-meta">
+                <span>Detected 12:56 ET</span>
+                <span>Last check 12:56 ET</span>
+            </div>
+
+            <div class="signal-plan-grid">
+                <div><span>Entry</span><b>$21.50</b></div>
+                <div><span>Stop</span><b>$21.20</b></div>
+                <div><span>T1</span><b>$21.76</b></div>
+                <div><span>T2</span><b>$21.78</b></div>
+                <div><span>R/R</span><b>0.8:1</b></div>
+                <div><span>Conf.</span><b>64%</b></div>
+            </div>
+
+            <div class="signal-reason"><strong>Reason:</strong> Valid monitor candidate, but lunch blackout prevents new signals.</div>
+            <div class="signal-reason"><strong>Invalidation:</strong> Lose VWAP, lose trigger, break pullback low, stop would hit, or signal becomes stale.</div>
+        </div>
+    
 
         
 
@@ -2076,150 +2193,6 @@ td small {
         </div>
     </div>
     
-    <div class="stock-card bucket-active" id="card-LUNR" style="--accent:#22c55e;">
-        <div class="card-top">
-            <div class="card-id">
-                <div class="symbol-row">
-                    <span class="symbol">LUNR</span>
-                    <span class="sector-chip">Aerospace &amp; Defense</span>
-                    <span class="tier" style="color:#10b981;border-color:#10b981;">Tier 1</span>
-                </div>
-                <div class="company-name">Intuitive Machines, Inc.</div>
-            </div>
-            <div class="price-box">
-                <div class="price">$32.48</div>
-                <div class="change positive">+12.11%</div>
-            </div>
-        </div>
-
-        <div class="score-risk-row">
-            <span class="score-pill">Score 73/100</span>
-            <span class="risk-pill">NORMAL</span>
-            <span class="sector-status-pill sector-leading">LEADING</span>
-        </div>
-
-        <div class="sector-strip">
-            <span>Sector <strong>Aerospace &amp; Defense</strong></span>
-            <span>ETF <strong>ITA</strong> <b class="positive">+1.40%</b></span>
-            <span>Vs Sector <b class="positive">+10.71%</b></span>
-        </div>
-
-        <div class="catalyst-strip catalyst-none">
-            <div class="catalyst-label">⚪ Catalyst: No confirmed company-specific catalyst</div>
-            
-            
-            
-        </div>
-
-        <div class="metrics-grid">
-            <div><span>Liquidity</span><strong class="metric-good">$404M</strong></div>
-            <div><span>ATR</span><strong class="metric-risk">8.8%</strong></div>
-            <div><span>VWAP Dist</span><strong class="metric-caution">+4.0%</strong></div>
-            <div><span>HOD Dist</span><strong class="metric-ok">-0.9%</strong></div>
-        </div>
-
-        <div class="status-row">
-            <span class="status-chip status-tech">Above VWAP</span>
-            <span class="status-chip status-neutral">HOD -0.9%</span>
-            <span class="status-chip status-neutral">NORMAL</span>
-        </div>
-
-        <div class="interpretation">Already moving; wait for pullback or tight consolidation.</div>
-
-        <div class="tags-row"><span class="tag tag-caution">Big move +12.1%</span><span class="tag tag-positive">Sector leading</span><span class="tag tag-positive">Vs sector +10.7%</span><span class="tag tag-tech">Above VWAP</span><span class="tag tag-neutral">$404M liq</span></div>
-
-        
-
-        
-        <div class="mini-panel">
-            <div class="mini-row"><span>Short %</span><strong>24%</strong></div>
-            <div class="mini-row"><span>Float</span><strong>129.3M</strong></div>
-            <div class="mini-row"><span>DTC</span><strong>1.9d</strong></div>
-        </div>
-        
-
-        <div class="card-actions">
-            <a class="action-btn action-chart" href="https://www.tradingview.com/chart/?symbol=LUNR" target="_blank">
-                <img src="assets/tradingview.png" alt="TradingView"> Chart
-            </a>
-            <a class="action-btn action-yahoo" href="https://finance.yahoo.com/quote/LUNR" target="_blank">
-                <img src="assets/yahoo.png" alt="Yahoo Finance"> Yahoo
-            </a>
-            <a class="action-btn action-twits" href="https://stocktwits.com/symbol/LUNR" target="_blank">
-                <img src="assets/stocktwits.png" alt="Stocktwits"> Twits
-            </a>
-        </div>
-    </div>
-    
-    <div class="stock-card bucket-active" id="card-DXYZ" style="--accent:#22c55e;">
-        <div class="card-top">
-            <div class="card-id">
-                <div class="symbol-row">
-                    <span class="symbol">DXYZ</span>
-                    <span class="sector-chip">Financial Services</span>
-                    <span class="tier" style="color:#10b981;border-color:#10b981;">Tier 1</span>
-                </div>
-                <div class="company-name">Destiny Tech100 Inc.</div>
-            </div>
-            <div class="price-box">
-                <div class="price">$65.51</div>
-                <div class="change positive">+19.98%</div>
-            </div>
-        </div>
-
-        <div class="score-risk-row">
-            <span class="score-pill">Score 72/100</span>
-            <span class="risk-pill">NORMAL</span>
-            <span class="sector-status-pill sector-neutral">NEUTRAL</span>
-        </div>
-
-        <div class="sector-strip">
-            <span>Sector <strong>Financial Services</strong></span>
-            <span>ETF <strong>XLF</strong> <b class="negative">-0.24%</b></span>
-            <span>Vs Sector <b class="positive">+20.23%</b></span>
-        </div>
-
-        <div class="catalyst-strip catalyst-none">
-            <div class="catalyst-label">⚪ Catalyst: No confirmed company-specific catalyst</div>
-            
-            
-            
-        </div>
-
-        <div class="metrics-grid">
-            <div><span>Liquidity</span><strong class="metric-good">$166M</strong></div>
-            <div><span>ATR</span><strong class="metric-good">6.3%</strong></div>
-            <div><span>VWAP Dist</span><strong class="metric-good">+2.1%</strong></div>
-            <div><span>HOD Dist</span><strong class="metric-risk">-5.1%</strong></div>
-        </div>
-
-        <div class="status-row">
-            <span class="status-chip status-tech">Above VWAP</span>
-            <span class="status-chip status-neutral">HOD -5.1%</span>
-            <span class="status-chip status-neutral">NORMAL</span>
-        </div>
-
-        <div class="interpretation">Already moving; wait for pullback or tight consolidation.</div>
-
-        <div class="tags-row"><span class="tag tag-caution">Big move +20.0%</span><span class="tag tag-positive">Vs sector +20.2%</span><span class="tag tag-positive">RS strong (5/20/60d)</span><span class="tag tag-tech">Above VWAP</span><span class="tag tag-squeeze">RVOL 3.1x</span></div>
-
-        
-
-        
-
-        <div class="card-actions">
-            <a class="action-btn action-chart" href="https://www.tradingview.com/chart/?symbol=DXYZ" target="_blank">
-                <img src="assets/tradingview.png" alt="TradingView"> Chart
-            </a>
-            <a class="action-btn action-yahoo" href="https://finance.yahoo.com/quote/DXYZ" target="_blank">
-                <img src="assets/yahoo.png" alt="Yahoo Finance"> Yahoo
-            </a>
-            <a class="action-btn action-twits" href="https://stocktwits.com/symbol/DXYZ" target="_blank">
-                <img src="assets/stocktwits.png" alt="Stocktwits"> Twits
-            </a>
-        </div>
-    </div>
-    
     <div class="stock-card bucket-active" id="card-LQDA" style="--accent:#22c55e;">
         <div class="card-top">
             <div class="card-id">
@@ -2231,46 +2204,46 @@ td small {
                 <div class="company-name">Liquidia Corporation</div>
             </div>
             <div class="price-box">
-                <div class="price">$48.63</div>
-                <div class="change positive">+14.73%</div>
+                <div class="price">$49.72</div>
+                <div class="change positive">+17.30%</div>
             </div>
         </div>
 
         <div class="score-risk-row">
-            <span class="score-pill">Score 70/100</span>
+            <span class="score-pill">Score 73/100</span>
             <span class="risk-pill">NORMAL</span>
             <span class="sector-status-pill sector-neutral">NEUTRAL</span>
         </div>
 
         <div class="sector-strip">
             <span>Sector <strong>Healthcare</strong></span>
-            <span>ETF <strong>XLV</strong> <b class="negative">-0.04%</b></span>
-            <span>Vs Sector <b class="positive">+14.77%</b></span>
+            <span>ETF <strong>XLV</strong> <b class="negative">-0.19%</b></span>
+            <span>Vs Sector <b class="positive">+17.49%</b></span>
         </div>
 
-        <div class="catalyst-strip catalyst-none">
-            <div class="catalyst-label">⚪ Catalyst: No confirmed company-specific catalyst</div>
-            
-            
+        <div class="catalyst-strip catalyst-neutral">
+            <div class="catalyst-label">📰 Catalyst: Company-specific fresh news</div>
+            <div class="catalyst-headline">Liquidia, Beazer Homes, Circle Internet Group And Other Big Stocks Moving Higher On Monday</div>
+            <div class="catalyst-source">benzinga · 2026-05-11T15:56:08</div>
             
         </div>
 
         <div class="metrics-grid">
-            <div><span>Liquidity</span><strong class="metric-ok">$55M</strong></div>
-            <div><span>ATR</span><strong class="metric-good">4.7%</strong></div>
-            <div><span>VWAP Dist</span><strong class="metric-caution">+4.2%</strong></div>
-            <div><span>HOD Dist</span><strong class="metric-risk">-3.3%</strong></div>
+            <div><span>Liquidity</span><strong class="metric-ok">$57M</strong></div>
+            <div><span>ATR</span><strong class="metric-good">4.6%</strong></div>
+            <div><span>VWAP Dist</span><strong class="metric-risk">+5.6%</strong></div>
+            <div><span>HOD Dist</span><strong class="metric-ok">-1.1%</strong></div>
         </div>
 
         <div class="status-row">
             <span class="status-chip status-tech">Above VWAP</span>
-            <span class="status-chip status-neutral">HOD -3.3%</span>
+            <span class="status-chip status-neutral">HOD -1.1%</span>
             <span class="status-chip status-neutral">NORMAL</span>
         </div>
 
         <div class="interpretation">Already moving; wait for pullback or tight consolidation.</div>
 
-        <div class="tags-row"><span class="tag tag-caution">Above VWAP extended</span><span class="tag tag-positive">Vs sector +14.8%</span><span class="tag tag-positive">Upper range</span><span class="tag tag-squeeze">DTC 11.1d</span><span class="tag tag-neutral">$55M liq</span></div>
+        <div class="tags-row"><span class="tag tag-caution">Above VWAP extended</span><span class="tag tag-positive">Vs sector +17.5%</span><span class="tag tag-positive">Upper range</span><span class="tag tag-squeeze">RVOL 3.1x</span><span class="tag tag-neutral">📰 Company-specific news</span></div>
 
         
 
@@ -2295,32 +2268,32 @@ td small {
         </div>
     </div>
     
-    <div class="stock-card bucket-active" id="card-HYMC" style="--accent:#22c55e;">
+    <div class="stock-card bucket-active" id="card-DXYZ" style="--accent:#22c55e;">
         <div class="card-top">
             <div class="card-id">
                 <div class="symbol-row">
-                    <span class="symbol">HYMC</span>
-                    <span class="sector-chip">Basic Materials</span>
+                    <span class="symbol">DXYZ</span>
+                    <span class="sector-chip">Financial Services</span>
                     <span class="tier" style="color:#10b981;border-color:#10b981;">Tier 1</span>
                 </div>
-                <div class="company-name">Hycroft Mining Holding Corporat</div>
+                <div class="company-name">Destiny Tech100 Inc.</div>
             </div>
             <div class="price-box">
-                <div class="price">$45.00</div>
-                <div class="change positive">+17.07%</div>
+                <div class="price">$65.00</div>
+                <div class="change positive">+19.04%</div>
             </div>
         </div>
 
         <div class="score-risk-row">
-            <span class="score-pill">Score 65/100</span>
+            <span class="score-pill">Score 72/100</span>
             <span class="risk-pill">NORMAL</span>
-            <span class="sector-status-pill sector-leading">LEADING</span>
+            <span class="sector-status-pill sector-neutral">NEUTRAL</span>
         </div>
 
         <div class="sector-strip">
-            <span>Sector <strong>Basic Materials</strong></span>
-            <span>ETF <strong>XLB</strong> <b class="positive">+1.28%</b></span>
-            <span>Vs Sector <b class="positive">+15.79%</b></span>
+            <span>Sector <strong>Financial Services</strong></span>
+            <span>ETF <strong>XLF</strong> <b class="negative">-0.22%</b></span>
+            <span>Vs Sector <b class="positive">+19.26%</b></span>
         </div>
 
         <div class="catalyst-strip catalyst-none">
@@ -2331,40 +2304,103 @@ td small {
         </div>
 
         <div class="metrics-grid">
-            <div><span>Liquidity</span><strong class="metric-ok">$91M</strong></div>
-            <div><span>ATR</span><strong class="metric-caution">7.4%</strong></div>
-            <div><span>VWAP Dist</span><strong class="metric-good">+2.0%</strong></div>
-            <div><span>HOD Dist</span><strong class="metric-ok">-1.1%</strong></div>
+            <div><span>Liquidity</span><strong class="metric-good">$167M</strong></div>
+            <div><span>ATR</span><strong class="metric-good">6.4%</strong></div>
+            <div><span>VWAP Dist</span><strong class="metric-good">+1.2%</strong></div>
+            <div><span>HOD Dist</span><strong class="metric-risk">-5.8%</strong></div>
         </div>
 
         <div class="status-row">
             <span class="status-chip status-tech">Above VWAP</span>
-            <span class="status-chip status-neutral">HOD -1.1%</span>
+            <span class="status-chip status-neutral">HOD -5.8%</span>
             <span class="status-chip status-neutral">NORMAL</span>
         </div>
 
         <div class="interpretation">Already moving; wait for pullback or tight consolidation.</div>
 
-        <div class="tags-row"><span class="tag tag-caution">Big move +17.1%</span><span class="tag tag-positive">Sector leading</span><span class="tag tag-positive">Vs sector +15.8%</span><span class="tag tag-tech">Above VWAP</span><span class="tag tag-squeeze">Float 53M</span></div>
+        <div class="tags-row"><span class="tag tag-caution">Big move +19.0%</span><span class="tag tag-positive">Vs sector +19.3%</span><span class="tag tag-positive">RS strong (5/20/60d)</span><span class="tag tag-tech">Above VWAP</span><span class="tag tag-squeeze">RVOL 3.4x</span></div>
 
         
 
-        
-        <div class="mini-panel">
-            <div class="mini-row"><span>Short %</span><strong>18%</strong></div>
-            <div class="mini-row"><span>Float</span><strong>53.2M</strong></div>
-            <div class="mini-row"><span>DTC</span><strong>2.9d</strong></div>
-        </div>
         
 
         <div class="card-actions">
-            <a class="action-btn action-chart" href="https://www.tradingview.com/chart/?symbol=HYMC" target="_blank">
+            <a class="action-btn action-chart" href="https://www.tradingview.com/chart/?symbol=DXYZ" target="_blank">
                 <img src="assets/tradingview.png" alt="TradingView"> Chart
             </a>
-            <a class="action-btn action-yahoo" href="https://finance.yahoo.com/quote/HYMC" target="_blank">
+            <a class="action-btn action-yahoo" href="https://finance.yahoo.com/quote/DXYZ" target="_blank">
                 <img src="assets/yahoo.png" alt="Yahoo Finance"> Yahoo
             </a>
-            <a class="action-btn action-twits" href="https://stocktwits.com/symbol/HYMC" target="_blank">
+            <a class="action-btn action-twits" href="https://stocktwits.com/symbol/DXYZ" target="_blank">
+                <img src="assets/stocktwits.png" alt="Stocktwits"> Twits
+            </a>
+        </div>
+    </div>
+    
+    <div class="stock-card bucket-active" id="card-LASR" style="--accent:#22c55e;">
+        <div class="card-top">
+            <div class="card-id">
+                <div class="symbol-row">
+                    <span class="symbol">LASR</span>
+                    <span class="sector-chip">Technology</span>
+                    <span class="tier" style="color:#10b981;border-color:#10b981;">Tier 1</span>
+                </div>
+                <div class="company-name">nLIGHT, Inc.</div>
+            </div>
+            <div class="price-box">
+                <div class="price">$83.52</div>
+                <div class="change positive">+13.00%</div>
+            </div>
+        </div>
+
+        <div class="score-risk-row">
+            <span class="score-pill">Score 65/100</span>
+            <span class="risk-pill">NORMAL</span>
+            <span class="sector-status-pill sector-leading">LEADING</span>
+        </div>
+
+        <div class="sector-strip">
+            <span>Sector <strong>Technology</strong></span>
+            <span>ETF <strong>XLK</strong> <b class="positive">+1.14%</b></span>
+            <span>Vs Sector <b class="positive">+11.86%</b></span>
+        </div>
+
+        <div class="catalyst-strip catalyst-none">
+            <div class="catalyst-label">⚪ Catalyst: No confirmed company-specific catalyst</div>
+            
+            
+            
+        </div>
+
+        <div class="metrics-grid">
+            <div><span>Liquidity</span><strong class="metric-ok">$97M</strong></div>
+            <div><span>ATR</span><strong class="metric-caution">7.8%</strong></div>
+            <div><span>VWAP Dist</span><strong class="metric-good">+1.0%</strong></div>
+            <div><span>HOD Dist</span><strong class="metric-ok">-0.8%</strong></div>
+        </div>
+
+        <div class="status-row">
+            <span class="status-chip status-tech">Above VWAP</span>
+            <span class="status-chip status-neutral">HOD -0.8%</span>
+            <span class="status-chip status-neutral">NORMAL</span>
+        </div>
+
+        <div class="interpretation">Already moving; wait for pullback or tight consolidation.</div>
+
+        <div class="tags-row"><span class="tag tag-caution">Big move +13.0%</span><span class="tag tag-positive">Sector leading</span><span class="tag tag-positive">Vs sector +11.9%</span><span class="tag tag-tech">Above VWAP</span><span class="tag tag-neutral">$97M liq</span></div>
+
+        
+
+        
+
+        <div class="card-actions">
+            <a class="action-btn action-chart" href="https://www.tradingview.com/chart/?symbol=LASR" target="_blank">
+                <img src="assets/tradingview.png" alt="TradingView"> Chart
+            </a>
+            <a class="action-btn action-yahoo" href="https://finance.yahoo.com/quote/LASR" target="_blank">
+                <img src="assets/yahoo.png" alt="Yahoo Finance"> Yahoo
+            </a>
+            <a class="action-btn action-twits" href="https://stocktwits.com/symbol/LASR" target="_blank">
                 <img src="assets/stocktwits.png" alt="Stocktwits"> Twits
             </a>
         </div>
@@ -2381,21 +2417,21 @@ td small {
                 <div class="company-name">Navitas Semiconductor Corporati</div>
             </div>
             <div class="price-box">
-                <div class="price">$22.28</div>
-                <div class="change positive">+22.42%</div>
+                <div class="price">$22.01</div>
+                <div class="change positive">+20.90%</div>
             </div>
         </div>
 
         <div class="score-risk-row">
-            <span class="score-pill">Score 63/100</span>
+            <span class="score-pill">Score 64/100</span>
             <span class="risk-pill">NORMAL</span>
             <span class="sector-status-pill sector-leading">LEADING</span>
         </div>
 
         <div class="sector-strip">
             <span>Sector <strong>Technology</strong></span>
-            <span>ETF <strong>XLK</strong> <b class="positive">+1.30%</b></span>
-            <span>Vs Sector <b class="positive">+21.12%</b></span>
+            <span>ETF <strong>XLK</strong> <b class="positive">+1.14%</b></span>
+            <span>Vs Sector <b class="positive">+19.76%</b></span>
         </div>
 
         <div class="catalyst-strip catalyst-none">
@@ -2406,21 +2442,21 @@ td small {
         </div>
 
         <div class="metrics-grid">
-            <div><span>Liquidity</span><strong class="metric-good">$877M</strong></div>
-            <div><span>ATR</span><strong class="metric-risk">11.2%</strong></div>
-            <div><span>VWAP Dist</span><strong class="metric-good">+1.8%</strong></div>
-            <div><span>HOD Dist</span><strong class="metric-risk">-4.5%</strong></div>
+            <div><span>Liquidity</span><strong class="metric-good">$872M</strong></div>
+            <div><span>ATR</span><strong class="metric-risk">11.3%</strong></div>
+            <div><span>VWAP Dist</span><strong class="metric-good">+0.5%</strong></div>
+            <div><span>HOD Dist</span><strong class="metric-risk">-5.6%</strong></div>
         </div>
 
         <div class="status-row">
             <span class="status-chip status-tech">Above VWAP</span>
-            <span class="status-chip status-neutral">HOD -4.5%</span>
+            <span class="status-chip status-neutral">HOD -5.6%</span>
             <span class="status-chip status-neutral">NORMAL</span>
         </div>
 
         <div class="interpretation">Already moving; wait for pullback or tight consolidation.</div>
 
-        <div class="tags-row"><span class="tag tag-caution">Major move +22.4%</span><span class="tag tag-positive">Sector leading</span><span class="tag tag-positive">Vs sector +21.1%</span><span class="tag tag-tech">Above VWAP</span><span class="tag tag-neutral">$877M liq</span></div>
+        <div class="tags-row"><span class="tag tag-caution">Major move +20.9%</span><span class="tag tag-positive">Sector leading</span><span class="tag tag-positive">Vs sector +19.8%</span><span class="tag tag-tech">Above VWAP</span><span class="tag tag-neutral">$872M liq</span></div>
 
         
 
@@ -2445,6 +2481,81 @@ td small {
         </div>
     </div>
     
+    <div class="stock-card bucket-active" id="card-ADEA" style="--accent:#22c55e;">
+        <div class="card-top">
+            <div class="card-id">
+                <div class="symbol-row">
+                    <span class="symbol">ADEA</span>
+                    <span class="sector-chip">Technology</span>
+                    <span class="tier" style="color:#38bdf8;border-color:#38bdf8;">Tier 2</span>
+                </div>
+                <div class="company-name">Adeia Inc.</div>
+            </div>
+            <div class="price-box">
+                <div class="price">$33.22</div>
+                <div class="change positive">+12.50%</div>
+            </div>
+        </div>
+
+        <div class="score-risk-row">
+            <span class="score-pill">Score 62/100</span>
+            <span class="risk-pill">NORMAL</span>
+            <span class="sector-status-pill sector-leading">LEADING</span>
+        </div>
+
+        <div class="sector-strip">
+            <span>Sector <strong>Technology</strong></span>
+            <span>ETF <strong>XLK</strong> <b class="positive">+1.14%</b></span>
+            <span>Vs Sector <b class="positive">+11.36%</b></span>
+        </div>
+
+        <div class="catalyst-strip catalyst-none">
+            <div class="catalyst-label">⚪ Catalyst: No confirmed company-specific catalyst</div>
+            
+            
+            
+        </div>
+
+        <div class="metrics-grid">
+            <div><span>Liquidity</span><strong class="metric-ok">$58M</strong></div>
+            <div><span>ATR</span><strong class="metric-good">6.1%</strong></div>
+            <div><span>VWAP Dist</span><strong class="metric-risk">+6.9%</strong></div>
+            <div><span>HOD Dist</span><strong class="metric-good">-0.2%</strong></div>
+        </div>
+
+        <div class="status-row">
+            <span class="status-chip status-tech">Above VWAP</span>
+            <span class="status-chip status-positive">Near HOD</span>
+            <span class="status-chip status-neutral">NORMAL</span>
+        </div>
+
+        <div class="interpretation">Already moving; wait for pullback or tight consolidation.</div>
+
+        <div class="tags-row"><span class="tag tag-caution">Above VWAP extended</span><span class="tag tag-positive">Sector leading</span><span class="tag tag-positive">Vs sector +11.4%</span><span class="tag tag-neutral">$59M liq</span><span class="tag tag-positive">Upper range</span></div>
+
+        
+
+        
+        <div class="mini-panel">
+            <div class="mini-row"><span>Short %</span><strong>8%</strong></div>
+            <div class="mini-row"><span>Float</span><strong>108.1M</strong></div>
+            <div class="mini-row"><span>DTC</span><strong>4.2d</strong></div>
+        </div>
+        
+
+        <div class="card-actions">
+            <a class="action-btn action-chart" href="https://www.tradingview.com/chart/?symbol=ADEA" target="_blank">
+                <img src="assets/tradingview.png" alt="TradingView"> Chart
+            </a>
+            <a class="action-btn action-yahoo" href="https://finance.yahoo.com/quote/ADEA" target="_blank">
+                <img src="assets/yahoo.png" alt="Yahoo Finance"> Yahoo
+            </a>
+            <a class="action-btn action-twits" href="https://stocktwits.com/symbol/ADEA" target="_blank">
+                <img src="assets/stocktwits.png" alt="Stocktwits"> Twits
+            </a>
+        </div>
+    </div>
+    
     <div class="stock-card bucket-active" id="card-IONQ" style="--accent:#22c55e;">
         <div class="card-top">
             <div class="card-id">
@@ -2456,21 +2567,21 @@ td small {
                 <div class="company-name">IonQ, Inc.</div>
             </div>
             <div class="price-box">
-                <div class="price">$56.41</div>
-                <div class="change positive">+14.56%</div>
+                <div class="price">$56.70</div>
+                <div class="change positive">+15.15%</div>
             </div>
         </div>
 
         <div class="score-risk-row">
-            <span class="score-pill">Score 63/100</span>
+            <span class="score-pill">Score 61/100</span>
             <span class="risk-pill">NORMAL</span>
             <span class="sector-status-pill sector-leading">LEADING</span>
         </div>
 
         <div class="sector-strip">
             <span>Sector <strong>Technology</strong></span>
-            <span>ETF <strong>XLK</strong> <b class="positive">+1.30%</b></span>
-            <span>Vs Sector <b class="positive">+13.26%</b></span>
+            <span>ETF <strong>XLK</strong> <b class="positive">+1.14%</b></span>
+            <span>Vs Sector <b class="positive">+14.01%</b></span>
         </div>
 
         <div class="catalyst-strip catalyst-none">
@@ -2482,20 +2593,20 @@ td small {
 
         <div class="metrics-grid">
             <div><span>Liquidity</span><strong class="metric-good">$2.3B</strong></div>
-            <div><span>ATR</span><strong class="metric-caution">7.5%</strong></div>
+            <div><span>ATR</span><strong class="metric-caution">7.4%</strong></div>
             <div><span>VWAP Dist</span><strong class="metric-good">+2.9%</strong></div>
-            <div><span>HOD Dist</span><strong class="metric-caution">-1.6%</strong></div>
+            <div><span>HOD Dist</span><strong class="metric-ok">-1.1%</strong></div>
         </div>
 
         <div class="status-row">
             <span class="status-chip status-tech">Above VWAP</span>
-            <span class="status-chip status-neutral">HOD -1.6%</span>
+            <span class="status-chip status-neutral">HOD -1.1%</span>
             <span class="status-chip status-neutral">NORMAL</span>
         </div>
 
         <div class="interpretation">Already moving; wait for pullback or tight consolidation.</div>
 
-        <div class="tags-row"><span class="tag tag-caution">Big move +14.6%</span><span class="tag tag-positive">Sector leading</span><span class="tag tag-positive">Vs sector +13.3%</span><span class="tag tag-tech">Above VWAP</span><span class="tag tag-squeeze">SI 23%</span></div>
+        <div class="tags-row"><span class="tag tag-caution">Big move +15.2%</span><span class="tag tag-positive">Sector leading</span><span class="tag tag-positive">Vs sector +14.0%</span><span class="tag tag-tech">Above VWAP</span><span class="tag tag-squeeze">SI 23%</span></div>
 
         
 
@@ -2520,32 +2631,32 @@ td small {
         </div>
     </div>
     
-    <div class="stock-card bucket-active" id="card-P" style="--accent:#22c55e;">
+    <div class="stock-card bucket-active" id="card-EVC" style="--accent:#22c55e;">
         <div class="card-top">
             <div class="card-id">
                 <div class="symbol-row">
-                    <span class="symbol">P</span>
-                    <span class="sector-chip">Technology</span>
+                    <span class="symbol">EVC</span>
+                    <span class="sector-chip">Communication Services</span>
                     <span class="tier" style="color:#38bdf8;border-color:#38bdf8;">Tier 2</span>
                 </div>
-                <div class="company-name">Everpure, Inc.</div>
+                <div class="company-name">Entravision Communications Corp</div>
             </div>
             <div class="price-box">
-                <div class="price">$88.64</div>
-                <div class="change positive">+13.41%</div>
+                <div class="price">$8.70</div>
+                <div class="change positive">+21.44%</div>
             </div>
         </div>
 
         <div class="score-risk-row">
-            <span class="score-pill">Score 61/100</span>
+            <span class="score-pill">Score 60/100</span>
             <span class="risk-pill">NORMAL</span>
-            <span class="sector-status-pill sector-leading">LEADING</span>
+            <span class="sector-status-pill sector-weak">WEAK</span>
         </div>
 
         <div class="sector-strip">
-            <span>Sector <strong>Technology</strong></span>
-            <span>ETF <strong>XLK</strong> <b class="positive">+1.30%</b></span>
-            <span>Vs Sector <b class="positive">+12.11%</b></span>
+            <span>Sector <strong>Communication Services</strong></span>
+            <span>ETF <strong>XLC</strong> <b class="negative">-1.06%</b></span>
+            <span>Vs Sector <b class="positive">+22.49%</b></span>
         </div>
 
         <div class="catalyst-strip catalyst-none">
@@ -2556,34 +2667,34 @@ td small {
         </div>
 
         <div class="metrics-grid">
-            <div><span>Liquidity</span><strong class="metric-good">$232M</strong></div>
-            <div><span>ATR</span><strong class="metric-good">4.5%</strong></div>
-            <div><span>VWAP Dist</span><strong class="metric-risk">-0.1%</strong></div>
-            <div><span>HOD Dist</span><strong class="metric-risk">-5.4%</strong></div>
+            <div><span>Liquidity</span><strong class="metric-neutral">$28M</strong></div>
+            <div><span>ATR</span><strong class="metric-risk">8.1%</strong></div>
+            <div><span>VWAP Dist</span><strong class="metric-risk">+5.7%</strong></div>
+            <div><span>HOD Dist</span><strong class="metric-ok">-1.0%</strong></div>
         </div>
 
         <div class="status-row">
-            <span class="status-chip status-neutral">Below/Unknown</span>
-            <span class="status-chip status-neutral">HOD -5.4%</span>
+            <span class="status-chip status-tech">Above VWAP</span>
+            <span class="status-chip status-neutral">HOD -1.0%</span>
             <span class="status-chip status-neutral">NORMAL</span>
         </div>
 
         <div class="interpretation">Already moving; wait for pullback or tight consolidation.</div>
 
-        <div class="tags-row"><span class="tag tag-caution">Big move +13.4%</span><span class="tag tag-positive">Sector leading</span><span class="tag tag-positive">Vs sector +12.1%</span><span class="tag tag-tech">EMA stack ↑</span><span class="tag tag-neutral">$232M liq</span></div>
+        <div class="tags-row"><span class="tag tag-risk">Sector weak</span><span class="tag tag-caution">Above VWAP extended</span><span class="tag tag-positive">Vs sector +22.5%</span><span class="tag tag-positive">Upper range</span><span class="tag tag-tech">EMA stack ↑</span></div>
 
         
 
         
 
         <div class="card-actions">
-            <a class="action-btn action-chart" href="https://www.tradingview.com/chart/?symbol=P" target="_blank">
+            <a class="action-btn action-chart" href="https://www.tradingview.com/chart/?symbol=EVC" target="_blank">
                 <img src="assets/tradingview.png" alt="TradingView"> Chart
             </a>
-            <a class="action-btn action-yahoo" href="https://finance.yahoo.com/quote/P" target="_blank">
+            <a class="action-btn action-yahoo" href="https://finance.yahoo.com/quote/EVC" target="_blank">
                 <img src="assets/yahoo.png" alt="Yahoo Finance"> Yahoo
             </a>
-            <a class="action-btn action-twits" href="https://stocktwits.com/symbol/P" target="_blank">
+            <a class="action-btn action-twits" href="https://stocktwits.com/symbol/EVC" target="_blank">
                 <img src="assets/stocktwits.png" alt="Stocktwits"> Twits
             </a>
         </div>
@@ -2617,38 +2728,28 @@ td small {
         <tr>
             <td><strong>Solar</strong></td>
             <td>TAN</td>
-            <td class="positive">+3.29%</td>
-            <td class="positive">+2.96%</td>
+            <td class="positive">+2.71%</td>
+            <td class="positive">+2.50%</td>
             <td><span class="sector-status-pill sector-leading">LEADING</span></td>
             <td>1</td>
             <td>—</td>
         </tr>
         
         <tr>
+            <td><strong>Energy</strong></td>
+            <td>XLE</td>
+            <td class="positive">+2.49%</td>
+            <td class="positive">+2.27%</td>
+            <td><span class="sector-status-pill sector-leading">LEADING</span></td>
+            <td>12</td>
+            <td>KGS, NESR</td>
+        </tr>
+        
+        <tr>
             <td><strong>Automobiles</strong></td>
             <td>CARZ</td>
             <td class="positive">+2.36%</td>
-            <td class="positive">+2.04%</td>
-            <td><span class="sector-status-pill sector-leading">LEADING</span></td>
-            <td>3</td>
-            <td>—</td>
-        </tr>
-        
-        <tr>
-            <td><strong>Energy</strong></td>
-            <td>XLE</td>
-            <td class="positive">+1.98%</td>
-            <td class="positive">+1.66%</td>
-            <td><span class="sector-status-pill sector-leading">LEADING</span></td>
-            <td>9</td>
-            <td>KGS, PUMP</td>
-        </tr>
-        
-        <tr>
-            <td><strong>Semiconductors</strong></td>
-            <td>SMH</td>
-            <td class="positive">+1.63%</td>
-            <td class="positive">+1.30%</td>
+            <td class="positive">+2.15%</td>
             <td><span class="sector-status-pill sector-leading">LEADING</span></td>
             <td>3</td>
             <td>—</td>
@@ -2657,41 +2758,51 @@ td small {
         <tr>
             <td><strong>Crypto</strong></td>
             <td>IBIT</td>
-            <td class="positive">+1.41%</td>
-            <td class="positive">+1.09%</td>
+            <td class="positive">+1.75%</td>
+            <td class="positive">+1.54%</td>
             <td><span class="sector-status-pill sector-leading">LEADING</span></td>
             <td>6</td>
-            <td>RIOT</td>
+            <td>RIOT, MARA</td>
         </tr>
         
         <tr>
-            <td><strong>Aerospace &amp; Defense</strong></td>
-            <td>ITA</td>
-            <td class="positive">+1.40%</td>
-            <td class="positive">+1.08%</td>
+            <td><strong>Semiconductors</strong></td>
+            <td>SMH</td>
+            <td class="positive">+1.39%</td>
+            <td class="positive">+1.17%</td>
             <td><span class="sector-status-pill sector-leading">LEADING</span></td>
-            <td>2</td>
-            <td>ASTS, LUNR</td>
-        </tr>
-        
-        <tr>
-            <td><strong>Technology</strong></td>
-            <td>XLK</td>
-            <td class="positive">+1.30%</td>
-            <td class="positive">+0.98%</td>
-            <td><span class="sector-status-pill sector-leading">LEADING</span></td>
-            <td>38</td>
-            <td>APLD, QBTS, HIMX, NVTS</td>
+            <td>3</td>
+            <td>—</td>
         </tr>
         
         <tr>
             <td><strong>Basic Materials</strong></td>
             <td>XLB</td>
-            <td class="positive">+1.28%</td>
-            <td class="positive">+0.96%</td>
+            <td class="positive">+1.32%</td>
+            <td class="positive">+1.10%</td>
             <td><span class="sector-status-pill sector-leading">LEADING</span></td>
-            <td>25</td>
-            <td>HYMC</td>
+            <td>22</td>
+            <td>B</td>
+        </tr>
+        
+        <tr>
+            <td><strong>Technology</strong></td>
+            <td>XLK</td>
+            <td class="positive">+1.14%</td>
+            <td class="positive">+0.93%</td>
+            <td><span class="sector-status-pill sector-leading">LEADING</span></td>
+            <td>35</td>
+            <td>APLD, RGTI, HIMX, LASR</td>
+        </tr>
+        
+        <tr>
+            <td><strong>Aerospace &amp; Defense</strong></td>
+            <td>ITA</td>
+            <td class="positive">+1.12%</td>
+            <td class="positive">+0.90%</td>
+            <td><span class="sector-status-pill sector-leading">LEADING</span></td>
+            <td>2</td>
+            <td>—</td>
         </tr>
         </tbody>
             </table>
@@ -2727,163 +2838,163 @@ td small {
                 </thead>
                 <tbody>
         <tr>
-            <td><strong>APLD</strong><br><small>Technology</small></td>
-            <td>72</td>
+            <td><strong>KGS</strong><br><small>Energy</small></td>
+            <td>73</td>
             <td>1</td>
             <td>Potential Mover</td>
-            <td>$45.74</td>
-            <td class="positive">+10.88%</td>
-            <td>$1.1B</td>
+            <td>$75.56</td>
+            <td class="positive">+8.49%</td>
+            <td>$100M</td>
+            <td>3.2%</td>
+            <td>Above</td>
+            <td>NORMAL</td>
+            <td>LEADING<br><small>+6.00% vs sector</small></td>
+            <td>No confirmed company-specific catalyst</td>
+            <td>—</td>
+        </tr>
+        
+        <tr>
+            <td><strong>APLD</strong><br><small>Technology</small></td>
+            <td>70</td>
+            <td>1</td>
+            <td>Potential Mover</td>
+            <td>$45.88</td>
+            <td class="positive">+11.22%</td>
+            <td>$1.2B</td>
             <td>7.7%</td>
             <td>Above</td>
             <td>NORMAL</td>
-            <td>LEADING<br><small>+9.58% vs sector</small></td>
+            <td>LEADING<br><small>+10.08% vs sector</small></td>
             <td>Company-specific fresh news</td>
             <td>Why Applied Digital Stock Is Up Following Cloud Spin-Off</td>
         </tr>
         
         <tr>
-            <td><strong>KGS</strong><br><small>Energy</small></td>
-            <td>71</td>
+            <td><strong>FPS</strong><br><small>Industrials</small></td>
+            <td>66</td>
             <td>1</td>
             <td>Potential Mover</td>
-            <td>$76.26</td>
-            <td class="positive">+9.49%</td>
-            <td>$101M</td>
-            <td>3.2%</td>
+            <td>$42.71</td>
+            <td class="positive">+5.77%</td>
+            <td>$175M</td>
+            <td>6.0%</td>
             <td>Above</td>
             <td>NORMAL</td>
-            <td>LEADING<br><small>+7.51% vs sector</small></td>
+            <td>LEADING<br><small>+4.79% vs sector</small></td>
             <td>No confirmed company-specific catalyst</td>
             <td>—</td>
         </tr>
         
         <tr>
-            <td><strong>ASTS</strong><br><small>Aerospace &amp; Defense</small></td>
-            <td>68</td>
+            <td><strong>B</strong><br><small>Basic Materials</small></td>
+            <td>65</td>
             <td>1</td>
             <td>Potential Mover</td>
-            <td>$82.95</td>
-            <td class="positive">+10.53%</td>
-            <td>$1.6B</td>
-            <td>7.3%</td>
+            <td>$46.69</td>
+            <td class="positive">+8.25%</td>
+            <td>$543M</td>
+            <td>3.2%</td>
             <td>Above</td>
             <td>NORMAL</td>
-            <td>LEADING<br><small>+9.13% vs sector</small></td>
+            <td>LEADING<br><small>+6.94% vs sector</small></td>
             <td>Company-specific fresh news</td>
-            <td>Is AST SpaceMobile A Buy? Stock Climbs As Major Shareholder Sale Ends</td>
+            <td>Gold Prices Are Booming, And Barrick Is Cashing In Big</td>
         </tr>
         
         <tr>
-            <td><strong>HIMS</strong><br><small>Healthcare</small></td>
-            <td>66</td>
-            <td>1</td>
+            <td><strong>NESR</strong><br><small>Energy</small></td>
+            <td>64</td>
+            <td>2</td>
             <td>Potential Mover</td>
-            <td>$29.82</td>
-            <td class="positive">+5.48%</td>
-            <td>$981M</td>
+            <td>$25.54</td>
+            <td class="positive">+10.56%</td>
+            <td>$45M</td>
+            <td>4.8%</td>
+            <td>Above</td>
+            <td>NORMAL</td>
+            <td>LEADING<br><small>+8.08% vs sector</small></td>
+            <td>No confirmed company-specific catalyst</td>
+            <td>—</td>
+        </tr>
+        
+        <tr>
+            <td><strong>RGTI</strong><br><small>Technology</small></td>
+            <td>64</td>
+            <td>2</td>
+            <td>Potential Mover</td>
+            <td>$20.34</td>
+            <td class="positive">+7.39%</td>
+            <td>$656M</td>
             <td>6.8%</td>
             <td>Above</td>
             <td>NORMAL</td>
-            <td>NEUTRAL<br><small>+5.52% vs sector</small></td>
-            <td>Company-specific fresh news</td>
-            <td>Why Is Hims &amp; Hers Health Stock Trading Higher On Monday?</td>
+            <td>LEADING<br><small>+6.25% vs sector</small></td>
+            <td>No confirmed company-specific catalyst</td>
+            <td>—</td>
         </tr>
         
         <tr>
             <td><strong>RIOT</strong><br><small>Crypto</small></td>
-            <td>66</td>
-            <td>1</td>
-            <td>Potential Mover</td>
-            <td>$25.41</td>
-            <td class="positive">+5.50%</td>
-            <td>$538M</td>
-            <td>5.9%</td>
-            <td>Above</td>
-            <td>NORMAL</td>
-            <td>LEADING<br><small>+4.09% vs sector</small></td>
-            <td>No confirmed company-specific catalyst</td>
-            <td>—</td>
-        </tr>
-        
-        <tr>
-            <td><strong>QBTS</strong><br><small>Technology</small></td>
             <td>64</td>
             <td>2</td>
             <td>Potential Mover</td>
-            <td>$24.11</td>
-            <td class="positive">+6.82%</td>
-            <td>$836M</td>
-            <td>7.0%</td>
+            <td>$25.52</td>
+            <td class="positive">+5.96%</td>
+            <td>$544M</td>
+            <td>5.9%</td>
             <td>Above</td>
             <td>NORMAL</td>
-            <td>LEADING<br><small>+5.52% vs sector</small></td>
+            <td>LEADING<br><small>+4.21% vs sector</small></td>
             <td>No confirmed company-specific catalyst</td>
             <td>—</td>
         </tr>
         
         <tr>
-            <td><strong>VOYG</strong><br><small>Industrials</small></td>
-            <td>62</td>
+            <td><strong>MARA</strong><br><small>Crypto</small></td>
+            <td>63</td>
             <td>2</td>
             <td>Potential Mover</td>
-            <td>$33.09</td>
-            <td class="positive">+11.26%</td>
-            <td>$53M</td>
-            <td>7.0%</td>
+            <td>$13.61</td>
+            <td class="positive">+5.14%</td>
+            <td>$612M</td>
+            <td>6.3%</td>
             <td>Above</td>
             <td>NORMAL</td>
-            <td>IMPROVING<br><small>+10.38% vs sector</small></td>
-            <td>No confirmed company-specific catalyst</td>
-            <td>—</td>
-        </tr>
-        
-        <tr>
-            <td><strong>PUMP</strong><br><small>Energy</small></td>
-            <td>62</td>
-            <td>2</td>
-            <td>Potential Mover</td>
-            <td>$16.48</td>
-            <td class="positive">+5.10%</td>
-            <td>$82M</td>
-            <td>6.5%</td>
-            <td>Above</td>
-            <td>NORMAL</td>
-            <td>LEADING<br><small>+3.11% vs sector</small></td>
+            <td>LEADING<br><small>+3.39% vs sector</small></td>
             <td>No confirmed company-specific catalyst</td>
             <td>—</td>
         </tr>
         
         <tr>
             <td><strong>HIMX</strong><br><small>Technology</small></td>
-            <td>83</td>
+            <td>87</td>
             <td>S</td>
             <td>Active Momentum</td>
-            <td>$21.47</td>
-            <td class="positive">+20.69%</td>
-            <td>$107M</td>
-            <td>7.4%</td>
+            <td>$21.43</td>
+            <td class="positive">+20.49%</td>
+            <td>$108M</td>
+            <td>7.5%</td>
             <td>Above</td>
             <td>NORMAL</td>
-            <td>LEADING<br><small>+19.38% vs sector</small></td>
+            <td>LEADING<br><small>+19.35% vs sector</small></td>
             <td>No confirmed company-specific catalyst</td>
             <td>—</td>
         </tr>
         
         <tr>
-            <td><strong>LUNR</strong><br><small>Aerospace &amp; Defense</small></td>
+            <td><strong>LQDA</strong><br><small>Healthcare</small></td>
             <td>73</td>
             <td>1</td>
             <td>Active Momentum</td>
-            <td>$32.48</td>
-            <td class="positive">+12.11%</td>
-            <td>$404M</td>
-            <td>8.8%</td>
+            <td>$49.72</td>
+            <td class="positive">+17.30%</td>
+            <td>$57M</td>
+            <td>4.6%</td>
             <td>Above</td>
             <td>NORMAL</td>
-            <td>LEADING<br><small>+10.71% vs sector</small></td>
-            <td>No confirmed company-specific catalyst</td>
-            <td>—</td>
+            <td>NEUTRAL<br><small>+17.49% vs sector</small></td>
+            <td>Company-specific fresh news</td>
+            <td>Liquidia, Beazer Homes, Circle Internet Group And Other Big Stocks Moving Higher On M</td>
         </tr>
         
         <tr>
@@ -2891,93 +3002,93 @@ td small {
             <td>72</td>
             <td>1</td>
             <td>Active Momentum</td>
-            <td>$65.51</td>
-            <td class="positive">+19.98%</td>
-            <td>$166M</td>
-            <td>6.3%</td>
+            <td>$65.00</td>
+            <td class="positive">+19.04%</td>
+            <td>$167M</td>
+            <td>6.4%</td>
             <td>Above</td>
             <td>NORMAL</td>
-            <td>NEUTRAL<br><small>+20.23% vs sector</small></td>
+            <td>NEUTRAL<br><small>+19.26% vs sector</small></td>
             <td>No confirmed company-specific catalyst</td>
             <td>—</td>
         </tr>
         
         <tr>
-            <td><strong>LQDA</strong><br><small>Healthcare</small></td>
-            <td>70</td>
-            <td>1</td>
-            <td>Active Momentum</td>
-            <td>$48.63</td>
-            <td class="positive">+14.73%</td>
-            <td>$55M</td>
-            <td>4.7%</td>
-            <td>Above</td>
-            <td>NORMAL</td>
-            <td>NEUTRAL<br><small>+14.77% vs sector</small></td>
-            <td>No confirmed company-specific catalyst</td>
-            <td>—</td>
-        </tr>
-        
-        <tr>
-            <td><strong>HYMC</strong><br><small>Basic Materials</small></td>
+            <td><strong>LASR</strong><br><small>Technology</small></td>
             <td>65</td>
             <td>1</td>
             <td>Active Momentum</td>
-            <td>$45.00</td>
-            <td class="positive">+17.07%</td>
-            <td>$91M</td>
-            <td>7.4%</td>
+            <td>$83.52</td>
+            <td class="positive">+13.00%</td>
+            <td>$97M</td>
+            <td>7.8%</td>
             <td>Above</td>
             <td>NORMAL</td>
-            <td>LEADING<br><small>+15.79% vs sector</small></td>
+            <td>LEADING<br><small>+11.86% vs sector</small></td>
             <td>No confirmed company-specific catalyst</td>
             <td>—</td>
         </tr>
         
         <tr>
             <td><strong>NVTS</strong><br><small>Technology</small></td>
-            <td>63</td>
+            <td>64</td>
             <td>2</td>
             <td>Active Momentum</td>
-            <td>$22.28</td>
-            <td class="positive">+22.42%</td>
-            <td>$877M</td>
-            <td>11.2%</td>
+            <td>$22.01</td>
+            <td class="positive">+20.90%</td>
+            <td>$872M</td>
+            <td>11.3%</td>
             <td>Above</td>
             <td>NORMAL</td>
-            <td>LEADING<br><small>+21.12% vs sector</small></td>
+            <td>LEADING<br><small>+19.76% vs sector</small></td>
+            <td>No confirmed company-specific catalyst</td>
+            <td>—</td>
+        </tr>
+        
+        <tr>
+            <td><strong>ADEA</strong><br><small>Technology</small></td>
+            <td>62</td>
+            <td>2</td>
+            <td>Active Momentum</td>
+            <td>$33.22</td>
+            <td class="positive">+12.50%</td>
+            <td>$58M</td>
+            <td>6.1%</td>
+            <td>Above</td>
+            <td>NORMAL</td>
+            <td>LEADING<br><small>+11.36% vs sector</small></td>
             <td>No confirmed company-specific catalyst</td>
             <td>—</td>
         </tr>
         
         <tr>
             <td><strong>IONQ</strong><br><small>Technology</small></td>
-            <td>63</td>
+            <td>61</td>
             <td>2</td>
             <td>Active Momentum</td>
-            <td>$56.41</td>
-            <td class="positive">+14.56%</td>
+            <td>$56.70</td>
+            <td class="positive">+15.15%</td>
             <td>$2.3B</td>
-            <td>7.5%</td>
+            <td>7.4%</td>
             <td>Above</td>
             <td>NORMAL</td>
-            <td>LEADING<br><small>+13.26% vs sector</small></td>
+            <td>LEADING<br><small>+14.01% vs sector</small></td>
             <td>No confirmed company-specific catalyst</td>
             <td>—</td>
         </tr>
         
         <tr>
-            <td><strong>P</strong><br><small>Technology</small></td>
-            <td>61</td>
+            <td><strong>EVC</strong><br><small>Communication Services</small></td>
+            <td>60</td>
             <td>2</td>
             <td>Active Momentum</td>
-            <td>$88.64</td>
-            <td class="positive">+13.41%</td>
-            <td>$232M</td>
-            <td>4.5%</td>
-            <td>Below/NA</td>
+            <td>$8.70</td>
+            <td class="positive">+21.44%</td>
+            <td>$28M</td>
+            <td>8.1%</td>
+            <td>Above</td>
             <td>NORMAL</td>
-            <td>LEADING<br><small>+12.11% vs sector</small></td>
+            <td>WEAK<br><small>+22.49% vs sector</small></td>
             <td>No confirmed company-specific catalyst</td>
             <td>—</td>
         </tr>
