@@ -2,16 +2,11 @@ name: Signal Desk Refresh
 
 on:
   schedule:
-    # Signal Desk Refresh — every 5 minutes during regular market hours.
-    # Timezone-aware New York schedule. GitHub handles EDT/EST automatically.
-
-    # 9:30 AM–9:55 AM ET
-    - cron: "30,35,40,45,50,55 9 * * 1-5"
-      timezone: "America/New_York"
-
-    # 10:00 AM–3:55 PM ET
-    - cron: "0,5,10,15,20,25,30,35,40,45,50,55 10,11,12,13,14,15 * * 1-5"
-      timezone: "America/New_York"
+    # TEMPORARY PROOF TEST:
+    # Runs every 5 minutes on weekdays.
+    # Purpose: confirm GitHub scheduled workflow is firing.
+    # After we confirm Event = schedule, we will tighten this back to market hours.
+    - cron: "*/5 * * * 1-5"
 
   workflow_dispatch:
 
