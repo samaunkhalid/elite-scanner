@@ -1650,6 +1650,10 @@ def build_dashboard(potential, active, extended, highrisk, raw, active_watchlist
     padding: 0;
 }
 
+html {
+    scroll-padding-top: 118px;
+}
+
 body {
     background:
         radial-gradient(circle at top right, rgba(16, 185, 129, 0.08), transparent 30%),
@@ -1902,6 +1906,7 @@ body {
 .negative { color: #ef4444 !important; }
 
 .signal-desk-panel {
+    scroll-margin-top: 118px;
     background: rgba(15, 23, 42, 0.84);
     border: 1px solid rgba(148, 163, 184, 0.13);
     border-radius: 14px;
@@ -2181,6 +2186,7 @@ body {
 .desk-table-section,
 .sector-snapshot,
 .signal-desk-section {
+    scroll-margin-top: 118px;
     margin-bottom: 24px;
 }
 
@@ -2231,6 +2237,7 @@ body {
 }
 
 .stock-card {
+    scroll-margin-top: 118px;
     border-radius: 16px;
     border: 1px solid rgba(148, 163, 184, 0.13);
     border-top: 2px solid var(--accent);
