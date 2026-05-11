@@ -1,5 +1,5 @@
 {
-  "generated_at_et": "2026-05-11T15:37:03-04:00",
+  "generated_at_et": "2026-05-11T15:37:50-04:00",
   "meta": {
     "market_phase": "VALID_AFTERNOON",
     "alpaca_feed": "iex",
@@ -43,15 +43,15 @@
       "market_phase": "VALID_AFTERNOON",
       "reason": "Clean candidate. Waiting for VWAP pullback or HOD breakout structure.",
       "invalidation": "Lose VWAP, lose trigger, break pullback low, stop would hit, or signal becomes stale.",
-      "last_checked": "2026-05-11T15:37:03-04:00",
-      "updated_at": "2026-05-11T15:37:03-04:00",
+      "last_checked": "2026-05-11T15:37:50-04:00",
+      "updated_at": "2026-05-11T15:37:50-04:00",
       "session_date": "2026-05-11",
       "actionable": false,
       "actionability": "WATCH",
       "suppression_reason": "",
       "risk_flags": "",
       "company_name": "First Majestic Silver Corp.",
-      "detected_at": "2026-05-11T15:37:03-04:00"
+      "detected_at": "2026-05-11T15:37:50-04:00"
     },
     "B": {
       "symbol": "B",
@@ -82,15 +82,15 @@
       "market_phase": "VALID_AFTERNOON",
       "reason": "Clean candidate. Waiting for VWAP pullback or HOD breakout structure.",
       "invalidation": "Lose VWAP, lose trigger, break pullback low, stop would hit, or signal becomes stale.",
-      "last_checked": "2026-05-11T15:37:03-04:00",
-      "updated_at": "2026-05-11T15:37:03-04:00",
+      "last_checked": "2026-05-11T15:37:50-04:00",
+      "updated_at": "2026-05-11T15:37:50-04:00",
       "session_date": "2026-05-11",
       "actionable": false,
       "actionability": "WATCH",
       "suppression_reason": "",
       "risk_flags": "",
       "company_name": "Barrick Mining Corporation",
-      "detected_at": "2026-05-11T15:37:03-04:00"
+      "detected_at": "2026-05-11T15:37:50-04:00"
     },
     "EXK": {
       "symbol": "EXK",
@@ -121,15 +121,15 @@
       "market_phase": "VALID_AFTERNOON",
       "reason": "Clean candidate. Waiting for VWAP pullback or HOD breakout structure.",
       "invalidation": "Lose VWAP, lose trigger, break pullback low, stop would hit, or signal becomes stale.",
-      "last_checked": "2026-05-11T15:37:03-04:00",
-      "updated_at": "2026-05-11T15:37:03-04:00",
+      "last_checked": "2026-05-11T15:37:50-04:00",
+      "updated_at": "2026-05-11T15:37:50-04:00",
       "session_date": "2026-05-11",
       "actionable": false,
       "actionability": "WATCH",
       "suppression_reason": "",
       "risk_flags": "",
       "company_name": "Endeavour Silver Corporation",
-      "detected_at": "2026-05-11T15:37:03-04:00"
+      "detected_at": "2026-05-11T15:37:50-04:00"
     },
     "FPS": {
       "symbol": "FPS",
@@ -160,15 +160,15 @@
       "market_phase": "VALID_AFTERNOON",
       "reason": "Clean candidate. Waiting for VWAP pullback or HOD breakout structure.",
       "invalidation": "Lose VWAP, lose trigger, break pullback low, stop would hit, or signal becomes stale.",
-      "last_checked": "2026-05-11T15:37:03-04:00",
-      "updated_at": "2026-05-11T15:37:03-04:00",
+      "last_checked": "2026-05-11T15:37:50-04:00",
+      "updated_at": "2026-05-11T15:37:50-04:00",
       "session_date": "2026-05-11",
       "actionable": false,
       "actionability": "WATCH",
       "suppression_reason": "",
       "risk_flags": "",
       "company_name": "Forgent Power Solutions, Inc.",
-      "detected_at": "2026-05-11T15:37:03-04:00"
+      "detected_at": "2026-05-11T15:37:50-04:00"
     },
     "HL": {
       "symbol": "HL",
@@ -199,15 +199,15 @@
       "market_phase": "VALID_AFTERNOON",
       "reason": "Clean candidate. Waiting for VWAP pullback or HOD breakout structure.",
       "invalidation": "Lose VWAP, lose trigger, break pullback low, stop would hit, or signal becomes stale.",
-      "last_checked": "2026-05-11T15:37:03-04:00",
-      "updated_at": "2026-05-11T15:37:03-04:00",
+      "last_checked": "2026-05-11T15:37:50-04:00",
+      "updated_at": "2026-05-11T15:37:50-04:00",
       "session_date": "2026-05-11",
       "actionable": false,
       "actionability": "WATCH",
       "suppression_reason": "",
       "risk_flags": "",
       "company_name": "Hecla Mining Company",
-      "detected_at": "2026-05-11T15:37:03-04:00"
+      "detected_at": "2026-05-11T15:37:50-04:00"
     },
     "LASR": {
       "symbol": "LASR",
@@ -223,11 +223,11 @@
       "risk_category": "NORMAL",
       "setup_bucket": "ACTIVE_MOMENTUM",
       "entry_trigger": 83.5267,
-      "stop_loss": 79.378,
+      "stop_loss": 80.158,
       "target_1": 83.8748,
       "target_2": 83.9588,
-      "reward_risk": 0.08,
-      "stop_distance_pct": 4.97,
+      "reward_risk": 0.1,
+      "stop_distance_pct": 4.03,
       "price": 83.465,
       "vwap": 82.718,
       "hod": 84.055,
@@ -238,15 +238,15 @@
       "market_phase": "VALID_AFTERNOON",
       "reason": "Clean candidate. Waiting for VWAP pullback or HOD breakout structure.",
       "invalidation": "Lose VWAP, lose trigger, break pullback low, stop would hit, or signal becomes stale.",
-      "last_checked": "2026-05-11T15:37:03-04:00",
-      "updated_at": "2026-05-11T15:37:03-04:00",
+      "last_checked": "2026-05-11T15:37:50-04:00",
+      "updated_at": "2026-05-11T15:37:50-04:00",
       "session_date": "2026-05-11",
       "actionable": false,
       "actionability": "WATCH",
       "suppression_reason": "",
       "risk_flags": "",
       "company_name": "nLIGHT, Inc.",
-      "detected_at": "2026-05-11T15:37:03-04:00"
+      "detected_at": "2026-05-11T15:37:50-04:00"
     },
     "LUNR": {
       "symbol": "LUNR",
@@ -277,15 +277,15 @@
       "market_phase": "VALID_AFTERNOON",
       "reason": "Clean candidate. Waiting for VWAP pullback or HOD breakout structure.",
       "invalidation": "Lose VWAP, lose trigger, break pullback low, stop would hit, or signal becomes stale.",
-      "last_checked": "2026-05-11T15:37:03-04:00",
-      "updated_at": "2026-05-11T15:37:03-04:00",
+      "last_checked": "2026-05-11T15:37:50-04:00",
+      "updated_at": "2026-05-11T15:37:50-04:00",
       "session_date": "2026-05-11",
       "actionable": false,
       "actionability": "WATCH",
       "suppression_reason": "",
       "risk_flags": "",
       "company_name": "Intuitive Machines, Inc.",
-      "detected_at": "2026-05-11T15:37:03-04:00"
+      "detected_at": "2026-05-11T15:37:50-04:00"
     },
     "NOK": {
       "symbol": "NOK",
@@ -316,15 +316,15 @@
       "market_phase": "VALID_AFTERNOON",
       "reason": "Clean candidate. Waiting for VWAP pullback or HOD breakout structure.",
       "invalidation": "Lose VWAP, lose trigger, break pullback low, stop would hit, or signal becomes stale.",
-      "last_checked": "2026-05-11T15:37:03-04:00",
-      "updated_at": "2026-05-11T15:37:03-04:00",
+      "last_checked": "2026-05-11T15:37:50-04:00",
+      "updated_at": "2026-05-11T15:37:50-04:00",
       "session_date": "2026-05-11",
       "actionable": false,
       "actionability": "WATCH",
       "suppression_reason": "",
       "risk_flags": "",
       "company_name": "Nokia Corporation Sponsored",
-      "detected_at": "2026-05-11T15:37:03-04:00"
+      "detected_at": "2026-05-11T15:37:50-04:00"
     },
     "PAAS": {
       "symbol": "PAAS",
@@ -340,11 +340,11 @@
       "risk_category": "NORMAL",
       "setup_bucket": "POTENTIAL_MOVER",
       "entry_trigger": 62.4025,
-      "stop_loss": 57.485,
+      "stop_loss": 57.505,
       "target_1": 62.416,
       "target_2": 62.4785,
       "reward_risk": 0.0,
-      "stop_distance_pct": 7.88,
+      "stop_distance_pct": 7.85,
       "price": 62.39,
       "vwap": 61.8599,
       "hod": 62.685,
@@ -355,15 +355,15 @@
       "market_phase": "VALID_AFTERNOON",
       "reason": "Clean candidate. Waiting for VWAP pullback or HOD breakout structure.",
       "invalidation": "Lose VWAP, lose trigger, break pullback low, stop would hit, or signal becomes stale.",
-      "last_checked": "2026-05-11T15:37:03-04:00",
-      "updated_at": "2026-05-11T15:37:03-04:00",
+      "last_checked": "2026-05-11T15:37:50-04:00",
+      "updated_at": "2026-05-11T15:37:50-04:00",
       "session_date": "2026-05-11",
       "actionable": false,
       "actionability": "WATCH",
       "suppression_reason": "",
       "risk_flags": "",
       "company_name": "Pan American Silver Corp.",
-      "detected_at": "2026-05-11T15:37:03-04:00"
+      "detected_at": "2026-05-11T15:37:50-04:00"
     }
   }
 }
