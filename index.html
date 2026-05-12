@@ -344,6 +344,124 @@ body {
     font-size: 12px;
 }
 
+.signal-diagnostics {
+    margin-top: 10px;
+    padding: 10px;
+    border-radius: 12px;
+    border: 1px solid rgba(56, 189, 248, 0.16);
+    background: rgba(2, 6, 23, 0.26);
+}
+
+.signal-diagnostics-top {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    align-items: flex-start;
+    margin-bottom: 8px;
+}
+
+.signal-diagnostics-top strong {
+    display: block;
+    color: #e5e7eb;
+    font-size: 12px;
+    font-weight: 800;
+}
+
+.signal-diagnostics-top span {
+    display: block;
+    color: #94a3b8;
+    font-size: 10.5px;
+    margin-top: 1px;
+}
+
+.signal-diagnostics-top b {
+    color: #7dd3fc;
+    border: 1px solid rgba(56, 189, 248, 0.18);
+    background: rgba(14, 165, 233, 0.10);
+    border-radius: 999px;
+    padding: 4px 8px;
+    font-size: 10px;
+    white-space: nowrap;
+}
+
+.diagnostic-blockers {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 8px;
+}
+
+.diagnostic-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 4px 8px;
+    border-radius: 999px;
+    border: 1px solid rgba(148, 163, 184, 0.14);
+    background: rgba(15, 23, 42, 0.62);
+    color: #cbd5e1;
+    font-size: 10px;
+}
+
+.diagnostic-pill b {
+    color: #fbbf24;
+}
+
+.diagnostic-preview {
+    display: grid;
+    gap: 6px;
+}
+
+.diagnostic-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 8px 9px;
+    border-radius: 10px;
+    background: rgba(15, 23, 42, 0.48);
+    border: 1px solid rgba(148, 163, 184, 0.08);
+}
+
+.diagnostic-row strong {
+    display: block;
+    color: #38bdf8;
+    font-size: 12px;
+    font-weight: 850;
+}
+
+.diagnostic-row span {
+    color: #94a3b8;
+    font-size: 10.5px;
+    line-height: 1.35;
+}
+
+.diagnostic-metrics {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    align-content: flex-start;
+    min-width: 210px;
+}
+
+.diagnostic-metrics span {
+    border-radius: 8px;
+    padding: 4px 6px;
+    background: rgba(2, 6, 23, 0.35);
+    border: 1px solid rgba(148, 163, 184, 0.08);
+    white-space: nowrap;
+}
+
+.diagnostic-metrics b {
+    color: #e5e7eb;
+}
+
+.diagnostic-more {
+    color: #94a3b8;
+    font-size: 10.5px;
+    padding: 3px 2px 0;
+}
+
 .signal-desk-columns {
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -1319,7 +1437,7 @@ td small {
             <p>Technical Potential Movers + Catalyst Confirmation + Sector Context</p>
         </div>
         <div class="header-meta">
-            <span class="scan-pill">Last Scan: 2026-05-12 12:29 ET</span>
+            <span class="scan-pill">Last Scan: 2026-05-12 12:51 ET</span>
             <span class="status-pill status-green">Market: OPEN</span>
         </div>
     </div>
@@ -1411,6 +1529,78 @@ td small {
                 <strong>No signal at this moment.</strong>
                 <span>Scanner is monitoring for Watch, Trigger Ready, and Active setups.</span>
             </div>
+            
+        <div class="signal-diagnostics">
+            <div class="signal-diagnostics-top">
+                <div>
+                    <strong>Signal Diagnostics</strong>
+                    <span>No valid Watch / Ready / Active setup. Showing compact rejection summary.</span>
+                </div>
+                <b>18 Rejected</b>
+            </div>
+            
+            <div class="diagnostic-blockers">
+                
+                <span class="diagnostic-pill">
+                    <b>40</b> R/R below minimum
+                </span>
+            
+                <span class="diagnostic-pill">
+                    <b>18</b> Market severe risk-off
+                </span>
+            
+                <span class="diagnostic-pill">
+                    <b>18</b> Confidence below Watch minimum
+                </span>
+            
+                <span class="diagnostic-pill">
+                    <b>18</b> Confidence below Ready minimum
+                </span>
+            
+            </div>
+        
+            <div class="diagnostic-preview">
+                
+            <div class="diagnostic-row">
+                <div>
+                    <strong>WEN</strong>
+                    <span>Market severe risk-off; Confidence below Watch minimum; R/R below minimum</span>
+                </div>
+                <div class="diagnostic-metrics">
+                    <span>Conf <b>58.8%</b></span>
+                    <span>R/R <b>0.50:1</b></span>
+                    <span>Score <b>81</b></span>
+                </div>
+            </div>
+        
+            <div class="diagnostic-row">
+                <div>
+                    <strong>BTI</strong>
+                    <span>Market severe risk-off; Confidence below Watch minimum; R/R below minimum</span>
+                </div>
+                <div class="diagnostic-metrics">
+                    <span>Conf <b>58.4%</b></span>
+                    <span>R/R <b>0.01:1</b></span>
+                    <span>Score <b>62</b></span>
+                </div>
+            </div>
+        
+            <div class="diagnostic-row">
+                <div>
+                    <strong>ALKS</strong>
+                    <span>Market severe risk-off; Confidence below Watch minimum; R/R below minimum</span>
+                </div>
+                <div class="diagnostic-metrics">
+                    <span>Conf <b>56.4%</b></span>
+                    <span>R/R <b>0.02:1</b></span>
+                    <span>Score <b>57</b></span>
+                </div>
+            </div>
+        
+                <div class="diagnostic-more">+15 more rejected candidates hidden</div>
+            </div>
+        </div>
+    
         </section>
         
 
