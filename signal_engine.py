@@ -20,6 +20,7 @@ Core design:
   - Long-side only.
   - Red/risk-off market can still allow RELATIVE-STRENGTH WATCH candidates.
   - Invalid trade plans must NOT appear as WATCH.
+  - Late-day setups require stronger volume, no bearish divergence, and EMA9 confirmation.
 
 Important:
   - This engine generates dashboard signals only.
@@ -83,7 +84,24 @@ MIN_RR_WATCH = 0.75
 MIN_RR = 1.5
 MIN_CONF_WATCH = 60.0
 MIN_CONF_READY = 75.0
+MIN_CONF_READY_LATE_DAY = 80.0
 MIN_CONF_ACTIVE = 85.0
+
+# Late-day / quality filters.
+LATE_DAY_READY_START = dtime(14, 30)
+VOLUME_FADE_RATIO = 0.60          # Recent 5x5m volume < 60% of morning reference = fading.
+VOLUME_EXPANSION_RATIO = 1.05     # Recent 5x5m volume must be > prior 5x5m by 5% for late-day ready.
+MIN_LATE_DAY_MORNING_VOL_RATIO = 0.60
+BEARISH_DIVERGENCE_PENALTY = 10
+VOLUME_FADE_PENALTY = 8
+LATE_DAY_NO_VOLUME_EXPANSION_PENALTY = 5
+
+# EMA 9 confirmation.
+EMA_SPAN = 9
+EMA9_BULLISH_BONUS_MAX = 10
+EMA9_BELOW_PRICE_PENALTY = 5
+EMA9_FALLING_PENALTY = 4
+EMA9_BELOW_VWAP_PENALTY = 4
 
 MAX_STOP_DIST_NORMAL = 3.0
 MAX_STOP_DIST_HOD = 3.5
@@ -251,6 +269,38 @@ def get_market_phase(now: Optional[datetime] = None) -> str:
     if t < dtime(20, 0):
         return "AFTERHOURS"
     return "CLOSED"
+
+
+
+def is_late_day(now: Optional[datetime] = None) -> bool:
+    """
+    Late-day setups need stronger proof because breakouts have less time
+    and failed breakouts are more common after 2:30 PM ET.
+    """
+    now = now or ny_now()
+    return now.time() >= LATE_DAY_READY_START and now.time() < dtime(16, 0)
+
+
+def ready_confidence_required(phase: str) -> float:
+    if phase == "VALID_AFTERNOON" and is_late_day():
+        return MIN_CONF_READY_LATE_DAY
+    return MIN_CONF_READY
+
+
+def late_day_volume_confirmed(metrics: "IntradayMetrics") -> bool:
+    if not is_late_day():
+        return True
+
+    # After 2:30 PM, stable volume is not enough for a trigger-ready signal.
+    # We require recent expansion and no severe fade vs the morning reference.
+    return (
+        metrics.recent_volume_expanding
+        and not metrics.volume_fading_vs_morning
+        and (
+            metrics.morning_avg_volume_5m <= 0
+            or metrics.recent_to_morning_volume_ratio >= MIN_LATE_DAY_MORNING_VOL_RATIO
+        )
+    )
 
 
 def is_market_open_phase(phase: str) -> bool:
@@ -568,8 +618,29 @@ class IntradayMetrics:
 
     avg_volume_5: float = 0.0
     avg_volume_prev_5: float = 0.0
+    morning_avg_volume_5m: float = 0.0
+    recent_to_morning_volume_ratio: float = 0.0
     volume_stable_or_increasing: bool = False
     volume_drying: bool = False
+    volume_fading_vs_morning: bool = False
+    recent_volume_expanding: bool = False
+
+    bearish_momentum_divergence: bool = False
+    macd_prior_high: float = 0.0
+    macd_recent_high: float = 0.0
+    price_prior_high: float = 0.0
+    price_recent_high: float = 0.0
+    momentum_status: str = "CLEAN"
+
+    ema9: float = 0.0
+    ema9_prev: float = 0.0
+    ema9_slope_pct: float = 0.0
+    price_above_ema9: bool = False
+    ema9_rising: bool = False
+    ema9_falling: bool = False
+    ema9_above_vwap: bool = False
+    ema9_crossed_above_vwap_recent: bool = False
+    ema9_status: str = "UNKNOWN"
 
     pullback_holding_vwap: bool = False
     pullback_high: float = 0.0
@@ -605,6 +676,26 @@ def clean_bars(bars: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         if c > 0:
             out.append(b)
     return out
+
+
+def ema_series(values: List[float], span: int) -> List[float]:
+    if not values:
+        return []
+
+    alpha = 2.0 / (span + 1.0)
+    out = [values[0]]
+    for v in values[1:]:
+        out.append(alpha * v + (1.0 - alpha) * out[-1])
+    return out
+
+
+def macd_line(values: List[float]) -> List[float]:
+    if len(values) < 26:
+        return []
+
+    fast = ema_series(values, 12)
+    slow = ema_series(values, 26)
+    return [f - s for f, s in zip(fast, slow)]
 
 
 def analyze_execution_bars(symbol: str, bars: List[Dict[str, Any]]) -> IntradayMetrics:
@@ -658,19 +749,100 @@ def enrich_structure_from_5min(metrics: IntradayMetrics, bars_5m: List[Dict[str,
     recent_vols = [safe_float(b.get("v"), 0) for b in recent5]
     prev_vols = [safe_float(b.get("v"), 0) for b in prev5]
 
+    # Morning reference: avoid the first few opening bars if enough data exists,
+    # then compare the latest 25 minutes against earlier-session participation.
+    if len(clean) >= 30:
+        morning_ref = clean[6:30]
+    elif len(clean) >= 16:
+        morning_ref = clean[3:16]
+    else:
+        morning_ref = clean[: max(1, len(clean) // 2)]
+
+    morning_vols = [safe_float(b.get("v"), 0) for b in morning_ref]
     metrics.avg_volume_5 = sum(recent_vols) / len(recent_vols) if recent_vols else 0
     metrics.avg_volume_prev_5 = sum(prev_vols) / len(prev_vols) if prev_vols else 0
+    metrics.morning_avg_volume_5m = sum(morning_vols) / len(morning_vols) if morning_vols else 0
+    metrics.recent_to_morning_volume_ratio = (
+        metrics.avg_volume_5 / metrics.morning_avg_volume_5m
+        if metrics.morning_avg_volume_5m > 0
+        else 0
+    )
+
+    metrics.recent_volume_expanding = (
+        metrics.avg_volume_prev_5 > 0
+        and metrics.avg_volume_5 >= VOLUME_EXPANSION_RATIO * metrics.avg_volume_prev_5
+    )
     metrics.volume_stable_or_increasing = (
-        metrics.avg_volume_prev_5 <= 0 or metrics.avg_volume_5 >= 0.85 * metrics.avg_volume_prev_5
+        metrics.avg_volume_prev_5 <= 0
+        or metrics.avg_volume_5 >= 0.85 * metrics.avg_volume_prev_5
     )
     metrics.volume_drying = (
         metrics.avg_volume_prev_5 > 0 and metrics.avg_volume_5 <= 0.80 * metrics.avg_volume_prev_5
+    )
+    metrics.volume_fading_vs_morning = (
+        metrics.morning_avg_volume_5m > 0
+        and metrics.avg_volume_5 < VOLUME_FADE_RATIO * metrics.morning_avg_volume_5m
     )
     metrics.base_volume_constructive = (
         metrics.avg_volume_prev_5 <= 0
         or metrics.avg_volume_5 <= 1.20 * metrics.avg_volume_prev_5
         or metrics.volume_drying
     )
+
+    # EMA 9 confirmation from 5-minute structure.
+    closes = [safe_float(b.get("c"), 0) for b in clean]
+    ema9_values = ema_series(closes, EMA_SPAN)
+    if ema9_values:
+        metrics.ema9 = ema9_values[-1]
+        metrics.ema9_prev = ema9_values[-2] if len(ema9_values) >= 2 else ema9_values[-1]
+        metrics.ema9_slope_pct = pct_change(metrics.ema9, metrics.ema9_prev) if metrics.ema9_prev > 0 else 0
+        metrics.price_above_ema9 = metrics.price >= metrics.ema9 if metrics.ema9 > 0 else False
+        metrics.ema9_rising = metrics.ema9 >= metrics.ema9_prev * 0.999
+        metrics.ema9_falling = metrics.ema9 < metrics.ema9_prev * 0.999
+        metrics.ema9_above_vwap = metrics.ema9 >= metrics.vwap if metrics.vwap > 0 else False
+
+        # EMA9 crossing VWAP from below is treated as a bullish confirmation.
+        # Uses current session VWAP as the reference line to avoid noisy per-bar VWAP math.
+        recent_ema = ema9_values[-6:] if len(ema9_values) >= 6 else ema9_values
+        if metrics.vwap > 0 and len(recent_ema) >= 2:
+            was_below = min(recent_ema[:-1]) <= metrics.vwap
+            now_above = recent_ema[-1] >= metrics.vwap
+            metrics.ema9_crossed_above_vwap_recent = bool(was_below and now_above)
+
+        if metrics.price_above_ema9 and metrics.ema9_above_vwap and not metrics.ema9_falling:
+            metrics.ema9_status = "BULLISH_ALIGNMENT"
+        elif metrics.ema9_crossed_above_vwap_recent and metrics.price_above_ema9:
+            metrics.ema9_status = "RECENT_BULLISH_CROSS"
+        elif not metrics.price_above_ema9:
+            metrics.ema9_status = "PRICE_BELOW_EMA9"
+        elif metrics.ema9_falling:
+            metrics.ema9_status = "EMA9_FALLING"
+        elif not metrics.ema9_above_vwap:
+            metrics.ema9_status = "EMA9_BELOW_VWAP"
+        else:
+            metrics.ema9_status = "NEUTRAL"
+
+    # Momentum / divergence using 5-minute MACD.
+    macd = macd_line(closes)
+    if len(clean) >= 30 and len(macd) >= 12:
+        recent_window = clean[-12:]
+        recent_macd = macd[-12:]
+        first_half_bars = recent_window[:6]
+        second_half_bars = recent_window[6:]
+        first_half_macd = recent_macd[:6]
+        second_half_macd = recent_macd[6:]
+
+        metrics.price_prior_high = max(safe_float(b.get("h"), 0) for b in first_half_bars)
+        metrics.price_recent_high = max(safe_float(b.get("h"), 0) for b in second_half_bars)
+        metrics.macd_prior_high = max(first_half_macd) if first_half_macd else 0
+        metrics.macd_recent_high = max(second_half_macd) if second_half_macd else 0
+
+        price_higher_high = metrics.price_recent_high > metrics.price_prior_high * 1.0005
+        macd_lower_high = metrics.macd_recent_high < metrics.macd_prior_high * 0.995
+
+        if price_higher_high and macd_lower_high:
+            metrics.bearish_momentum_divergence = True
+            metrics.momentum_status = "BEARISH_DIVERGENCE"
 
     # Pullback structure from last 3x 5-min bars.
     metrics.pullback_high = max(safe_float(b.get("h"), 0) for b in recent3)
@@ -1097,12 +1269,74 @@ def choose_best_provisional_plan(
 # SETUP READINESS
 # ==============================================================
 
+
+def ema9_confirmation_score(metrics: IntradayMetrics) -> float:
+    """
+    EMA9 is a confirmation layer, not a primary WATCH trigger.
+    Positive alignment improves score. Bad alignment penalizes later.
+    """
+    if metrics.ema9 <= 0:
+        return 0.0
+
+    score = 0.0
+    if metrics.price_above_ema9:
+        score += 3.0
+    if metrics.ema9_rising:
+        score += 2.0
+    if metrics.ema9_above_vwap:
+        score += 3.0
+    if metrics.ema9_crossed_above_vwap_recent:
+        score += 4.0
+
+    return round(min(EMA9_BULLISH_BONUS_MAX, score), 2)
+
+
+def ema9_ready_confirmation(metrics: IntradayMetrics, late_day: Optional[bool] = None) -> Tuple[bool, str]:
+    """
+    Trigger Ready should have EMA9 confirmation.
+    WATCH does not require it, because a valid VWAP pullback may still be forming.
+    """
+    if not metrics.has_data:
+        return False, "No intraday bars"
+
+    if metrics.ema9 <= 0:
+        return True, "EMA9 unavailable"
+
+    if not metrics.price_above_ema9:
+        return False, "Price below EMA9"
+
+    if metrics.ema9_falling:
+        return False, "EMA9 falling"
+
+    if late_day is None:
+        late_day = is_late_day()
+
+    if late_day:
+        if not (metrics.ema9_above_vwap or metrics.ema9_crossed_above_vwap_recent):
+            return False, "Late-day setup needs EMA9 above VWAP or recent EMA9/VWAP bullish cross"
+
+    return True, "EMA9 confirmation valid"
+
+
 def setup_vwap_pullback_ready(metrics: IntradayMetrics, rr: float, confidence: float) -> Tuple[bool, str]:
     if not metrics.has_data:
         return False, "No intraday bars"
 
     if not metrics.above_vwap:
         return False, "Below VWAP"
+
+    ema_ok, ema_reason = ema9_ready_confirmation(metrics)
+    if not ema_ok:
+        return False, ema_reason
+
+    if metrics.bearish_momentum_divergence:
+        return False, "Bearish MACD/momentum divergence"
+
+    if metrics.volume_fading_vs_morning:
+        return False, "Volume fading vs morning reference"
+
+    if is_late_day() and not late_day_volume_confirmed(metrics):
+        return False, "Late-day setup needs volume expansion"
 
     if not metrics.pullback_holding_vwap:
         return False, "No clean 5-min VWAP hold"
@@ -1116,8 +1350,9 @@ def setup_vwap_pullback_ready(metrics: IntradayMetrics, rr: float, confidence: f
     if rr < MIN_RR:
         return False, "R/R below 1.5"
 
-    if confidence < MIN_CONF_READY:
-        return False, "Confidence below 75"
+    required_conf = ready_confidence_required("VALID_AFTERNOON" if is_late_day() else "VALID_MORNING")
+    if confidence < required_conf:
+        return False, f"Confidence below {required_conf:.0f}"
 
     return True, "5-min VWAP pullback holding; waiting for break above pullback high"
 
@@ -1129,6 +1364,15 @@ def base_squeeze_not_ready_reason(metrics: IntradayMetrics, rr: float, confidenc
         reasons.append("No intraday bars")
     if not metrics.above_vwap:
         reasons.append("Below VWAP")
+    ema_ok, ema_reason = ema9_ready_confirmation(metrics)
+    if not ema_ok:
+        reasons.append(ema_reason)
+    if metrics.bearish_momentum_divergence:
+        reasons.append("bearish MACD/momentum divergence")
+    if metrics.volume_fading_vs_morning:
+        reasons.append("volume fading vs morning reference")
+    if is_late_day() and not late_day_volume_confirmed(metrics):
+        reasons.append("late-day setup needs volume expansion")
     if metrics.base_range_pct > 2.0:
         reasons.append(f"base range {metrics.base_range_pct:.2f}% > 2.0%")
     if not metrics.higher_low_or_flat_base:
@@ -1141,8 +1385,9 @@ def base_squeeze_not_ready_reason(metrics: IntradayMetrics, rr: float, confidenc
         reasons.append("Base too far from HOD")
     if rr < MIN_RR:
         reasons.append("R/R below 1.5")
-    if confidence < MIN_CONF_READY:
-        reasons.append("Confidence below 75")
+    required_conf = ready_confidence_required("VALID_AFTERNOON" if is_late_day() else "VALID_MORNING")
+    if confidence < required_conf:
+        reasons.append(f"Confidence below {required_conf:.0f}")
 
     return "; ".join(reasons) if reasons else "Base/flag squeeze not ready"
 
@@ -1154,6 +1399,19 @@ def setup_base_squeeze_ready(metrics: IntradayMetrics, rr: float, confidence: fl
     if not metrics.above_vwap:
         return False, "Below VWAP"
 
+    ema_ok, ema_reason = ema9_ready_confirmation(metrics)
+    if not ema_ok:
+        return False, ema_reason
+
+    if metrics.bearish_momentum_divergence:
+        return False, "Bearish MACD/momentum divergence"
+
+    if metrics.volume_fading_vs_morning:
+        return False, "Volume fading vs morning reference"
+
+    if is_late_day() and not late_day_volume_confirmed(metrics):
+        return False, "Late-day setup needs volume expansion"
+
     if not metrics.base_compression:
         return False, f"No clean base/flag compression: {base_squeeze_not_ready_reason(metrics, rr, confidence)}"
 
@@ -1163,8 +1421,9 @@ def setup_base_squeeze_ready(metrics: IntradayMetrics, rr: float, confidence: fl
     if rr < MIN_RR:
         return False, "R/R below 1.5"
 
-    if confidence < MIN_CONF_READY:
-        return False, "Confidence below 75"
+    required_conf = ready_confidence_required("VALID_AFTERNOON" if is_late_day() else "VALID_MORNING")
+    if confidence < required_conf:
+        return False, f"Confidence below {required_conf:.0f}"
 
     return True, "5-min base/flag squeeze; waiting for break above compression high"
 
@@ -1175,6 +1434,19 @@ def setup_hod_breakout_ready(metrics: IntradayMetrics, rr: float, confidence: fl
 
     if not metrics.above_vwap:
         return False, "Below VWAP"
+
+    ema_ok, ema_reason = ema9_ready_confirmation(metrics)
+    if not ema_ok:
+        return False, ema_reason
+
+    if metrics.bearish_momentum_divergence:
+        return False, "Bearish MACD/momentum divergence"
+
+    if metrics.volume_fading_vs_morning:
+        return False, "Volume fading vs morning reference"
+
+    if is_late_day() and not late_day_volume_confirmed(metrics):
+        return False, "Late-day setup needs volume expansion"
 
     if metrics.hod_distance_pct < HOD_BREAKOUT_READY_DISTANCE:
         return False, "Not close enough to HOD"
@@ -1191,8 +1463,9 @@ def setup_hod_breakout_ready(metrics: IntradayMetrics, rr: float, confidence: fl
     if rr < MIN_RR:
         return False, "R/R below 1.5"
 
-    if confidence < MIN_CONF_READY:
-        return False, "Confidence below 75"
+    required_conf = ready_confidence_required("VALID_AFTERNOON" if is_late_day() else "VALID_MORNING")
+    if confidence < required_conf:
+        return False, f"Confidence below {required_conf:.0f}"
 
     return True, "5-min HOD breakout setup; waiting for break above HOD"
 
@@ -1248,7 +1521,10 @@ def live_signal_score(
         low, high = vwap_reclaim_zone(safe_float(row.get("atr_pct"), 0))
         vwap_score = 6 if low <= metrics.vwap_dist_pct <= high else 0
 
-    # 2. HOD/range position: 15
+    # 2. EMA9 confirmation: 10
+    ema_score = ema9_confirmation_score(metrics)
+
+    # 3. HOD/range position: 15
     if metrics.hod_distance_pct >= -0.75:
         hod_score = 15
     elif metrics.hod_distance_pct >= -2.5:
@@ -1259,14 +1535,16 @@ def live_signal_score(
         hod_score = 0
 
     # 3. Volume/structure: 15
-    if metrics.base_compression:
+    if metrics.recent_volume_expanding and not metrics.volume_fading_vs_morning:
         volume_score = 15
-    elif metrics.volume_stable_or_increasing:
+    elif metrics.base_compression and not metrics.volume_fading_vs_morning:
         volume_score = 13
-    elif metrics.base_volume_constructive:
-        volume_score = 10
+    elif metrics.volume_stable_or_increasing and not metrics.volume_fading_vs_morning:
+        volume_score = 11
+    elif metrics.base_volume_constructive and not metrics.volume_fading_vs_morning:
+        volume_score = 8
     elif metrics.avg_volume_5 > 0:
-        volume_score = 6
+        volume_score = 4
     else:
         volume_score = 0
 
@@ -1319,18 +1597,36 @@ def live_signal_score(
     if metrics.vwap_touch_count >= 4:
         penalty += 3
 
+    if metrics.ema9 > 0:
+        if not metrics.price_above_ema9:
+            penalty += EMA9_BELOW_PRICE_PENALTY
+        if metrics.ema9_falling:
+            penalty += EMA9_FALLING_PENALTY
+        if not metrics.ema9_above_vwap and not metrics.ema9_crossed_above_vwap_recent:
+            penalty += EMA9_BELOW_VWAP_PENALTY
+
     if metrics.hod_distance_pct < -4.0:
         penalty += 3
+
+    if metrics.volume_fading_vs_morning:
+        penalty += VOLUME_FADE_PENALTY
+
+    if metrics.bearish_momentum_divergence:
+        penalty += BEARISH_DIVERGENCE_PENALTY
+
+    if is_late_day() and not late_day_volume_confirmed(metrics):
+        penalty += LATE_DAY_NO_VOLUME_EXPANSION_PENALTY
 
     score = (
         vwap_score
         + hod_score
+        + ema_score
         + volume_score
         + rr_score
         + sector_score
         + market_score
         + time_score
-        - min(10, penalty)
+        - min(25, penalty)
     )
 
     return round(clamp(score, 0, 100), 2)
@@ -1350,8 +1646,9 @@ def not_ready_reasons(metrics: IntradayMetrics, plan: Dict[str, Any], confidence
     if not plan.get("valid"):
         reasons.append(f"Plan invalid: {safe_str(plan.get('rejection_reason'), 'Invalid plan')}")
 
-    if confidence < MIN_CONF_READY:
-        reasons.append(f"Confidence {confidence:.1f} < ready minimum 75")
+    required_conf = ready_confidence_required("VALID_AFTERNOON" if is_late_day() else "VALID_MORNING")
+    if confidence < required_conf:
+        reasons.append(f"Confidence {confidence:.1f} < ready minimum {required_conf:.0f}")
 
     rr = safe_float(plan.get("reward_risk"), 0)
     if rr < MIN_RR:
@@ -1407,6 +1704,15 @@ def diagnostic_candidate(
         "vwap_dist_pct": round(metrics.vwap_dist_pct, 2),
         "hod_distance_pct": round(metrics.hod_distance_pct, 2),
         "above_vwap": metrics.above_vwap,
+        "ema9": round(metrics.ema9, 4),
+        "ema9_prev": round(metrics.ema9_prev, 4),
+        "ema9_slope_pct": round(metrics.ema9_slope_pct, 3),
+        "price_above_ema9": metrics.price_above_ema9,
+        "ema9_rising": metrics.ema9_rising,
+        "ema9_falling": metrics.ema9_falling,
+        "ema9_above_vwap": metrics.ema9_above_vwap,
+        "ema9_crossed_above_vwap_recent": metrics.ema9_crossed_above_vwap_recent,
+        "ema9_status": metrics.ema9_status,
         "base_compression": metrics.base_compression,
         "base_range_pct": round(metrics.base_range_pct, 2),
         "base_high": round(metrics.base_high, 4),
@@ -1414,6 +1720,14 @@ def diagnostic_candidate(
         "execution_timeframe": EXECUTION_TIMEFRAME,
         "structure_timeframe": STRUCTURE_TIMEFRAME,
         "structure_bar_count": metrics.structure_bar_count,
+        "avg_volume_5": round(metrics.avg_volume_5, 2),
+        "avg_volume_prev_5": round(metrics.avg_volume_prev_5, 2),
+        "morning_avg_volume_5m": round(metrics.morning_avg_volume_5m, 2),
+        "recent_to_morning_volume_ratio": round(metrics.recent_to_morning_volume_ratio, 2),
+        "volume_fading_vs_morning": metrics.volume_fading_vs_morning,
+        "recent_volume_expanding": metrics.recent_volume_expanding,
+        "bearish_momentum_divergence": metrics.bearish_momentum_divergence,
+        "momentum_status": metrics.momentum_status,
         "live_signal_score": round(live, 1),
         "confidence": round(conf, 1),
         "reward_risk": safe_float(plan.get("reward_risk"), 0),
@@ -1484,6 +1798,15 @@ def signal_base(
         "vwap_dist_pct": round(metrics.vwap_dist_pct, 2),
         "hod_distance_pct": round(metrics.hod_distance_pct, 2),
         "above_vwap": metrics.above_vwap,
+        "ema9": round(metrics.ema9, 4),
+        "ema9_prev": round(metrics.ema9_prev, 4),
+        "ema9_slope_pct": round(metrics.ema9_slope_pct, 3),
+        "price_above_ema9": metrics.price_above_ema9,
+        "ema9_rising": metrics.ema9_rising,
+        "ema9_falling": metrics.ema9_falling,
+        "ema9_above_vwap": metrics.ema9_above_vwap,
+        "ema9_crossed_above_vwap_recent": metrics.ema9_crossed_above_vwap_recent,
+        "ema9_status": metrics.ema9_status,
         "base_compression": metrics.base_compression,
         "base_range_pct": round(metrics.base_range_pct, 2),
         "base_high": round(metrics.base_high, 4),
@@ -1491,6 +1814,14 @@ def signal_base(
         "execution_timeframe": EXECUTION_TIMEFRAME,
         "structure_timeframe": STRUCTURE_TIMEFRAME,
         "structure_bar_count": metrics.structure_bar_count,
+        "avg_volume_5": round(metrics.avg_volume_5, 2),
+        "avg_volume_prev_5": round(metrics.avg_volume_prev_5, 2),
+        "morning_avg_volume_5m": round(metrics.morning_avg_volume_5m, 2),
+        "recent_to_morning_volume_ratio": round(metrics.recent_to_morning_volume_ratio, 2),
+        "volume_fading_vs_morning": metrics.volume_fading_vs_morning,
+        "recent_volume_expanding": metrics.recent_volume_expanding,
+        "bearish_momentum_divergence": metrics.bearish_momentum_divergence,
+        "momentum_status": metrics.momentum_status,
         "sector_status": safe_str(row.get("sector_status"), ""),
         "market_phase": phase,
         "reason": reason,
@@ -1499,7 +1830,11 @@ def signal_base(
         "updated_at": now_text,
         "session_date": session_date_str(),
         "actionable": status == "ACTIVE_SIGNAL",
-        "actionability": "ACTIVE" if status in {"TRIGGER_READY", "ACTIVE_SIGNAL"} else "WATCH",
+        "actionability": (
+            "ACTIVE" if status == "ACTIVE_SIGNAL"
+            else "TRIGGER_READY" if status == "TRIGGER_READY"
+            else "WATCH"
+        ),
         "suppression_reason": "",
         "risk_flags": safe_str(row.get("risk_flags"), ""),
         "company_name": safe_str(row.get("company_name"), ""),
@@ -1557,7 +1892,7 @@ def trigger_fired(existing: Dict[str, Any], metrics: IntradayMetrics) -> bool:
     trigger = safe_float(existing.get("entry_trigger"), 0)
     if trigger <= 0 or not metrics.has_data:
         return False
-    return metrics.price >= trigger and metrics.above_vwap
+    return metrics.price >= trigger and metrics.above_vwap and metrics.price_above_ema9
 
 
 def active_invalidated(signal: Dict[str, Any], metrics: IntradayMetrics) -> Tuple[bool, str, str]:
@@ -1594,6 +1929,21 @@ def ready_invalidated(signal: Dict[str, Any], metrics: IntradayMetrics) -> Tuple
 
     if support > 0 and metrics.price < support:
         return True, "Broke setup support before trigger", "FAILED_SETUP"
+
+    if metrics.ema9 > 0 and not metrics.price_above_ema9:
+        return True, "Price lost EMA9 before trigger", "FAILED_SETUP"
+
+    if is_late_day() and metrics.ema9_falling:
+        return True, "Late-day setup EMA9 turned down before trigger", "FAILED_SETUP"
+
+    if metrics.bearish_momentum_divergence:
+        return True, "Bearish momentum divergence developed before trigger", "FAILED_SETUP"
+
+    if metrics.volume_fading_vs_morning:
+        return True, "Volume faded versus morning reference before trigger", "FAILED_SETUP"
+
+    if is_late_day() and not late_day_volume_confirmed(metrics):
+        return True, "Late-day trigger-ready setup lacks volume expansion", "FAILED_SETUP"
 
     if expired_by_age(signal, TRIGGER_READY_STALE_MINUTES):
         return True, "Trigger-ready setup became stale", "MISSED_WINDOW"
@@ -1684,6 +2034,9 @@ def process_existing_signal(
             "hod": round(metrics.hod, 4),
             "vwap_dist_pct": round(metrics.vwap_dist_pct, 2),
             "hod_distance_pct": round(metrics.hod_distance_pct, 2),
+            "ema9": round(metrics.ema9, 4),
+            "price_above_ema9": metrics.price_above_ema9,
+            "ema9_status": metrics.ema9_status,
             "actionable": True,
             "actionability": "ACTIVE",
         })
@@ -1703,7 +2056,18 @@ def process_existing_signal(
             live = live_signal_score(row, metrics, plan, regime, phase)
             conf = final_confidence(safe_float(row.get("score"), safe_float(existing.get("scanner_score"), 0)), live)
 
-            if plan.get("valid") and conf >= MIN_CONF_ACTIVE and safe_float(plan.get("reward_risk"), 0) >= MIN_RR:
+            active_quality_ok = (
+                plan.get("valid")
+                and conf >= MIN_CONF_ACTIVE
+                and safe_float(plan.get("reward_risk"), 0) >= MIN_RR
+                and not metrics.bearish_momentum_divergence
+                and not metrics.volume_fading_vs_morning
+                and metrics.price_above_ema9
+                and not metrics.ema9_falling
+                and late_day_volume_confirmed(metrics)
+            )
+
+            if active_quality_ok:
                 out = signal_base(
                     row,
                     metrics,
@@ -1740,8 +2104,11 @@ def process_existing_signal(
             "hod": round(metrics.hod, 4),
             "vwap_dist_pct": round(metrics.vwap_dist_pct, 2),
             "hod_distance_pct": round(metrics.hod_distance_pct, 2),
+            "ema9": round(metrics.ema9, 4),
+            "price_above_ema9": metrics.price_above_ema9,
+            "ema9_status": metrics.ema9_status,
             "actionable": False,
-            "actionability": "ACTIVE" if not existing.get("suppression_reason") else "SUPPRESSED",
+            "actionability": "TRIGGER_READY" if not existing.get("suppression_reason") else "SUPPRESSED",
         })
         return out
 
@@ -1840,7 +2207,8 @@ def process_new_or_watch(
         return {}, diagnostic_candidate(row, metrics, plan, live, conf, rejected_reasons, phase, regime)
 
     # Decide whether it is trigger-ready.
-    if plan.get("valid") and safe_float(plan.get("reward_risk"), 0) >= MIN_RR and conf >= MIN_CONF_READY:
+    ready_min_conf = ready_confidence_required(phase)
+    if plan.get("valid") and safe_float(plan.get("reward_risk"), 0) >= MIN_RR and conf >= ready_min_conf:
         setup_ready_type, setup_reason, setup_fail_reasons = choose_setup(metrics, plan, conf, phase)
 
         if setup_ready_type:
@@ -1849,7 +2217,8 @@ def process_new_or_watch(
             exact_live = live_signal_score(row, metrics, exact_plan, regime, phase)
             exact_conf = final_confidence(safe_float(row.get("score"), 0), exact_live)
 
-            if exact_plan.get("valid") and safe_float(exact_plan.get("reward_risk"), 0) >= MIN_RR and exact_conf >= MIN_CONF_READY:
+            exact_ready_min_conf = ready_confidence_required(phase)
+            if exact_plan.get("valid") and safe_float(exact_plan.get("reward_risk"), 0) >= MIN_RR and exact_conf >= exact_ready_min_conf:
                 out = signal_base(
                     row,
                     metrics,
