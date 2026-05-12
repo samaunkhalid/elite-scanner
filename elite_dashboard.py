@@ -1403,33 +1403,53 @@ def build_market_inactive_signal_panel(status):
 # SIGNAL DESK SHELL
 # ==============================================================
 
-def load_signal_records(path="signal_desk.json"):
+def load_signal_payload(path="signal_desk.json"):
     """
-    Optional future input.
-    If signal_desk.json does not exist, the dashboard shows a compact Signal Desk status panel.
-    Expected future formats:
-      - list of signal dicts
-      - {"signals": [signal dicts]}
+    Load the full Signal Desk payload.
+
+    Current signal_engine.py can write:
+      {
+        "signals": [...],
+        "rejected_candidates": [...],
+        "counts": {...}
+      }
+
+    Older formats are also supported for backward compatibility.
     """
     if not os.path.exists(path):
-        return []
+        return {"signals": [], "rejected_candidates": [], "counts": {}}
 
     try:
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
 
         if isinstance(data, list):
-            return data
+            return {"signals": data, "rejected_candidates": [], "counts": {}}
 
         if isinstance(data, dict):
             signals = data.get("signals", [])
-            if isinstance(signals, list):
-                return signals
+            rejected = data.get("rejected_candidates", [])
+            counts = data.get("counts", {})
 
-        return []
+            return {
+                "signals": signals if isinstance(signals, list) else [],
+                "rejected_candidates": rejected if isinstance(rejected, list) else [],
+                "counts": counts if isinstance(counts, dict) else {},
+                "market_phase": data.get("market_phase", ""),
+                "generated_at_et": data.get("generated_at_et", ""),
+            }
+
+        return {"signals": [], "rejected_candidates": [], "counts": {}}
     except Exception as e:
         print(f"  ⚠ Failed to load {path}: {e}")
-        return []
+        return {"signals": [], "rejected_candidates": [], "counts": {}}
+
+
+def load_signal_records(path="signal_desk.json"):
+    """
+    Backward-compatible helper for places that only need signal rows.
+    """
+    return load_signal_payload(path).get("signals", [])
 
 
 def get_signal_status_class(status):
@@ -1686,7 +1706,180 @@ def build_signal_desk_column(title, subtitle, signals, column_class, max_items=8
     """
 
 
-def build_signal_desk_panel(signals):
+
+def normalize_blocker_reason(reason):
+    """
+    Group verbose engine diagnostics into readable blocker buckets.
+    """
+    text = safe_str(reason, "").strip()
+    low = text.lower()
+
+    if not text:
+        return "Other"
+
+    if "market severe risk-off" in low or "risk-off" in low:
+        return "Market severe risk-off"
+    if "confidence" in low and "<" in low:
+        if "watch" in low:
+            return "Confidence below Watch minimum"
+        if "ready" in low:
+            return "Confidence below Ready minimum"
+        return "Confidence below threshold"
+    if "r/r" in low or "reward/risk" in low or "reward risk" in low:
+        return "R/R below minimum"
+    if "target 1 r/r" in low:
+        return "Target 1 R/R below minimum"
+    if "vwap condition" in low:
+        return "VWAP condition failed"
+    if "4th+ vwap touch" in low:
+        return "4th+ VWAP touch"
+    if "below vwap" in low:
+        return "Below VWAP"
+    if "too extended" in low:
+        return "Too extended above VWAP"
+    if "hod" in low and ("not close" in low or "too far" in low):
+        return "Not close enough to HOD"
+    if "sector weak" in low:
+        return "Sector weak"
+    if "volume" in low:
+        return "Volume confirmation missing"
+    if "stop distance" in low:
+        return "Stop distance invalid"
+    if "no intraday" in low or "no alpaca" in low or "no bars" in low:
+        return "No intraday data"
+
+    return text
+
+
+def rejected_candidate_sort_key(candidate):
+    """
+    Rejected diagnostics should show the closest-to-usable names first.
+    """
+    return (
+        -safe_float(candidate.get("confidence"), 0),
+        -safe_float(candidate.get("scanner_score"), 0),
+        safe_int(candidate.get("signal_rank"), 9999),
+        safe_str(candidate.get("symbol"), ""),
+    )
+
+
+def build_signal_diagnostics_panel(rejected_candidates, max_preview=3):
+    """
+    Compact diagnostics shown only when Signal Desk has:
+      0 Active / 0 Ready / 0 Watch
+
+    It prevents crowding by showing:
+      - rejected count
+      - top blocker categories
+      - top 3 rejected names only
+    """
+    rejected_candidates = [c for c in (rejected_candidates or []) if isinstance(c, dict)]
+
+    if not rejected_candidates:
+        return ""
+
+    from collections import Counter
+
+    blocker_counter = Counter()
+
+    for c in rejected_candidates:
+        reasons = []
+        reasons.extend(c.get("rejected_reasons") or [])
+        reasons.extend(c.get("not_ready_reasons") or [])
+
+        if not reasons:
+            reasons.append("No signal-quality rule passed")
+
+        for reason in reasons:
+            blocker_counter[normalize_blocker_reason(reason)] += 1
+
+    top_blockers = blocker_counter.most_common(4)
+    blocker_html = ""
+
+    if top_blockers:
+        blocker_items = []
+        for reason, count in top_blockers:
+            blocker_items.append(f"""
+                <span class="diagnostic-pill">
+                    <b>{esc(str(count))}</b> {esc(reason)}
+                </span>
+            """)
+        blocker_html = f"""
+            <div class="diagnostic-blockers">
+                {''.join(blocker_items)}
+            </div>
+        """
+
+    sorted_rejected = sorted(rejected_candidates, key=rejected_candidate_sort_key)
+    preview = sorted_rejected[:max_preview]
+    hidden_count = max(0, len(sorted_rejected) - len(preview))
+
+    preview_rows = []
+
+    for c in preview:
+        symbol = safe_str(c.get("symbol"), "—").upper()
+        confidence = safe_float(c.get("confidence"), 0)
+        rr = safe_float(c.get("reward_risk"), 0)
+        scanner_score = safe_float(c.get("scanner_score"), 0)
+
+        reasons = []
+        reasons.extend(c.get("rejected_reasons") or [])
+        reasons.extend(c.get("not_ready_reasons") or [])
+
+        grouped_reasons = []
+        seen = set()
+        for reason in reasons:
+            group = normalize_blocker_reason(reason)
+            if group not in seen:
+                grouped_reasons.append(group)
+                seen.add(group)
+            if len(grouped_reasons) >= 3:
+                break
+
+        reason_text = "; ".join(grouped_reasons) if grouped_reasons else "No valid Watch/Ready/Active rule passed"
+
+        conf_text = f"{confidence:.1f}%" if confidence > 0 else "—"
+        rr_text = f"{rr:.2f}:1" if rr > 0 else "—"
+        score_text = f"{scanner_score:.0f}" if scanner_score > 0 else "—"
+
+        preview_rows.append(f"""
+            <div class="diagnostic-row">
+                <div>
+                    <strong>{esc(symbol)}</strong>
+                    <span>{esc(reason_text)}</span>
+                </div>
+                <div class="diagnostic-metrics">
+                    <span>Conf <b>{esc(conf_text)}</b></span>
+                    <span>R/R <b>{esc(rr_text)}</b></span>
+                    <span>Score <b>{esc(score_text)}</b></span>
+                </div>
+            </div>
+        """)
+
+    hidden_html = (
+        f'<div class="diagnostic-more">+{hidden_count} more rejected candidates hidden</div>'
+        if hidden_count > 0 else ""
+    )
+
+    return f"""
+        <div class="signal-diagnostics">
+            <div class="signal-diagnostics-top">
+                <div>
+                    <strong>Signal Diagnostics</strong>
+                    <span>No valid Watch / Ready / Active setup. Showing compact rejection summary.</span>
+                </div>
+                <b>{len(rejected_candidates)} Rejected</b>
+            </div>
+            {blocker_html}
+            <div class="diagnostic-preview">
+                {''.join(preview_rows)}
+                {hidden_html}
+            </div>
+        </div>
+    """
+
+
+def build_signal_desk_panel(signals, rejected_candidates=None):
     """
     Full-width Signal Desk.
 
@@ -1718,6 +1911,8 @@ def build_signal_desk_panel(signals):
     live_count = active_count + ready_count + watch_count
 
     if live_count == 0:
+        diagnostics_html = build_signal_diagnostics_panel(rejected_candidates or [])
+
         return f"""
         <section class="signal-desk-panel signal-desk-compact" id="signals">
             <div class="signal-desk-top">
@@ -1735,6 +1930,7 @@ def build_signal_desk_panel(signals):
                 <strong>No signal at this moment.</strong>
                 <span>Scanner is monitoring for Watch, Trigger Ready, and Active setups.</span>
             </div>
+            {diagnostics_html}
         </section>
         """
 
@@ -1798,9 +1994,11 @@ def build_dashboard(potential, active, extended, highrisk, raw, active_watchlist
     macro_html = build_macro_html(macro)
 
     if market_open:
-        signals = load_signal_records()
+        signal_payload = load_signal_payload()
+        signals = signal_payload.get("signals", [])
+        rejected_candidates = signal_payload.get("rejected_candidates", [])
         signal_map = build_signal_map(signals)
-        signal_desk_html = build_signal_desk_panel(signals)
+        signal_desk_html = build_signal_desk_panel(signals, rejected_candidates)
 
         # Main decision screen intentionally excludes Extended / High Risk names.
         # They are still generated and saved by the scanner for diagnostics,
@@ -2201,6 +2399,124 @@ body {
 .signal-desk-empty strong {
     color: #cbd5e1;
     font-size: 12px;
+}
+
+.signal-diagnostics {
+    margin-top: 10px;
+    padding: 10px;
+    border-radius: 12px;
+    border: 1px solid rgba(56, 189, 248, 0.16);
+    background: rgba(2, 6, 23, 0.26);
+}
+
+.signal-diagnostics-top {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    align-items: flex-start;
+    margin-bottom: 8px;
+}
+
+.signal-diagnostics-top strong {
+    display: block;
+    color: #e5e7eb;
+    font-size: 12px;
+    font-weight: 800;
+}
+
+.signal-diagnostics-top span {
+    display: block;
+    color: #94a3b8;
+    font-size: 10.5px;
+    margin-top: 1px;
+}
+
+.signal-diagnostics-top b {
+    color: #7dd3fc;
+    border: 1px solid rgba(56, 189, 248, 0.18);
+    background: rgba(14, 165, 233, 0.10);
+    border-radius: 999px;
+    padding: 4px 8px;
+    font-size: 10px;
+    white-space: nowrap;
+}
+
+.diagnostic-blockers {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 8px;
+}
+
+.diagnostic-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 4px 8px;
+    border-radius: 999px;
+    border: 1px solid rgba(148, 163, 184, 0.14);
+    background: rgba(15, 23, 42, 0.62);
+    color: #cbd5e1;
+    font-size: 10px;
+}
+
+.diagnostic-pill b {
+    color: #fbbf24;
+}
+
+.diagnostic-preview {
+    display: grid;
+    gap: 6px;
+}
+
+.diagnostic-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 8px 9px;
+    border-radius: 10px;
+    background: rgba(15, 23, 42, 0.48);
+    border: 1px solid rgba(148, 163, 184, 0.08);
+}
+
+.diagnostic-row strong {
+    display: block;
+    color: #38bdf8;
+    font-size: 12px;
+    font-weight: 850;
+}
+
+.diagnostic-row span {
+    color: #94a3b8;
+    font-size: 10.5px;
+    line-height: 1.35;
+}
+
+.diagnostic-metrics {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    align-content: flex-start;
+    min-width: 210px;
+}
+
+.diagnostic-metrics span {
+    border-radius: 8px;
+    padding: 4px 6px;
+    background: rgba(2, 6, 23, 0.35);
+    border: 1px solid rgba(148, 163, 184, 0.08);
+    white-space: nowrap;
+}
+
+.diagnostic-metrics b {
+    color: #e5e7eb;
+}
+
+.diagnostic-more {
+    color: #94a3b8;
+    font-size: 10.5px;
+    padding: 3px 2px 0;
 }
 
 .signal-desk-columns {
