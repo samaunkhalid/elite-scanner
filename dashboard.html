@@ -1449,7 +1449,7 @@ td small {
             <p>Technical Potential Movers + Catalyst Confirmation + Sector Context</p>
         </div>
         <div class="header-meta">
-            <span class="scan-pill">Last Scan: 2026-05-12 13:36 ET</span>
+            <span class="scan-pill">Last Scan: 2026-05-12 13:42 ET</span>
             <span class="status-pill status-green">Market: OPEN</span>
         </div>
     </div>
@@ -1520,96 +1520,145 @@ td small {
     </section>
     
     
-        <section class="signal-desk-panel signal-desk-compact" id="signals">
-            <div class="signal-desk-top">
-                <div>
-                    <strong>Signal Desk</strong>
-                    <span>Intraday execution status</span>
-                </div>
-                <div class="signal-desk-counts">
-                    <span><b>0</b> Active</span>
-                    <span><b>0</b> Ready</span>
-                    <span><b>0</b> Watch</span>
-                </div>
+    <section class="signal-desk-panel" id="signals">
+        <div class="signal-desk-top">
+            <div>
+                <strong>Signal Desk</strong>
+                <span>Intraday execution status. Click a ticker to jump to its full card details.</span>
             </div>
-            <div class="signal-desk-empty">
-                <strong>No signal at this moment.</strong>
-                <span>Scanner is monitoring for Watch, Trigger Ready, and Active setups.</span>
-            </div>
-            
-        <div class="signal-diagnostics">
-            <div class="signal-diagnostics-top">
-                <div>
-                    <strong>Signal Diagnostics</strong>
-                    <span>No valid Watch / Ready / Active setup. Showing compact rejection summary.</span>
-                </div>
-                <b>18 Rejected</b>
-            </div>
-            
-            <div class="diagnostic-blockers">
-                
-                <span class="diagnostic-pill">
-                    <b>48</b> R/R below minimum
-                </span>
-            
-                <span class="diagnostic-pill">
-                    <b>18</b> Market severe risk-off
-                </span>
-            
-                <span class="diagnostic-pill">
-                    <b>18</b> Confidence below Ready minimum
-                </span>
-            
-                <span class="diagnostic-pill">
-                    <b>15</b> Volume confirmation missing
-                </span>
-            
-            </div>
-        
-            <div class="diagnostic-preview">
-                
-            <div class="diagnostic-row">
-                <div>
-                    <strong>SFM</strong>
-                    <span>Market severe risk-off; R/R below minimum; Confidence below Ready minimum</span>
-                </div>
-                <div class="diagnostic-metrics">
-                    <span>Conf <b>66.6%</b></span>
-                    <span>R/R <b>0.01:1</b></span>
-                    <span>Score <b>60</b></span>
-                </div>
-            </div>
-        
-            <div class="diagnostic-row">
-                <div>
-                    <strong>CYTK</strong>
-                    <span>Market severe risk-off; R/R below minimum; Confidence below Ready minimum</span>
-                </div>
-                <div class="diagnostic-metrics">
-                    <span>Conf <b>65.8%</b></span>
-                    <span>R/R <b>—</b></span>
-                    <span>Score <b>58</b></span>
-                </div>
-            </div>
-        
-            <div class="diagnostic-row">
-                <div>
-                    <strong>COCO</strong>
-                    <span>Market severe risk-off; R/R below minimum; Confidence below Ready minimum</span>
-                </div>
-                <div class="diagnostic-metrics">
-                    <span>Conf <b>65.4%</b></span>
-                    <span>R/R <b>—</b></span>
-                    <span>Score <b>57</b></span>
-                </div>
-            </div>
-        
-                <div class="diagnostic-more">+15 more rejected candidates hidden</div>
+            <div class="signal-desk-counts">
+                <span><b>0</b> Active</span>
+                <span><b>0</b> Ready</span>
+                <span><b>9</b> Watch</span>
             </div>
         </div>
-    
-        </section>
+        <div class="signal-desk-columns">
+            
+        <div class="signal-desk-column signal-col-active">
+            <div class="signal-desk-column-top">
+                <div>
+                    <strong>Active</strong>
+                    <span>Triggered setups that need immediate execution review.</span>
+                </div>
+                <b>0</b>
+            </div>
+            
+            <div class="signal-desk-column-empty">
+                <strong>None</strong>
+                <span>Triggered setups that need immediate execution review.</span>
+            </div>
         
+        </div>
+    
+            
+        <div class="signal-desk-column signal-col-ready">
+            <div class="signal-desk-column-top">
+                <div>
+                    <strong>Trigger Ready</strong>
+                    <span>Near-entry setups waiting for confirmation.</span>
+                </div>
+                <b>0</b>
+            </div>
+            
+            <div class="signal-desk-column-empty">
+                <strong>None</strong>
+                <span>Near-entry setups waiting for confirmation.</span>
+            </div>
+        
+        </div>
+    
+            
+        <div class="signal-desk-column signal-col-watch">
+            <div class="signal-desk-column-top">
+                <div>
+                    <strong>Watch</strong>
+                    <span>Developing setups; monitor until conditions improve.</span>
+                </div>
+                <b>9</b>
+            </div>
+            
+            <div class="signal-desk-list">
+                
+        <div class="signal-desk-item signal-desk-watch-compact">
+            <div class="signal-desk-item-top">
+                <a class="signal-desk-symbol" href="#card-BTI">BTI</a>
+                <span class="signal-status signal-watch">WATCH</span>
+            </div>
+            <div class="signal-desk-compact-line">
+                <span>MONITORING</span>
+                <b>69%</b>
+            </div>
+            <span class="signal-desk-time">Detected 13:42 ET</span>
+        </div>
+        
+        <div class="signal-desk-item signal-desk-watch-compact">
+            <div class="signal-desk-item-top">
+                <a class="signal-desk-symbol" href="#card-CYTK">CYTK</a>
+                <span class="signal-status signal-watch">WATCH</span>
+            </div>
+            <div class="signal-desk-compact-line">
+                <span>MONITORING</span>
+                <b>66%</b>
+            </div>
+            <span class="signal-desk-time">Detected 13:42 ET</span>
+        </div>
+        
+        <div class="signal-desk-item signal-desk-watch-compact">
+            <div class="signal-desk-item-top">
+                <a class="signal-desk-symbol" href="#card-COCO">COCO</a>
+                <span class="signal-status signal-watch">WATCH</span>
+            </div>
+            <div class="signal-desk-compact-line">
+                <span>MONITORING</span>
+                <b>65%</b>
+            </div>
+            <span class="signal-desk-time">Detected 13:42 ET</span>
+        </div>
+        
+        <div class="signal-desk-item signal-desk-watch-compact">
+            <div class="signal-desk-item-top">
+                <a class="signal-desk-symbol" href="#card-SUN">SUN</a>
+                <span class="signal-status signal-watch">WATCH</span>
+            </div>
+            <div class="signal-desk-compact-line">
+                <span>MONITORING</span>
+                <b>64%</b>
+            </div>
+            <span class="signal-desk-time">Detected 13:42 ET</span>
+        </div>
+        
+        <div class="signal-desk-item signal-desk-watch-compact">
+            <div class="signal-desk-item-top">
+                <a class="signal-desk-symbol" href="#card-HALO">HALO</a>
+                <span class="signal-status signal-watch">WATCH</span>
+            </div>
+            <div class="signal-desk-compact-line">
+                <span>MONITORING</span>
+                <b>64%</b>
+            </div>
+            <span class="signal-desk-time">Detected 13:42 ET</span>
+        </div>
+        
+        <div class="signal-desk-item signal-desk-watch-compact">
+            <div class="signal-desk-item-top">
+                <a class="signal-desk-symbol" href="#card-WEN">WEN</a>
+                <span class="signal-status signal-watch">WATCH</span>
+            </div>
+            <div class="signal-desk-compact-line">
+                <span>MONITORING</span>
+                <b>62%</b>
+            </div>
+            <span class="signal-desk-time">Detected 13:42 ET</span>
+        </div>
+        
+                <div class="signal-desk-extra">+3 more in this bucket</div>
+            </div>
+        
+        </div>
+    
+        </div>
+    </section>
+    
 
     
         <div class="nav-tabs">
@@ -1684,6 +1733,24 @@ td small {
 
         <div class="tags-row"><span class="tag tag-caution">Big move +10.6%</span><span class="tag tag-positive">Sector leading</span><span class="tag tag-positive">Vs sector +8.3%</span><span class="tag tag-tech">Above VWAP</span><span class="tag tag-neutral">$111M liq</span></div>
 
+        
+        <div class="signal-detail">
+            <div class="signal-detail-top">
+                <div>
+                    <strong>Signal Detail</strong>
+                    <span>MONITORING</span>
+                </div>
+                <span class="signal-status signal-watch">WATCH</span>
+            </div>
+
+            <div class="signal-detail-meta">
+                <span>Detected 13:42 ET</span>
+                <span>Last check 13:42 ET</span>
+                <span>Confidence 64%</span>
+            </div>
+
+            <div class="signal-reason"><strong>Reason:</strong> Relative-strength long candidate. Waiting for VWAP pullback, base squeeze, or HOD breakout structure.</div>
+        </div>
         
 
         
@@ -1760,6 +1827,24 @@ td small {
         <div class="tags-row"><span class="tag tag-positive">Sector leading</span><span class="tag tag-positive">Vs sector +3.3%</span><span class="tag tag-tech">Above VWAP</span><span class="tag tag-neutral">$224M liq</span><span class="tag tag-positive">Upper range</span></div>
 
         
+        <div class="signal-detail">
+            <div class="signal-detail-top">
+                <div>
+                    <strong>Signal Detail</strong>
+                    <span>MONITORING</span>
+                </div>
+                <span class="signal-status signal-watch">WATCH</span>
+            </div>
+
+            <div class="signal-detail-meta">
+                <span>Detected 13:42 ET</span>
+                <span>Last check 13:42 ET</span>
+                <span>Confidence 69%</span>
+            </div>
+
+            <div class="signal-reason"><strong>Reason:</strong> Relative-strength long candidate. Waiting for VWAP pullback, base squeeze, or HOD breakout structure.</div>
+        </div>
+        
 
         
 
@@ -1828,6 +1913,24 @@ td small {
 
         <div class="tags-row"><span class="tag tag-positive">Sector leading</span><span class="tag tag-positive">Vs sector +4.7%</span><span class="tag tag-tech">Above VWAP</span><span class="tag tag-squeeze">Float 49M</span><span class="tag tag-neutral">$60M liq</span></div>
 
+        
+        <div class="signal-detail">
+            <div class="signal-detail-top">
+                <div>
+                    <strong>Signal Detail</strong>
+                    <span>MONITORING</span>
+                </div>
+                <span class="signal-status signal-watch">WATCH</span>
+            </div>
+
+            <div class="signal-detail-meta">
+                <span>Detected 13:42 ET</span>
+                <span>Last check 13:42 ET</span>
+                <span>Confidence 60%</span>
+            </div>
+
+            <div class="signal-reason"><strong>Reason:</strong> Relative-strength long candidate. Waiting for VWAP pullback, base squeeze, or HOD breakout structure.</div>
+        </div>
         
 
         
@@ -1904,6 +2007,24 @@ td small {
         <div class="tags-row"><span class="tag tag-positive">Sector leading</span><span class="tag tag-positive">Vs sector +2.2%</span><span class="tag tag-tech">Above VWAP</span><span class="tag tag-squeeze">DTC 8.0d</span><span class="tag tag-neutral">ATR 2.5% (clean)</span></div>
 
         
+        <div class="signal-detail">
+            <div class="signal-detail-top">
+                <div>
+                    <strong>Signal Detail</strong>
+                    <span>MONITORING</span>
+                </div>
+                <span class="signal-status signal-watch">WATCH</span>
+            </div>
+
+            <div class="signal-detail-meta">
+                <span>Detected 13:42 ET</span>
+                <span>Last check 13:42 ET</span>
+                <span>Confidence 64%</span>
+            </div>
+
+            <div class="signal-reason"><strong>Reason:</strong> Relative-strength long candidate. Waiting for VWAP pullback, base squeeze, or HOD breakout structure.</div>
+        </div>
+        
 
         
         <div class="mini-panel">
@@ -1978,6 +2099,24 @@ td small {
 
         <div class="tags-row"><span class="tag tag-positive">Sector leading</span><span class="tag tag-positive">Vs sector +3.5%</span><span class="tag tag-tech">Above VWAP</span><span class="tag tag-neutral">$186M liq</span><span class="tag tag-positive">Upper range</span></div>
 
+        
+        <div class="signal-detail">
+            <div class="signal-detail-top">
+                <div>
+                    <strong>Signal Detail</strong>
+                    <span>MONITORING</span>
+                </div>
+                <span class="signal-status signal-watch">WATCH</span>
+            </div>
+
+            <div class="signal-detail-meta">
+                <span>Detected 13:42 ET</span>
+                <span>Last check 13:42 ET</span>
+                <span>Confidence 62%</span>
+            </div>
+
+            <div class="signal-reason"><strong>Reason:</strong> Relative-strength long candidate. Waiting for VWAP pullback, base squeeze, or HOD breakout structure.</div>
+        </div>
         
 
         
@@ -2129,6 +2268,24 @@ td small {
         <div class="tags-row"><span class="tag tag-positive">Sector leading</span><span class="tag tag-positive">Vs sector -1.7%</span><span class="tag tag-tech">Above VWAP</span><span class="tag tag-neutral">$253M liq</span><span class="tag tag-positive">Upper range</span></div>
 
         
+        <div class="signal-detail">
+            <div class="signal-detail-top">
+                <div>
+                    <strong>Signal Detail</strong>
+                    <span>MONITORING</span>
+                </div>
+                <span class="signal-status signal-watch">WATCH</span>
+            </div>
+
+            <div class="signal-detail-meta">
+                <span>Detected 13:42 ET</span>
+                <span>Last check 13:42 ET</span>
+                <span>Confidence 66%</span>
+            </div>
+
+            <div class="signal-reason"><strong>Reason:</strong> Relative-strength long candidate. Waiting for VWAP pullback, base squeeze, or HOD breakout structure.</div>
+        </div>
+        
 
         
         <div class="mini-panel">
@@ -2272,6 +2429,24 @@ td small {
 
         <div class="tags-row"><span class="tag tag-positive">Sector leading</span><span class="tag tag-positive">Vs sector +1.9%</span><span class="tag tag-tech">Above VWAP</span><span class="tag tag-neutral">$117M liq</span><span class="tag tag-positive">Upper range</span></div>
 
+        
+        <div class="signal-detail">
+            <div class="signal-detail-top">
+                <div>
+                    <strong>Signal Detail</strong>
+                    <span>MONITORING</span>
+                </div>
+                <span class="signal-status signal-watch">WATCH</span>
+            </div>
+
+            <div class="signal-detail-meta">
+                <span>Detected 13:42 ET</span>
+                <span>Last check 13:42 ET</span>
+                <span>Confidence 65%</span>
+            </div>
+
+            <div class="signal-reason"><strong>Reason:</strong> Relative-strength long candidate. Waiting for VWAP pullback, base squeeze, or HOD breakout structure.</div>
+        </div>
         
 
         
@@ -2425,6 +2600,24 @@ td small {
         <div class="tags-row"><span class="tag tag-caution">Big move +17.2%</span><span class="tag tag-positive">Vs sector +18.4%</span><span class="tag tag-positive">Positive catalyst</span><span class="tag tag-tech">Above VWAP</span><span class="tag tag-squeeze">RVOL 3.8x</span></div>
 
         
+        <div class="signal-detail">
+            <div class="signal-detail-top">
+                <div>
+                    <strong>Signal Detail</strong>
+                    <span>MONITORING</span>
+                </div>
+                <span class="signal-status signal-watch">WATCH</span>
+            </div>
+
+            <div class="signal-detail-meta">
+                <span>Detected 13:42 ET</span>
+                <span>Last check 13:42 ET</span>
+                <span>Confidence 62%</span>
+            </div>
+
+            <div class="signal-reason"><strong>Reason:</strong> Relative-strength long candidate. Waiting for VWAP pullback, base squeeze, or HOD breakout structure.</div>
+        </div>
+        
 
         
         <div class="mini-panel">
@@ -2499,6 +2692,24 @@ td small {
 
         <div class="tags-row"><span class="tag tag-caution">Big move +13.5%</span><span class="tag tag-positive">Vs sector +14.8%</span><span class="tag tag-positive">Upper range</span><span class="tag tag-tech">Above VWAP</span><span class="tag tag-neutral">📰 Company-specific news</span></div>
 
+        
+        <div class="signal-detail">
+            <div class="signal-detail-top">
+                <div>
+                    <strong>Signal Detail</strong>
+                    <span>MONITORING</span>
+                </div>
+                <span class="signal-status signal-watch">WATCH</span>
+            </div>
+
+            <div class="signal-detail-meta">
+                <span>Detected 13:42 ET</span>
+                <span>Last check 13:42 ET</span>
+                <span>Confidence 62%</span>
+            </div>
+
+            <div class="signal-reason"><strong>Reason:</strong> Relative-strength long candidate. Waiting for VWAP pullback, base squeeze, or HOD breakout structure.</div>
+        </div>
         
 
         
