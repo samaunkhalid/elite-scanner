@@ -14,21 +14,17 @@ Purpose:
       * signal_state.json
       * suppressed_signals.csv
 
+Core design:
+  - 1-minute bars = execution timing and live invalidation.
+  - 5-minute bars = setup structure, stop/target construction, and pattern quality.
+  - Long-side only.
+  - Red/risk-off market can still allow RELATIVE-STRENGTH WATCH candidates.
+  - Invalid trade plans must NOT appear as WATCH.
+
 Important:
   - This engine generates dashboard signals only.
   - It does NOT place orders.
   - Manual chart confirmation is still required before any trade.
-
-Environment variables:
-  ALPACA_API_KEY
-  ALPACA_SECRET_KEY
-  ALPACA_DATA_FEED       default: sip   allowed: sip, iex, delayed_sip
-  SIGNAL_DEBUG           default: 0
-
-Recommended workflow order:
-  python elite_scanner.py
-  python signal_engine.py
-  python elite_dashboard.py
 """
 
 from __future__ import annotations
@@ -40,7 +36,7 @@ import os
 import re
 import time
 from dataclasses import dataclass
-from datetime import datetime, date, time as dtime, timedelta, timezone
+from datetime import datetime, time as dtime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
@@ -72,8 +68,8 @@ SIGNAL_STATE_FILE = "signal_state.json"
 SUPPRESSED_SIGNALS_FILE = "suppressed_signals.csv"
 
 # State retention.
-ACTIVE_STALE_MINUTES = 10         # 2 GitHub refresh cycles at 5-min cadence.
-TRIGGER_READY_STALE_MINUTES = 45  # Setup can stay ready longer, but not all day.
+ACTIVE_STALE_MINUTES = 10
+TRIGGER_READY_STALE_MINUTES = 45
 RECENT_INVALIDATED_KEEP_MINUTES = 30
 
 # Quality thresholds.
@@ -82,17 +78,18 @@ MAX_VWAP_EXTENSION_PCT = 5.0
 ACTIVE_HOD_MAX_DISTANCE = -2.5
 POTENTIAL_HOD_MAX_DISTANCE = -4.0
 HOD_BREAKOUT_READY_DISTANCE = -0.75
-MIN_RR = 1.5
+
 MIN_RR_WATCH = 0.75
-MAX_STOP_DISTANCE_PCT = 3.0
-MAX_STOP_DISTANCE_HOD_PCT = 3.5
-MIN_STOP_BUFFER_PCT = 0.8
-VOLATILE_STOP_BUFFER_PCT = 1.0
-MIN_TARGET_R_MULTIPLE = 1.5
-TARGET_2_R_MULTIPLE = 2.5
+MIN_RR = 1.5
 MIN_CONF_WATCH = 60.0
 MIN_CONF_READY = 75.0
 MIN_CONF_ACTIVE = 85.0
+
+MAX_STOP_DIST_NORMAL = 3.0
+MAX_STOP_DIST_HOD = 3.5
+
+EXECUTION_TIMEFRAME = "1Min"
+STRUCTURE_TIMEFRAME = "5Min"
 
 DEBUG = os.getenv("SIGNAL_DEBUG", "0").strip() == "1"
 
@@ -160,6 +157,14 @@ def pct_change(current: float, base: float) -> float:
     return ((current - base) / base) * 100.0
 
 
+def normalize_status(status: Any) -> str:
+    return safe_str(status, "WAIT").upper().replace(" ", "_")
+
+
+def normalize_symbol(symbol: Any) -> str:
+    return re.sub(r"[^A-Z0-9._-]", "", safe_str(symbol, "").upper().strip())
+
+
 def parse_iso_dt(text: Any) -> Optional[datetime]:
     s = safe_str(text, "").strip()
     if not s:
@@ -171,11 +176,16 @@ def parse_iso_dt(text: Any) -> Optional[datetime]:
     except Exception:
         pass
 
-    # Common fallback: "YYYY-MM-DD HH:MM:SS"
     try:
         return datetime.strptime(s[:19], "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
     except Exception:
         return None
+
+
+def ny_now() -> datetime:
+    if ZoneInfo:
+        return datetime.now(ZoneInfo("America/New_York"))
+    return datetime.now()
 
 
 def iso_now_et() -> str:
@@ -201,40 +211,9 @@ def minutes_since(dt_text: Any, now: Optional[datetime] = None) -> Optional[floa
         return None
 
 
-def normalize_status(status: Any) -> str:
-    return safe_str(status, "WAIT").upper().replace(" ", "_")
-
-
-def normalize_symbol(symbol: Any) -> str:
-    return re.sub(r"[^A-Z0-9._-]", "", safe_str(symbol, "").upper().strip())
-
-
 # ==============================================================
 # TIME HELPERS
 # ==============================================================
-
-def ny_now() -> datetime:
-    if ZoneInfo:
-        return datetime.now(ZoneInfo("America/New_York"))
-    # Fallback approximation; GitHub Python 3.11 should have zoneinfo.
-    return datetime.now()
-
-
-def ny_datetime_for_today(hour: int, minute: int, now: Optional[datetime] = None) -> datetime:
-    now = now or ny_now()
-
-    if ZoneInfo:
-        return datetime(
-            now.year,
-            now.month,
-            now.day,
-            hour,
-            minute,
-            tzinfo=ZoneInfo("America/New_York"),
-        )
-
-    return datetime(now.year, now.month, now.day, hour, minute)
-
 
 def get_market_phase(now: Optional[datetime] = None) -> str:
     """
@@ -288,10 +267,6 @@ def is_valid_signal_phase(phase: str) -> bool:
     return phase in {"VALID_MORNING", "VALID_AFTERNOON"}
 
 
-def is_blackout_phase(phase: str) -> bool:
-    return phase in {"OPENING_BLACKOUT", "LUNCH_BLACKOUT", "FINAL_BLACKOUT", "AFTERHOURS", "CLOSED"}
-
-
 def session_date_str(now: Optional[datetime] = None) -> str:
     now = now or ny_now()
     return now.date().isoformat()
@@ -301,7 +276,6 @@ def session_start_end_utc(now: Optional[datetime] = None) -> Tuple[str, str]:
     """
     Regular-session window for signal logic.
     Uses 9:30 AM ET to now.
-    This avoids mixing premarket into regular-session VWAP/HOD signals.
     """
     now = now or ny_now()
 
@@ -311,7 +285,6 @@ def session_start_end_utc(now: Optional[datetime] = None) -> Tuple[str, str]:
         start_utc = start_ny.astimezone(timezone.utc)
         end_utc = end_ny.astimezone(timezone.utc)
     else:
-        # Approximate fallback.
         start_utc = datetime.utcnow().replace(hour=13, minute=30, second=0, microsecond=0)
         end_utc = datetime.utcnow().replace(tzinfo=timezone.utc)
 
@@ -375,6 +348,7 @@ def load_focus_candidates() -> Dict[str, Dict[str, Any]]:
         if not sym:
             continue
         row = dict(row)
+        row["symbol"] = sym
         row["signal_source_bucket"] = "POTENTIAL"
         row["signal_rank"] = idx + 1
         focus[sym] = row
@@ -384,10 +358,10 @@ def load_focus_candidates() -> Dict[str, Dict[str, Any]]:
         if not sym:
             continue
         if sym in focus:
-            # Keep potential priority but note both buckets.
             focus[sym]["signal_source_bucket"] = "POTENTIAL+ACTIVE"
             continue
         row = dict(row)
+        row["symbol"] = sym
         row["signal_source_bucket"] = "ACTIVE"
         row["signal_rank"] = idx + 1
         focus[sym] = row
@@ -398,10 +372,8 @@ def load_focus_candidates() -> Dict[str, Dict[str, Any]]:
 def load_signal_state() -> Dict[str, Dict[str, Any]]:
     data = load_json(SIGNAL_STATE_FILE, {})
     if isinstance(data, dict):
-        # Newer format: {"signals": {...}}
         if isinstance(data.get("signals"), dict):
             return data.get("signals", {})
-        # Older direct symbol map.
         return data
     return {}
 
@@ -475,9 +447,9 @@ class AlpacaMarketData:
         for i in range(0, len(symbols), size):
             yield symbols[i:i + size]
 
-    def fetch_intraday_bars(self, symbols: List[str]) -> Dict[str, List[Dict[str, Any]]]:
+    def fetch_bars(self, symbols: List[str], timeframe: str) -> Dict[str, List[Dict[str, Any]]]:
         """
-        Fetch today's regular-session 1-minute bars for signal logic.
+        Fetch today's regular-session bars.
         """
         if not self.available:
             log("  ⚠ Alpaca credentials missing; signal engine cannot fetch intraday bars.")
@@ -499,7 +471,7 @@ class AlpacaMarketData:
             while True:
                 params = {
                     "symbols": ",".join(batch),
-                    "timeframe": "1Min",
+                    "timeframe": timeframe,
                     "start": start,
                     "end": end,
                     "limit": 10000,
@@ -537,10 +509,6 @@ class AlpacaMarketData:
         return output
 
     def fetch_latest_quotes(self, symbols: List[str]) -> Dict[str, Dict[str, Any]]:
-        """
-        Fetch latest bid/ask for spread-aware stop buffer.
-        If unavailable, caller falls back to ATR/price buffer.
-        """
         if not self.available:
             return {}
 
@@ -597,10 +565,12 @@ class IntradayMetrics:
     hod_distance_pct: float = 0.0
     day_volume: float = 0.0
     latest_bar_time: str = ""
+
     avg_volume_5: float = 0.0
     avg_volume_prev_5: float = 0.0
     volume_stable_or_increasing: bool = False
     volume_drying: bool = False
+
     pullback_holding_vwap: bool = False
     pullback_high: float = 0.0
     pullback_low: float = 0.0
@@ -608,15 +578,14 @@ class IntradayMetrics:
     opening_range_low: float = 0.0
     vwap_touch_count: int = 0
     consolidating_near_high: bool = False
+
     base_compression: bool = False
     base_range_pct: float = 0.0
     base_high: float = 0.0
     base_low: float = 0.0
-    base_breakout_level: float = 0.0
-    base_higher_lows: bool = False
-    base_volume_contracting: bool = False
-    execution_timeframe: str = "1Min"
-    structure_timeframe: str = "1Min"
+    base_volume_constructive: bool = False
+    higher_low_or_flat_base: bool = False
+    price_near_base_breakout: bool = False
     structure_bar_count: int = 0
 
 
@@ -629,26 +598,26 @@ def typical_price(bar: Dict[str, Any]) -> float:
     return c
 
 
-def analyze_bars(symbol: str, bars: List[Dict[str, Any]]) -> IntradayMetrics:
-    metrics = IntradayMetrics(symbol=symbol)
-
-    if not bars:
-        return metrics
-
-    clean = []
+def clean_bars(bars: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    out = []
     for b in bars:
         c = safe_float(b.get("c"), 0)
-        v = safe_float(b.get("v"), 0)
         if c > 0:
-            clean.append(b)
+            out.append(b)
+    return out
 
+
+def analyze_execution_bars(symbol: str, bars: List[Dict[str, Any]]) -> IntradayMetrics:
+    metrics = IntradayMetrics(symbol=symbol)
+
+    clean = clean_bars(bars)
     if not clean:
         return metrics
 
     metrics.has_data = True
     metrics.price = safe_float(clean[-1].get("c"), 0)
-    metrics.session_open = safe_float(clean[0].get("o"), 0) or safe_float(clean[0].get("c"), 0)
-    metrics.day_change_pct = pct_change(metrics.price, metrics.session_open) if metrics.session_open > 0 else 0.0
+    metrics.session_open = safe_float(clean[0].get("o"), safe_float(clean[0].get("c"), 0))
+    metrics.day_change_pct = pct_change(metrics.price, metrics.session_open) if metrics.session_open > 0 else 0
     metrics.hod = max(safe_float(b.get("h"), 0) for b in clean)
     metrics.lod = min(safe_float(b.get("l"), metrics.price) for b in clean if safe_float(b.get("l"), 0) > 0)
     metrics.latest_bar_time = safe_str(clean[-1].get("t"), "")
@@ -666,11 +635,28 @@ def analyze_bars(symbol: str, bars: List[Dict[str, Any]]) -> IntradayMetrics:
     metrics.vwap_dist_pct = pct_change(metrics.price, metrics.vwap) if metrics.vwap > 0 else 0
     metrics.hod_distance_pct = pct_change(metrics.price, metrics.hod) if metrics.hod > 0 else 0
 
-    recent = clean[-5:] if len(clean) >= 5 else clean
-    prev = clean[-10:-5] if len(clean) >= 10 else clean[:-5]
+    first15 = clean[:15]
+    if first15:
+        lows = [safe_float(b.get("l"), 0) for b in first15 if safe_float(b.get("l"), 0) > 0]
+        metrics.opening_range_low = min(lows) if lows else metrics.lod
 
-    recent_vols = [safe_float(b.get("v"), 0) for b in recent]
-    prev_vols = [safe_float(b.get("v"), 0) for b in prev]
+    return metrics
+
+
+def enrich_structure_from_5min(metrics: IntradayMetrics, bars_5m: List[Dict[str, Any]]) -> IntradayMetrics:
+    clean = clean_bars(bars_5m)
+    metrics.structure_bar_count = len(clean)
+
+    if not clean:
+        return metrics
+
+    recent3 = clean[-3:] if len(clean) >= 3 else clean
+    recent5 = clean[-5:] if len(clean) >= 5 else clean
+
+    # Structure volume.
+    prev5 = clean[-10:-5] if len(clean) >= 10 else clean[:-5]
+    recent_vols = [safe_float(b.get("v"), 0) for b in recent5]
+    prev_vols = [safe_float(b.get("v"), 0) for b in prev5]
 
     metrics.avg_volume_5 = sum(recent_vols) / len(recent_vols) if recent_vols else 0
     metrics.avg_volume_prev_5 = sum(prev_vols) / len(prev_vols) if prev_vols else 0
@@ -680,28 +666,28 @@ def analyze_bars(symbol: str, bars: List[Dict[str, Any]]) -> IntradayMetrics:
     metrics.volume_drying = (
         metrics.avg_volume_prev_5 > 0 and metrics.avg_volume_5 <= 0.80 * metrics.avg_volume_prev_5
     )
+    metrics.base_volume_constructive = (
+        metrics.avg_volume_prev_5 <= 0
+        or metrics.avg_volume_5 <= 1.20 * metrics.avg_volume_prev_5
+        or metrics.volume_drying
+    )
 
-    last3 = clean[-3:] if len(clean) >= 3 else clean
-    metrics.pullback_high = max(safe_float(b.get("h"), 0) for b in last3)
-    metrics.pullback_low = min(safe_float(b.get("l"), metrics.price) for b in last3 if safe_float(b.get("l"), 0) > 0)
+    # Pullback structure from last 3x 5-min bars.
+    metrics.pullback_high = max(safe_float(b.get("h"), 0) for b in recent3)
+    lows3 = [safe_float(b.get("l"), 0) for b in recent3 if safe_float(b.get("l"), 0) > 0]
+    metrics.pullback_low = min(lows3) if lows3 else metrics.price
     metrics.recent_swing_low = metrics.pullback_low
 
-    # Opening range low: first 15 regular-session minutes available.
-    first15 = clean[:15]
-    if first15:
-        lows = [safe_float(b.get("l"), 0) for b in first15 if safe_float(b.get("l"), 0) > 0]
-        metrics.opening_range_low = min(lows) if lows else metrics.lod
-
-    # VWAP hold: last 2 of 3 lows should be at or very close to VWAP.
+    # VWAP hold: 2 of last 3 structure bars should close above VWAP and not undercut it heavily.
     hold_count = 0
-    for b in last3:
+    for b in recent3:
         low = safe_float(b.get("l"), 0)
         close = safe_float(b.get("c"), 0)
-        if metrics.vwap > 0 and low >= metrics.vwap * 0.997 and close >= metrics.vwap:
+        if metrics.vwap > 0 and low >= metrics.vwap * 0.995 and close >= metrics.vwap:
             hold_count += 1
-    metrics.pullback_holding_vwap = hold_count >= min(2, len(last3))
+    metrics.pullback_holding_vwap = hold_count >= min(2, len(recent3))
 
-    # VWAP touch count: bars whose range touched VWAP or close was very near it.
+    # VWAP touch count on 5-min structure, not noisy 1-min wiggles.
     touches = 0
     for b in clean:
         high = safe_float(b.get("h"), 0)
@@ -714,223 +700,49 @@ def analyze_bars(symbol: str, bars: List[Dict[str, Any]]) -> IntradayMetrics:
             touches += 1
     metrics.vwap_touch_count = touches
 
-    # Consolidating near high: last 5 lows remain close to HOD and range is not expanding wildly.
-    if recent and metrics.hod > 0:
-        recent_lows = [safe_float(b.get("l"), 0) for b in recent if safe_float(b.get("l"), 0) > 0]
-        recent_highs = [safe_float(b.get("h"), 0) for b in recent if safe_float(b.get("h"), 0) > 0]
+    # Base/flag compression from last 5x 5-min bars.
+    recent_highs = [safe_float(b.get("h"), 0) for b in recent5 if safe_float(b.get("h"), 0) > 0]
+    recent_lows = [safe_float(b.get("l"), 0) for b in recent5 if safe_float(b.get("l"), 0) > 0]
 
-        if recent_lows and recent_highs:
-            min_recent_low = min(recent_lows)
-            recent_range_pct = pct_change(max(recent_highs), min_recent_low)
-            metrics.consolidating_near_high = (
-                pct_change(min_recent_low, metrics.hod) >= -1.5
-                and recent_range_pct <= 2.0
-            )
+    if recent_highs and recent_lows:
+        metrics.base_high = max(recent_highs)
+        metrics.base_low = min(recent_lows)
+        metrics.base_range_pct = pct(metrics.base_high - metrics.base_low, metrics.base_low) if metrics.base_low > 0 else 0
 
-    # Base / flag / squeeze compression:
-    # Last 8-10 candles stay tight near HOD, with a defined breakout level.
-    # This is intentionally conservative so it does not chase extended names.
-    base_window = clean[-10:] if len(clean) >= 10 else clean[-8:] if len(clean) >= 8 else []
-    prior_window = clean[-20:-10] if len(clean) >= 20 else clean[:-10]
+        # Higher-low or flat base:
+        first_half = recent5[: max(1, len(recent5) // 2)]
+        second_half = recent5[max(1, len(recent5) // 2):]
+        first_lows = [safe_float(b.get("l"), 0) for b in first_half if safe_float(b.get("l"), 0) > 0]
+        second_lows = [safe_float(b.get("l"), 0) for b in second_half if safe_float(b.get("l"), 0) > 0]
 
-    if base_window and len(base_window) >= 8 and metrics.hod > 0:
-        base_highs = [safe_float(b.get("h"), 0) for b in base_window if safe_float(b.get("h"), 0) > 0]
-        base_lows = [safe_float(b.get("l"), 0) for b in base_window if safe_float(b.get("l"), 0) > 0]
-        base_vols = [safe_float(b.get("v"), 0) for b in base_window]
-        prior_vols = [safe_float(b.get("v"), 0) for b in prior_window]
+        if first_lows and second_lows:
+            first_min = min(first_lows)
+            second_min = min(second_lows)
+            metrics.higher_low_or_flat_base = second_min >= first_min * 0.997
 
-        if base_highs and base_lows:
-            metrics.base_high = max(base_highs)
-            metrics.base_low = min(base_lows)
-            metrics.base_breakout_level = metrics.base_high * 1.0002
-            metrics.base_range_pct = pct_change(metrics.base_high, metrics.base_low)
+        metrics.price_near_base_breakout = metrics.price >= metrics.base_high * 0.995 if metrics.base_high > 0 else False
 
-            # Higher-low / flat-base check:
-            # second-half lows should not undercut first-half lows materially.
-            half = len(base_window) // 2
-            first_half_lows = [
-                safe_float(b.get("l"), 0)
-                for b in base_window[:half]
-                if safe_float(b.get("l"), 0) > 0
-            ]
-            second_half_lows = [
-                safe_float(b.get("l"), 0)
-                for b in base_window[half:]
-                if safe_float(b.get("l"), 0) > 0
-            ]
+        metrics.base_compression = (
+            metrics.base_range_pct <= 2.0
+            and metrics.higher_low_or_flat_base
+            and metrics.base_volume_constructive
+            and metrics.price_near_base_breakout
+        )
 
-            if first_half_lows and second_half_lows:
-                metrics.base_higher_lows = min(second_half_lows) >= min(first_half_lows) * 0.997
-
-            base_avg_vol = sum(base_vols) / len(base_vols) if base_vols else 0
-            prior_avg_vol = sum(prior_vols) / len(prior_vols) if prior_vols else 0
-
-            # Volume contraction is preferred but not mandatory; stable volume is acceptable.
-            metrics.base_volume_contracting = (
-                prior_avg_vol <= 0
-                or base_avg_vol <= 0.95 * prior_avg_vol
-                or metrics.volume_stable_or_increasing
-            )
-
-            near_hod_base = pct_change(metrics.base_low, metrics.hod) >= -2.0
-            tight_enough = metrics.base_range_pct <= 2.0
-            price_near_breakout = pct_change(metrics.price, metrics.base_high) >= -0.85
-
-            metrics.base_compression = (
-                metrics.above_vwap
-                and near_hod_base
-                and tight_enough
-                and price_near_breakout
-                and metrics.base_higher_lows
-                and metrics.base_volume_contracting
-            )
+        recent_range_pct = pct(metrics.base_high - metrics.base_low, metrics.base_low) if metrics.base_low > 0 else 999
+        metrics.consolidating_near_high = (
+            metrics.hod > 0
+            and pct_change(metrics.base_low, metrics.hod) >= -1.8
+            and recent_range_pct <= 2.2
+        )
 
     return metrics
-
-
-def parse_bar_datetime(bar: Dict[str, Any]) -> Optional[datetime]:
-    """
-    Parse Alpaca bar timestamp safely.
-    """
-    t = safe_str(bar.get("t"), "")
-    if not t:
-        return None
-
-    dt = parse_iso_dt(t)
-    if dt is None:
-        return None
-
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-
-    return dt
-
-
-def aggregate_bars_to_minutes(bars: List[Dict[str, Any]], minutes: int = 5) -> List[Dict[str, Any]]:
-    """
-    Convert 1-minute bars into larger structure bars.
-
-    We keep the original 1-minute bars for execution/price, but use these
-    aggregated bars for cleaner setup structure:
-      - VWAP pullback quality
-      - VWAP touch count
-      - base / bull-flag compression
-      - volume stability
-    """
-    clean = [b for b in bars if safe_float(b.get("c"), 0) > 0]
-    if not clean:
-        return []
-
-    timed: List[Tuple[datetime, Dict[str, Any]]] = []
-    untimed: List[Dict[str, Any]] = []
-
-    for b in clean:
-        dt = parse_bar_datetime(b)
-        if dt is None:
-            untimed.append(b)
-        else:
-            timed.append((dt, b))
-
-    if not timed:
-        # Fallback: chunk every N bars if timestamps are unavailable.
-        output = []
-        for i in range(0, len(clean), minutes):
-            chunk = clean[i:i + minutes]
-            if not chunk:
-                continue
-            output.append({
-                "t": safe_str(chunk[0].get("t"), ""),
-                "o": safe_float(chunk[0].get("o"), safe_float(chunk[0].get("c"), 0)),
-                "h": max(safe_float(x.get("h"), 0) for x in chunk),
-                "l": min(safe_float(x.get("l"), safe_float(x.get("c"), 0)) for x in chunk if safe_float(x.get("l"), 0) > 0),
-                "c": safe_float(chunk[-1].get("c"), 0),
-                "v": sum(safe_float(x.get("v"), 0) for x in chunk),
-            })
-        return output
-
-    timed.sort(key=lambda x: x[0])
-
-    buckets: Dict[datetime, List[Dict[str, Any]]] = {}
-
-    for dt, b in timed:
-        bucket_minute = (dt.minute // minutes) * minutes
-        bucket_dt = dt.replace(minute=bucket_minute, second=0, microsecond=0)
-        buckets.setdefault(bucket_dt, []).append(b)
-
-    output = []
-    for bucket_dt in sorted(buckets.keys()):
-        chunk = buckets[bucket_dt]
-        lows = [safe_float(x.get("l"), 0) for x in chunk if safe_float(x.get("l"), 0) > 0]
-        output.append({
-            "t": bucket_dt.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
-            "o": safe_float(chunk[0].get("o"), safe_float(chunk[0].get("c"), 0)),
-            "h": max(safe_float(x.get("h"), 0) for x in chunk),
-            "l": min(lows) if lows else safe_float(chunk[-1].get("c"), 0),
-            "c": safe_float(chunk[-1].get("c"), 0),
-            "v": sum(safe_float(x.get("v"), 0) for x in chunk),
-        })
-
-    return output
-
-
-def analyze_bars_with_structure(symbol: str, bars: List[Dict[str, Any]]) -> IntradayMetrics:
-    """
-    Hybrid analysis:
-      - 1-minute bars drive execution fields: last price, HOD, VWAP, HOD distance.
-      - 5-minute aggregated bars drive setup structure: pullback, base/flag, VWAP touch count.
-
-    This reduces false failures from noisy 1-minute candles while preserving
-    precise execution levels from the 1-minute feed.
-    """
-    execution = analyze_bars(symbol, bars)
-
-    if not execution.has_data:
-        return execution
-
-    structure_bars = aggregate_bars_to_minutes(bars, 5)
-    structure = analyze_bars(symbol, structure_bars) if len(structure_bars) >= 3 else IntradayMetrics(symbol=symbol)
-
-    execution.execution_timeframe = "1Min"
-    execution.structure_timeframe = "5Min" if structure.has_data else "1Min"
-    execution.structure_bar_count = len(structure_bars)
-
-    if not structure.has_data:
-        return execution
-
-    # Copy only structure-quality fields from 5-minute analysis.
-    # Keep execution price/VWAP/HOD from the 1-minute feed.
-    for attr in [
-        "avg_volume_5",
-        "avg_volume_prev_5",
-        "volume_stable_or_increasing",
-        "volume_drying",
-        "pullback_holding_vwap",
-        "pullback_high",
-        "pullback_low",
-        "recent_swing_low",
-        "vwap_touch_count",
-        "consolidating_near_high",
-        "base_compression",
-        "base_range_pct",
-        "base_high",
-        "base_low",
-        "base_breakout_level",
-        "base_higher_lows",
-        "base_volume_contracting",
-    ]:
-        setattr(execution, attr, getattr(structure, attr))
-
-    # Opening range support should remain regular-session support from execution bars.
-    # If 5-minute base data is available, keep it structure-only.
-
-    return execution
 
 
 def quote_spread_dollars(quote: Dict[str, Any]) -> Optional[float]:
     if not quote:
         return None
 
-    # Alpaca quote fields: bp = bid price, ap = ask price.
     bid = safe_float(quote.get("bp"), 0)
     ask = safe_float(quote.get("ap"), 0)
 
@@ -986,67 +798,6 @@ def severe_risk_off(regime: Dict[str, Any]) -> bool:
     )
 
 
-
-def market_down_reference(regime: Dict[str, Any]) -> float:
-    """
-    Most relevant broad-market reference for relative-strength checks.
-    Uses the weakest available major index move. Negative value = red market.
-    """
-    refs = [
-        safe_float(regime.get("spy_change"), 0),
-        safe_float(regime.get("qqq_change"), 0),
-        safe_float(regime.get("iwm_change"), 0),
-    ]
-    return min(refs)
-
-
-def relative_strength_long_candidate(
-    row: Dict[str, Any],
-    metrics: IntradayMetrics,
-    regime: Dict[str, Any],
-) -> bool:
-    """
-    Allows long-side WATCH candidates on red/risk-off days without forcing near-HOD.
-    This does NOT make the setup TRIGGER_READY or ACTIVE.
-    Ready/Active still require R/R, confidence, and a valid VWAP/base/HOD trigger.
-
-    Red-day WATCH logic:
-      - ticker is green or clearly outperforming the weakest index
-      - above/reclaiming VWAP
-      - sector is not weak
-      - not high-risk/extreme
-      - liquid enough
-      - not extremely extended
-    """
-    if not metrics.has_data:
-        return False
-
-    if high_risk_extreme(row):
-        return False
-
-    if safe_float(row.get("dollar_vol_M"), 0) < MIN_AVG_DOLLAR_VOL_M:
-        return False
-
-    if sector_weak(row):
-        return False
-
-    atr_pct = safe_float(row.get("atr_pct"), 0)
-
-    if not vwap_condition_pass(metrics, atr_pct):
-        return False
-
-    if metrics.vwap_dist_pct > MAX_VWAP_EXTENSION_PCT:
-        return False
-
-    weakest_index = market_down_reference(regime)
-
-    # Prefer true green names, but allow clear outperformance on a red tape.
-    stock_green = metrics.day_change_pct >= 0.15
-    clear_outperformance = weakest_index < 0 and metrics.day_change_pct >= weakest_index + 2.0
-
-    return stock_green or clear_outperformance
-
-
 def sector_weak(row: Dict[str, Any]) -> bool:
     status = safe_str(row.get("sector_status"), "").upper()
     sector_score = safe_float(row.get("sector_score"), 0)
@@ -1059,35 +810,292 @@ def high_risk_extreme(row: Dict[str, Any]) -> bool:
     return risk in {"HIGH_RISK_EXTREME", "EXTREME"} or bucket == "HIGH_RISK_EXTREME"
 
 
-def watch_criteria_pass(row: Dict[str, Any], metrics: IntradayMetrics, regime: Dict[str, Any]) -> Tuple[bool, List[str]]:
-    reasons = []
-    rs_long_ok = relative_strength_long_candidate(row, metrics, regime)
+def is_relative_strength_long(row: Dict[str, Any], metrics: IntradayMetrics, regime: Dict[str, Any]) -> bool:
+    if not metrics.has_data:
+        return False
+
+    spy = safe_float(regime.get("spy_change"), 0)
+    qqq = safe_float(regime.get("qqq_change"), 0)
+    iwm = safe_float(regime.get("iwm_change"), 0)
+
+    benchmark = min(spy, qqq, iwm, 0)
+
+    # Stock can be green, or at least outperform a sharply red benchmark by 2%.
+    green = metrics.day_change_pct >= 0.40
+    clear_outperformance = benchmark < 0 and metrics.day_change_pct >= benchmark + 2.0
+
+    return (
+        (green or clear_outperformance)
+        and metrics.price > 0
+        and vwap_condition_pass(metrics, safe_float(row.get("atr_pct"), 0))
+        and not sector_weak(row)
+        and not high_risk_extreme(row)
+    )
+
+
+def watch_criteria_pass(
+    row: Dict[str, Any],
+    metrics: IntradayMetrics,
+    regime: Dict[str, Any],
+) -> Tuple[bool, List[str], bool]:
+    reasons: List[str] = []
+    rs_long = is_relative_strength_long(row, metrics, regime)
 
     if high_risk_extreme(row):
         reasons.append("High risk/extreme category")
     if safe_float(row.get("dollar_vol_M"), 0) < MIN_AVG_DOLLAR_VOL_M:
         reasons.append("Dollar volume below $25M")
-
-    # Red/risk-off markets should not automatically block strong relative-strength WATCH names.
-    # They still block normal longs. Ready/Active remain protected by confidence/R:R/setup checks.
-    if severe_risk_off(regime) and not rs_long_ok:
+    if severe_risk_off(regime) and not rs_long:
         reasons.append("Market severe risk-off")
-
     if sector_weak(row):
         reasons.append("Sector weak")
     if not vwap_condition_pass(metrics, safe_float(row.get("atr_pct"), 0)):
         reasons.append("VWAP condition failed")
-
-    # Near-HOD is NOT mandatory for relative-strength WATCH because it may be in a VWAP pullback stage.
-    # It remains a filter for normal WATCH candidates.
-    if not hod_condition_pass(metrics, safe_str(row.get("signal_source_bucket"), "")) and not rs_long_ok:
+    if not rs_long and not hod_condition_pass(metrics, safe_str(row.get("signal_source_bucket"), "")):
         reasons.append("Too far below HOD")
-
     if metrics.vwap_dist_pct > MAX_VWAP_EXTENSION_PCT:
         reasons.append("Too extended above VWAP")
 
-    return len(reasons) == 0, reasons
+    return len(reasons) == 0, reasons, rs_long
 
+
+# ==============================================================
+# TRADE PLAN CONSTRUCTION — 5-MIN STRUCTURE
+# ==============================================================
+
+def trigger_level_for_setup(setup_type: str, metrics: IntradayMetrics) -> float:
+    if setup_type == "VWAP_PULLBACK_CONTINUATION":
+        return metrics.pullback_high * 1.0002
+    if setup_type == "BASE_SQUEEZE_BREAKOUT":
+        return metrics.base_high * 1.0002
+    if setup_type == "HOD_BREAKOUT_CONTINUATION":
+        return metrics.hod * 1.0002
+    return max(metrics.pullback_high, metrics.base_high, metrics.hod, metrics.price) * 1.0002
+
+
+def support_level_for_setup(setup_type: str, metrics: IntradayMetrics, entry: float) -> Tuple[float, str]:
+    """
+    Use only current 5-minute intraday structure.
+    Do not use far-away daily support.
+    """
+    candidates: List[Tuple[float, str]] = []
+
+    if setup_type == "VWAP_PULLBACK_CONTINUATION":
+        if metrics.pullback_low > 0:
+            candidates.append((metrics.pullback_low, "5Min pullback high/low"))
+        if metrics.base_low > 0:
+            candidates.append((metrics.base_low, "5Min base low"))
+
+    elif setup_type == "BASE_SQUEEZE_BREAKOUT":
+        if metrics.base_low > 0:
+            candidates.append((metrics.base_low, "5Min base high/low"))
+        if metrics.pullback_low > 0:
+            candidates.append((metrics.pullback_low, "5Min pullback low"))
+
+    elif setup_type == "HOD_BREAKOUT_CONTINUATION":
+        if metrics.base_low > 0:
+            candidates.append((metrics.base_low, "5Min HOD/base support"))
+        if metrics.pullback_low > 0:
+            candidates.append((metrics.pullback_low, "5Min pullback support"))
+
+    else:
+        if metrics.pullback_low > 0:
+            candidates.append((metrics.pullback_low, "5Min pullback high/low"))
+        if metrics.base_low > 0:
+            candidates.append((metrics.base_low, "5Min base high/low"))
+
+    # Keep only supports reasonably close to entry.
+    filtered = []
+    for level, label in candidates:
+        if level > 0 and level < entry and pct(entry - level, entry) <= 3.0:
+            filtered.append((level, label))
+
+    if filtered:
+        # Conservative but not broken: use closest valid structure support to avoid absurd stops.
+        return max(filtered, key=lambda x: x[0])
+
+    # No usable structure support.
+    return 0.0, "No usable 5Min support within 3%"
+
+
+def stop_buffer_pct(row: Dict[str, Any]) -> float:
+    atr_pct = safe_float(row.get("atr_pct"), 0)
+
+    if atr_pct <= 2.0:
+        return 0.008
+    if atr_pct <= 5.0:
+        return 0.010
+    return 0.012
+
+
+def nearest_round_level_above(price: float) -> List[float]:
+    if price <= 0:
+        return []
+
+    levels = []
+    increments = [0.25, 0.5, 1.0] if price < 20 else [0.5, 1.0, 2.5, 5.0]
+
+    for inc in increments:
+        level = math.ceil(price / inc) * inc
+        if level > price * 1.001:
+            levels.append(level)
+
+    return sorted(set(round(x, 4) for x in levels))
+
+
+def resistance_levels_above(entry: float, metrics: IntradayMetrics, row: Dict[str, Any]) -> List[float]:
+    levels: List[float] = []
+
+    for level in [
+        metrics.hod,
+        metrics.base_high,
+        safe_float(row.get("premarket_high"), 0),
+        safe_float(row.get("prior_day_high"), 0),
+        safe_float(row.get("resistance"), 0),
+    ]:
+        if level > entry * 1.001:
+            levels.append(level)
+
+    levels.extend(nearest_round_level_above(entry))
+
+    # Extension levels above VWAP.
+    if metrics.vwap > 0:
+        for ext in [1.0, 1.5, 2.0, 3.0, 4.0]:
+            level = metrics.vwap * (1 + ext / 100.0)
+            if level > entry * 1.001:
+                levels.append(level)
+
+    return sorted(set(round(x, 4) for x in levels if x > entry * 1.001))
+
+
+def pick_target_1(entry: float, risk: float, metrics: IntradayMetrics, row: Dict[str, Any]) -> Tuple[float, float]:
+    min_target = entry + MIN_RR * risk
+    levels = resistance_levels_above(entry, metrics, row)
+    usable = [x for x in levels if x >= min_target]
+
+    if usable:
+        return min(usable), min_target
+
+    return min_target, min_target
+
+
+def build_trade_plan(
+    row: Dict[str, Any],
+    metrics: IntradayMetrics,
+    setup_type: str,
+    quote: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """
+    Build entry, stop, targets, and R/R using 5-minute structure.
+    Invalid plans remain diagnostics only and cannot become WATCH.
+    """
+    price = metrics.price or safe_float(row.get("price"), 0)
+
+    entry = trigger_level_for_setup(setup_type, metrics)
+    if entry <= 0 and price > 0:
+        entry = price * 1.0002
+
+    support, structure_label = support_level_for_setup(setup_type, metrics, entry)
+
+    valid = True
+    rejection_reason = ""
+
+    if entry <= 0 or support <= 0:
+        valid = False
+        rejection_reason = "No usable 5Min structure support"
+        stop = 0.0
+        risk = 0.0
+        stop_distance_pct = 999.0
+        target_1 = 0.0
+        target_2 = 0.0
+        rr = 0.0
+        min_target_1 = 0.0
+    else:
+        buffer = stop_buffer_pct(row)
+        spread = quote_spread_dollars(quote or {})
+
+        # Breathing room under real 5-min support.
+        stop = support * (1 - buffer)
+
+        # If spread is wider than the normal buffer, add it as extra dollars.
+        if spread is not None and spread > 0 and price > 0:
+            spread_pct = spread / price
+            if spread_pct > buffer:
+                stop = support - (2 * spread)
+
+        risk = entry - stop
+        stop_distance_pct = pct(risk, entry) if entry > 0 else 999.0
+
+        max_stop = MAX_STOP_DIST_HOD if setup_type == "HOD_BREAKOUT_CONTINUATION" else MAX_STOP_DIST_NORMAL
+
+        if entry <= 0 or stop <= 0 or risk <= 0:
+            valid = False
+            rejection_reason = "Invalid entry/stop"
+        elif stop_distance_pct > max_stop:
+            valid = False
+            rejection_reason = f"Stop distance {stop_distance_pct:.2f}% > max {max_stop:.1f}%"
+
+        target_1, min_target_1 = pick_target_1(entry, risk, metrics, row)
+        target_2 = max(entry + 2.0 * risk, target_1 + 0.5 * risk)
+
+        rr = (target_1 - entry) / risk if risk > 0 else 0.0
+
+        if valid and rr < MIN_RR:
+            valid = False
+            rejection_reason = "Target 1 R/R below 1.5"
+
+    return {
+        "valid": valid,
+        "rejection_reason": rejection_reason,
+        "entry_trigger": round(entry, 4),
+        "stop_loss": round(stop, 4),
+        "target_1": round(target_1, 4),
+        "target_2": round(target_2, 4),
+        "reward_risk": round(rr, 2),
+        "stop_distance_pct": round(stop_distance_pct, 2),
+        "support_level": round(support, 4),
+        "structure_label": structure_label,
+        "min_target_1": round(min_target_1, 4),
+        "buffer_pct_used": round(stop_buffer_pct(row) * 100, 2),
+        "spread_dollars": round(quote_spread_dollars(quote or {}), 4) if quote_spread_dollars(quote or {}) is not None else None,
+    }
+
+
+def choose_best_provisional_plan(
+    row: Dict[str, Any],
+    metrics: IntradayMetrics,
+    quote: Dict[str, Any],
+) -> Tuple[str, Dict[str, Any]]:
+    """
+    Build all setup plans and choose the best valid one.
+    Invalid plans are kept only if no valid plan exists, for diagnostics.
+    """
+    setup_order = [
+        "VWAP_PULLBACK_CONTINUATION",
+        "BASE_SQUEEZE_BREAKOUT",
+        "HOD_BREAKOUT_CONTINUATION",
+    ]
+
+    plans = []
+    for setup in setup_order:
+        plan = build_trade_plan(row, metrics, setup, quote)
+        plans.append((setup, plan))
+
+    valid_plans = [(s, p) for s, p in plans if p.get("valid") and safe_float(p.get("reward_risk"), 0) >= MIN_RR_WATCH]
+
+    if valid_plans:
+        # Prefer better R/R, but keep setup order as tie-break.
+        valid_plans.sort(key=lambda x: (-safe_float(x[1].get("reward_risk"), 0), setup_order.index(x[0])))
+        return valid_plans[0]
+
+    # Return the "least bad" plan for diagnostics.
+    plans.sort(key=lambda x: (-safe_float(x[1].get("reward_risk"), 0), safe_float(x[1].get("stop_distance_pct"), 999)))
+    return plans[0]
+
+
+# ==============================================================
+# SETUP READINESS
+# ==============================================================
 
 def setup_vwap_pullback_ready(metrics: IntradayMetrics, rr: float, confidence: float) -> Tuple[bool, str]:
     if not metrics.has_data:
@@ -1097,16 +1105,13 @@ def setup_vwap_pullback_ready(metrics: IntradayMetrics, rr: float, confidence: f
         return False, "Below VWAP"
 
     if not metrics.pullback_holding_vwap:
-        return False, "No 2-3 candle VWAP hold"
+        return False, "No clean 5-min VWAP hold"
 
-    if not metrics.volume_drying and not metrics.volume_stable_or_increasing:
+    if metrics.volume_drying and not metrics.base_volume_constructive:
         return False, "Pullback volume not constructive"
 
     if metrics.vwap_touch_count >= 4:
         return False, "4th+ VWAP touch"
-
-    if metrics.hod_distance_pct < ACTIVE_HOD_MAX_DISTANCE:
-        return False, "Too far from HOD"
 
     if rr < MIN_RR:
         return False, "R/R below 1.5"
@@ -1114,7 +1119,54 @@ def setup_vwap_pullback_ready(metrics: IntradayMetrics, rr: float, confidence: f
     if confidence < MIN_CONF_READY:
         return False, "Confidence below 75"
 
-    return True, "VWAP pullback holding; waiting for break above pullback high"
+    return True, "5-min VWAP pullback holding; waiting for break above pullback high"
+
+
+def base_squeeze_not_ready_reason(metrics: IntradayMetrics, rr: float, confidence: float) -> str:
+    reasons = []
+
+    if not metrics.has_data:
+        reasons.append("No intraday bars")
+    if not metrics.above_vwap:
+        reasons.append("Below VWAP")
+    if metrics.base_range_pct > 2.0:
+        reasons.append(f"base range {metrics.base_range_pct:.2f}% > 2.0%")
+    if not metrics.higher_low_or_flat_base:
+        reasons.append("no higher-low/flat-base structure")
+    if not metrics.base_volume_constructive:
+        reasons.append("base volume not contracting/stable")
+    if not metrics.price_near_base_breakout:
+        reasons.append("price not close to base breakout")
+    if metrics.hod > 0 and pct_change(metrics.base_low, metrics.hod) < -2.5:
+        reasons.append("Base too far from HOD")
+    if rr < MIN_RR:
+        reasons.append("R/R below 1.5")
+    if confidence < MIN_CONF_READY:
+        reasons.append("Confidence below 75")
+
+    return "; ".join(reasons) if reasons else "Base/flag squeeze not ready"
+
+
+def setup_base_squeeze_ready(metrics: IntradayMetrics, rr: float, confidence: float) -> Tuple[bool, str]:
+    if not metrics.has_data:
+        return False, "No intraday bars"
+
+    if not metrics.above_vwap:
+        return False, "Below VWAP"
+
+    if not metrics.base_compression:
+        return False, f"No clean base/flag compression: {base_squeeze_not_ready_reason(metrics, rr, confidence)}"
+
+    if metrics.hod > 0 and pct_change(metrics.base_low, metrics.hod) < -2.5:
+        return False, "Base too far from HOD"
+
+    if rr < MIN_RR:
+        return False, "R/R below 1.5"
+
+    if confidence < MIN_CONF_READY:
+        return False, "Confidence below 75"
+
+    return True, "5-min base/flag squeeze; waiting for break above compression high"
 
 
 def setup_hod_breakout_ready(metrics: IntradayMetrics, rr: float, confidence: float) -> Tuple[bool, str]:
@@ -1142,369 +1194,34 @@ def setup_hod_breakout_ready(metrics: IntradayMetrics, rr: float, confidence: fl
     if confidence < MIN_CONF_READY:
         return False, "Confidence below 75"
 
-    return True, "HOD breakout setup; waiting for break above HOD"
+    return True, "5-min HOD breakout setup; waiting for break above HOD"
 
 
-def setup_base_squeeze_ready(metrics: IntradayMetrics, rr: float, confidence: float) -> Tuple[bool, str]:
-    """
-    Base / bull-flag / squeeze ready setup.
-
-    This is not a chase setup. It requires a tight short-term base near HOD,
-    price above VWAP, stable/contracting volume during the base, and acceptable
-    R/R before a break above the base high.
-    """
-    if not metrics.has_data:
-        return False, "No intraday bars"
-
-    if not metrics.above_vwap:
-        return False, "Below VWAP"
-
-    if metrics.vwap_dist_pct > MAX_VWAP_EXTENSION_PCT:
-        return False, "Too extended above VWAP"
-
-    if metrics.hod_distance_pct < -1.75:
-        return False, "Base too far from HOD"
-
-    if not metrics.base_compression:
-        details = []
-        if metrics.base_range_pct > 2.0:
-            details.append(f"base range {round(metrics.base_range_pct, 2)}% > 2.0%")
-        if not metrics.base_higher_lows:
-            details.append("no higher-low/flat-base structure")
-        if not metrics.base_volume_contracting:
-            details.append("base volume not contracting/stable")
-        if metrics.base_high > 0 and pct_change(metrics.price, metrics.base_high) < -0.85:
-            details.append("price not close to base breakout")
-        return False, "No clean base/flag compression" + (": " + "; ".join(details) if details else "")
-
-    if rr < MIN_RR:
-        return False, "R/R below 1.5"
-
-    if confidence < MIN_CONF_READY:
-        return False, "Confidence below 75"
-
-    return True, "Base/flag squeeze setup; waiting for break above compression high"
-
-
-def choose_setup(metrics: IntradayMetrics, plan: Dict[str, Any], confidence: float, phase: str) -> Tuple[str, str]:
-    """
-    Returns (setup_type, reason) for TRIGGER_READY candidate.
-    Priority:
-      1. VWAP Pullback
-      2. Base / Flag Squeeze
-      3. HOD Breakout
-    """
+def choose_setup(metrics: IntradayMetrics, plan: Dict[str, Any], confidence: float, phase: str) -> Tuple[str, str, List[str]]:
     rr = safe_float(plan.get("reward_risk"), 0)
+    reasons = []
 
     vwap_ready, vwap_reason = setup_vwap_pullback_ready(metrics, rr, confidence)
     if vwap_ready:
-        return "VWAP_PULLBACK_CONTINUATION", vwap_reason
+        return "VWAP_PULLBACK_CONTINUATION", vwap_reason, reasons
+    reasons.append(f"VWAP pullback not ready: {vwap_reason}")
 
     base_ready, base_reason = setup_base_squeeze_ready(metrics, rr, confidence)
     if base_ready:
-        return "BASE_SQUEEZE_BREAKOUT", base_reason
+        return "BASE_SQUEEZE_BREAKOUT", base_reason, reasons
+    reasons.append(f"Base/flag squeeze not ready: {base_reason}")
 
-    # HOD breakout is not allowed during lunch. Since lunch is a blackout phase,
-    # this function usually only runs in valid signal phases.
     hod_ready, hod_reason = setup_hod_breakout_ready(metrics, rr, confidence)
     if hod_ready:
-        return "HOD_BREAKOUT_CONTINUATION", hod_reason
+        return "HOD_BREAKOUT_CONTINUATION", hod_reason, reasons
+    reasons.append(f"HOD breakout not ready: {hod_reason}")
 
-    return "", f"No trigger-ready setup. VWAP: {vwap_reason}; Base: {base_reason}; HOD: {hod_reason}"
+    return "", "No trigger-ready setup", reasons
 
-def trigger_level_for_setup(setup_type: str, metrics: IntradayMetrics) -> float:
-    if setup_type == "VWAP_PULLBACK_CONTINUATION":
-        return metrics.pullback_high * 1.0002
-    if setup_type == "BASE_SQUEEZE_BREAKOUT":
-        return (metrics.base_high or max(metrics.pullback_high, metrics.hod)) * 1.0002
-    if setup_type == "HOD_BREAKOUT_CONTINUATION":
-        return metrics.hod * 1.0002
-    # Fresh post-blackout trigger fallback: recent local high.
-    return max(metrics.pullback_high, metrics.hod, metrics.base_high) * 1.0002
 
-
-def support_level_for_setup(setup_type: str, metrics: IntradayMetrics, entry: float) -> float:
-    candidates = []
-
-    if metrics.vwap > 0 and abs(pct_change(metrics.vwap, entry)) <= 2.0:
-        candidates.append(metrics.vwap)
-
-    if metrics.pullback_low > 0 and abs(pct_change(metrics.pullback_low, entry)) <= 2.5:
-        candidates.append(metrics.pullback_low)
-
-    if setup_type == "BASE_SQUEEZE_BREAKOUT" and metrics.base_low > 0 and abs(pct_change(metrics.base_low, entry)) <= 3.0:
-        candidates.append(metrics.base_low)
-
-    if metrics.opening_range_low > 0 and abs(pct_change(metrics.opening_range_low, entry)) <= 3.0:
-        candidates.append(metrics.opening_range_low)
-
-    if metrics.recent_swing_low > 0 and abs(pct_change(metrics.recent_swing_low, entry)) <= 3.0:
-        candidates.append(metrics.recent_swing_low)
-
-    if candidates:
-        return min(candidates)
-
-    # Last-resort structure support.
-    return metrics.vwap if metrics.vwap > 0 else entry * 0.985
-
-
-def round_level_candidates_above(price: float) -> List[float]:
-    if price <= 0:
-        return []
-
-    # Next whole and half-dollar levels above entry.
-    next_half = math.ceil(price * 2) / 2.0
-    next_whole = math.ceil(price)
-
-    levels = []
-
-    for level in [next_half, next_whole]:
-        if level > price * 1.001:
-            levels.append(level)
-
-    # For lower-priced names, also include quarter increments.
-    if price < 20:
-        next_quarter = math.ceil(price * 4) / 4.0
-        if next_quarter > price * 1.001:
-            levels.append(next_quarter)
-
-    return sorted(set(levels))
-
-
-def vwap_extension_levels(vwap: float, entry: float) -> List[float]:
-    if vwap <= 0:
-        return []
-
-    levels = [vwap * (1 + x / 100.0) for x in [0.5, 1.0, 1.5, 2.0]]
-    return [x for x in levels if x > entry * 1.001]
-
-
-def adjust_before_magnetic(level: float) -> float:
-    if level <= 0:
-        return level
-    return level * 0.999  # ~0.1% before obvious level.
-
-
-
-def setup_stop_buffer_dollars(
-    price: float,
-    support: float,
-    atr_pct: float,
-    quote: Optional[Dict[str, Any]] = None,
-) -> Tuple[float, bool, Optional[float], float]:
-    """
-    Breathing-room buffer below the 5-minute structure support.
-
-    Project rule:
-      - normal stocks: at least ~0.8% below structure support
-      - volatile names: slightly wider buffer
-      - also respect spread if available
-    """
-    if support <= 0:
-        return 0.0, False, None, 0.0
-
-    spread = quote_spread_dollars(quote or {})
-    spread_used = False
-
-    buffer_pct = VOLATILE_STOP_BUFFER_PCT if atr_pct >= 5.0 else MIN_STOP_BUFFER_PCT
-    pct_buffer = support * (buffer_pct / 100.0)
-
-    price_buffer = price * 0.001 if price > 0 else 0.0
-
-    candidates = [pct_buffer, price_buffer]
-
-    if spread is not None and spread > 0:
-        candidates.append(2 * spread)
-        spread_used = True
-
-    return max(candidates), spread_used, spread, buffer_pct
-
-
-def structure_levels_for_setup(
-    setup_type: str,
-    metrics: IntradayMetrics,
-) -> Tuple[float, float, str]:
-    """
-    Return (entry_base, support, label) from 5-minute structure fields.
-
-    The engine uses:
-      - 5-minute levels for trade setup construction
-      - 1-minute latest price/VWAP/HOD for execution/invalidation
-    """
-    if setup_type == "VWAP_PULLBACK_CONTINUATION":
-        entry_base = metrics.pullback_high
-        support = metrics.pullback_low
-        return entry_base, support, "5Min pullback high/low"
-
-    if setup_type == "BASE_SQUEEZE_BREAKOUT":
-        entry_base = metrics.base_high or metrics.pullback_high
-        support = metrics.base_low or metrics.pullback_low
-        return entry_base, support, "5Min base high/low"
-
-    if setup_type == "HOD_BREAKOUT_CONTINUATION":
-        entry_base = metrics.hod
-        # For HOD breakout, do not use distant daily support.
-        # Use the nearest valid 5-minute base/pullback structure.
-        support_candidates = [
-            x for x in [
-                metrics.base_low,
-                metrics.pullback_low,
-                metrics.recent_swing_low,
-            ]
-            if x and x > 0
-        ]
-        support = max(support_candidates) if support_candidates else 0.0
-        return entry_base, support, "5Min HOD/base support"
-
-    # Fallback for monitoring only.
-    entry_base = max(metrics.base_high, metrics.pullback_high, metrics.hod)
-    support_candidates = [
-        x for x in [
-            metrics.base_low,
-            metrics.pullback_low,
-            metrics.recent_swing_low,
-        ]
-        if x and x > 0
-    ]
-    support = max(support_candidates) if support_candidates else 0.0
-    return entry_base, support, "5Min structure fallback"
-
-
-def nearest_trade_target_above(min_target: float, entry: float, metrics: IntradayMetrics, row: Dict[str, Any]) -> float:
-    """
-    Target 1 must be at least 1.5R.
-    If a clean resistance/magnetic level exists above that minimum, use it.
-    Otherwise use the 1.5R level itself.
-    """
-    if min_target <= 0:
-        return 0.0
-
-    levels: List[float] = []
-
-    for level in [
-        metrics.hod,
-        safe_float(row.get("premarket_high"), 0),
-        safe_float(row.get("prior_day_high"), 0),
-        safe_float(row.get("resistance"), 0),
-    ]:
-        if level >= min_target:
-            levels.append(level)
-
-    # Magnetic levels above the minimum target, not merely above entry.
-    levels.extend([x for x in round_level_candidates_above(min_target) if x >= min_target])
-    levels.extend([x for x in vwap_extension_levels(metrics.vwap, min_target) if x >= min_target])
-
-    levels = sorted(set(round(x, 4) for x in levels if x >= min_target))
-
-    if levels:
-        # If a level is much higher, still use it; never adjust below min_target.
-        target = levels[0]
-        adjusted = adjust_before_magnetic(target)
-        return max(adjusted, min_target)
-
-    return min_target
-
-
-def build_trade_plan(
-    row: Dict[str, Any],
-    metrics: IntradayMetrics,
-    setup_type: str,
-    quote: Optional[Dict[str, Any]] = None,
-) -> Dict[str, Any]:
-    """
-    Build entry, stop, targets, and R/R from 5-minute setup structure.
-
-    Design:
-      - 5Min chart defines entry support/stop/target math.
-      - 1Min chart only monitors latest price and trigger firing.
-      - No daily/weekly fallback support for intraday plans.
-      - Target 1 must be at least 1.5R.
-      - WATCH requires a usable provisional plan (R/R >= MIN_RR_WATCH).
-    """
-    atr_pct = safe_float(row.get("atr_pct"), 0)
-    price = metrics.price or safe_float(row.get("price"), 0)
-
-    entry_base, support, structure_label = structure_levels_for_setup(setup_type, metrics)
-
-    entry = entry_base * 1.0002 if entry_base > 0 else 0.0
-    if entry <= 0 and price > 0:
-        entry = price
-
-    buffer_dollars, spread_used, spread, buffer_pct = setup_stop_buffer_dollars(
-        price=price,
-        support=support,
-        atr_pct=atr_pct,
-        quote=quote,
-    )
-
-    stop = support - buffer_dollars if support > 0 else 0.0
-    risk = entry - stop
-    stop_distance_pct = pct(risk, entry) if entry > 0 else 999.0
-
-    max_stop_pct = MAX_STOP_DISTANCE_HOD_PCT if setup_type == "HOD_BREAKOUT_CONTINUATION" else MAX_STOP_DISTANCE_PCT
-
-    valid = True
-    rejection_reason = ""
-
-    if not metrics.has_data:
-        valid = False
-        rejection_reason = "No intraday data"
-    elif entry <= 0 or support <= 0 or stop <= 0 or risk <= 0:
-        valid = False
-        rejection_reason = "Invalid 5Min entry/support/stop"
-    elif stop_distance_pct > max_stop_pct:
-        valid = False
-        rejection_reason = f"Stop distance {round(stop_distance_pct, 2)}% > max {max_stop_pct}%"
-    elif atr_pct > 0 and stop_distance_pct > 0.75 * atr_pct:
-        valid = False
-        rejection_reason = "Stop distance exceeds 0.75x ATR"
-
-    min_target_1 = entry + (MIN_TARGET_R_MULTIPLE * risk) if risk > 0 else 0.0
-    target_1 = nearest_trade_target_above(min_target_1, entry, metrics, row) if min_target_1 > 0 else 0.0
-
-    rr = (target_1 - entry) / risk if risk > 0 else 0.0
-
-    if rr < MIN_RR and valid:
-        valid = False
-        rejection_reason = "Target 1 R/R below 1.5"
-
-    target_2_min = entry + (TARGET_2_R_MULTIPLE * risk) if risk > 0 else 0.0
-
-    higher_levels = []
-    for level in [
-        metrics.hod,
-        safe_float(row.get("premarket_high"), 0),
-        safe_float(row.get("prior_day_high"), 0),
-        safe_float(row.get("resistance"), 0),
-    ]:
-        if level >= target_2_min:
-            higher_levels.append(level)
-
-    higher_levels.extend([x for x in round_level_candidates_above(target_2_min) if x >= target_2_min])
-    higher_levels.extend([x for x in vwap_extension_levels(metrics.vwap, target_2_min) if x >= target_2_min])
-    higher_levels = sorted(set(round(x, 4) for x in higher_levels if x >= target_2_min))
-
-    target_2 = higher_levels[0] if higher_levels else target_2_min
-
-    return {
-        "valid": valid,
-        "rejection_reason": rejection_reason,
-        "entry_trigger": round(entry, 4),
-        "stop_loss": round(stop, 4),
-        "target_1": round(target_1, 4),
-        "target_2": round(target_2, 4),
-        "reward_risk": round(rr, 2),
-        "stop_distance_pct": round(stop_distance_pct, 2),
-        "support_level": round(support, 4),
-        "structure_label": structure_label,
-        "buffer_dollars": round(buffer_dollars, 4),
-        "buffer_pct_used": round(buffer_pct, 2),
-        "spread_used": spread_used,
-        "spread_dollars": round(spread, 4) if spread is not None else None,
-        "min_target_1": round(min_target_1, 4),
-        "min_target_r": MIN_TARGET_R_MULTIPLE,
-    }
-
+# ==============================================================
+# SCORING
+# ==============================================================
 
 def live_signal_score(
     row: Dict[str, Any],
@@ -1513,9 +1230,6 @@ def live_signal_score(
     regime: Dict[str, Any],
     phase: str,
 ) -> float:
-    """
-    Live score normalized to 100.
-    """
     if not metrics.has_data:
         return 0.0
 
@@ -1544,24 +1258,29 @@ def live_signal_score(
     else:
         hod_score = 0
 
-    # 3. Volume confirmation: 15
-    if metrics.volume_stable_or_increasing:
+    # 3. Volume/structure: 15
+    if metrics.base_compression:
         volume_score = 15
-    elif metrics.volume_drying and metrics.pullback_holding_vwap:
-        volume_score = 12
+    elif metrics.volume_stable_or_increasing:
+        volume_score = 13
+    elif metrics.base_volume_constructive:
+        volume_score = 10
     elif metrics.avg_volume_5 > 0:
         volume_score = 6
     else:
         volume_score = 0
 
-    # 4. Risk/reward: 15
+    # 4. Risk/reward and plan validity: 15
     rr = safe_float(plan.get("reward_risk"), 0)
-    if rr >= 2.5:
+    plan_valid = bool(plan.get("valid"))
+    if plan_valid and rr >= 2.5:
         rr_score = 15
-    elif rr >= 2.0:
+    elif plan_valid and rr >= 2.0:
         rr_score = 12
-    elif rr >= 1.5:
-        rr_score = 8
+    elif plan_valid and rr >= 1.5:
+        rr_score = 10
+    elif plan_valid and rr >= 0.75:
+        rr_score = 5
     else:
         rr_score = 0
 
@@ -1576,7 +1295,11 @@ def live_signal_score(
     else:
         sector_score = 4
 
-    market_score = 0 if severe_risk_off(regime) else 5
+    rs_long = is_relative_strength_long(row, metrics, regime)
+    if severe_risk_off(regime):
+        market_score = 5 if rs_long else 0
+    else:
+        market_score = 5
 
     # 6. Time-of-day: 10
     if phase in {"VALID_MORNING", "VALID_AFTERNOON"}:
@@ -1594,12 +1317,10 @@ def live_signal_score(
         penalty += 4
 
     if metrics.vwap_touch_count >= 4:
-        penalty += 4
+        penalty += 3
 
     if metrics.hod_distance_pct < -4.0:
         penalty += 3
-
-    base_bonus = 5 if metrics.base_compression else 0
 
     score = (
         vwap_score
@@ -1609,7 +1330,6 @@ def live_signal_score(
         + sector_score
         + market_score
         + time_score
-        + base_bonus
         - min(10, penalty)
     )
 
@@ -1624,66 +1344,52 @@ def final_confidence(scanner_score: float, live_score: float) -> float:
 # DIAGNOSTICS
 # ==============================================================
 
-def ready_blockers(metrics: IntradayMetrics, plan: Dict[str, Any], confidence: float) -> List[str]:
-    """
-    Explain why a WATCH candidate is not TRIGGER_READY yet.
-    This is diagnostic only; it does not loosen the strategy rules.
-    """
-    blockers: List[str] = []
-
-    rr = safe_float(plan.get("reward_risk"), 0)
+def not_ready_reasons(metrics: IntradayMetrics, plan: Dict[str, Any], confidence: float) -> List[str]:
+    reasons: List[str] = []
 
     if not plan.get("valid"):
-        blockers.append(f"Plan invalid: {safe_str(plan.get('rejection_reason'), 'Unknown plan issue')}")
+        reasons.append(f"Plan invalid: {safe_str(plan.get('rejection_reason'), 'Invalid plan')}")
 
     if confidence < MIN_CONF_READY:
-        blockers.append(f"Confidence {round(confidence, 1)} < ready minimum {MIN_CONF_READY:.0f}")
+        reasons.append(f"Confidence {confidence:.1f} < ready minimum 75")
 
+    rr = safe_float(plan.get("reward_risk"), 0)
     if rr < MIN_RR:
-        blockers.append(f"R/R {round(rr, 2)} < minimum {MIN_RR:.1f}")
+        reasons.append(f"R/R {rr:.2f} < minimum 1.5")
 
-    vwap_ready, vwap_reason = setup_vwap_pullback_ready(metrics, rr, confidence)
-    base_ready, base_reason = setup_base_squeeze_ready(metrics, rr, confidence)
-    hod_ready, hod_reason = setup_hod_breakout_ready(metrics, rr, confidence)
+    _, vwap_reason = setup_vwap_pullback_ready(metrics, rr, confidence)
+    reasons.append(f"VWAP pullback not ready: {vwap_reason}")
 
-    if not vwap_ready:
-        blockers.append(f"VWAP pullback not ready: {vwap_reason}")
+    _, base_reason = setup_base_squeeze_ready(metrics, rr, confidence)
+    reasons.append(f"Base/flag squeeze not ready: {base_reason}")
 
-    if not base_ready:
-        blockers.append(f"Base/flag squeeze not ready: {base_reason}")
+    _, hod_reason = setup_hod_breakout_ready(metrics, rr, confidence)
+    reasons.append(f"HOD breakout not ready: {hod_reason}")
 
-    if not hod_ready:
-        blockers.append(f"HOD breakout not ready: {hod_reason}")
-
-    # Keep this list readable in dashboard/json.
-    deduped: List[str] = []
-    for item in blockers:
-        if item and item not in deduped:
-            deduped.append(item)
-
-    return deduped[:8]
+    # De-duplicate while preserving order.
+    out = []
+    seen = set()
+    for r in reasons:
+        if r not in seen:
+            out.append(r)
+            seen.add(r)
+    return out
 
 
-def candidate_diagnostic_record(
+def diagnostic_candidate(
     row: Dict[str, Any],
     metrics: IntradayMetrics,
-    quote: Dict[str, Any],
-    regime: Dict[str, Any],
+    plan: Dict[str, Any],
+    live: float,
+    conf: float,
+    rejected_reasons: List[str],
     phase: str,
+    regime: Dict[str, Any],
 ) -> Dict[str, Any]:
-    """
-    Build a transparent diagnostic record for candidates that do not become
-    WATCH / TRIGGER_READY / ACTIVE_SIGNAL.
-
-    This is for debugging signal quality only. It does not create signals.
-    """
-    symbol = normalize_symbol(row.get("symbol"))
-    scanner_score = safe_float(row.get("score"), 0)
-
-    base: Dict[str, Any] = {
-        "symbol": symbol,
+    return {
+        "symbol": normalize_symbol(row.get("symbol")),
         "diagnostic_status": "REJECTED",
-        "scanner_score": scanner_score,
+        "scanner_score": safe_float(row.get("score"), 0),
         "source_bucket": safe_str(row.get("signal_source_bucket"), ""),
         "signal_rank": safe_int(row.get("signal_rank"), 0),
         "market_phase": phase,
@@ -1692,53 +1398,29 @@ def candidate_diagnostic_record(
         "setup_bucket": safe_str(row.get("setup_bucket"), ""),
         "dollar_vol_M": safe_float(row.get("dollar_vol_M"), 0),
         "atr_pct": safe_float(row.get("atr_pct"), 0),
-        "price": round(metrics.price, 4) if metrics.has_data else 0,
-        "session_open": round(metrics.session_open, 4) if metrics.has_data else 0,
-        "day_change_pct": round(metrics.day_change_pct, 2) if metrics.has_data else 0,
-        "relative_strength_long": relative_strength_long_candidate(row, metrics, regime) if metrics.has_data else False,
-        "vwap": round(metrics.vwap, 4) if metrics.has_data else 0,
-        "hod": round(metrics.hod, 4) if metrics.has_data else 0,
-        "vwap_dist_pct": round(metrics.vwap_dist_pct, 2) if metrics.has_data else 0,
-        "hod_distance_pct": round(metrics.hod_distance_pct, 2) if metrics.has_data else 0,
-        "above_vwap": metrics.above_vwap if metrics.has_data else False,
-        "base_compression": metrics.base_compression if metrics.has_data else False,
-        "base_range_pct": round(metrics.base_range_pct, 2) if metrics.has_data else 0,
-        "base_high": round(metrics.base_high, 4) if metrics.has_data else 0,
-        "base_low": round(metrics.base_low, 4) if metrics.has_data else 0,
-        "execution_timeframe": metrics.execution_timeframe,
-        "structure_timeframe": metrics.structure_timeframe,
+        "price": round(metrics.price, 4),
+        "session_open": round(metrics.session_open, 4),
+        "day_change_pct": round(metrics.day_change_pct, 2),
+        "relative_strength_long": is_relative_strength_long(row, metrics, regime),
+        "vwap": round(metrics.vwap, 4),
+        "hod": round(metrics.hod, 4),
+        "vwap_dist_pct": round(metrics.vwap_dist_pct, 2),
+        "hod_distance_pct": round(metrics.hod_distance_pct, 2),
+        "above_vwap": metrics.above_vwap,
+        "base_compression": metrics.base_compression,
+        "base_range_pct": round(metrics.base_range_pct, 2),
+        "base_high": round(metrics.base_high, 4),
+        "base_low": round(metrics.base_low, 4),
+        "execution_timeframe": EXECUTION_TIMEFRAME,
+        "structure_timeframe": STRUCTURE_TIMEFRAME,
         "structure_bar_count": metrics.structure_bar_count,
-        "live_signal_score": 0.0,
-        "confidence": 0.0,
-        "reward_risk": 0.0,
-        "plan_valid": False,
-        "rejected_reasons": [],
-        "not_ready_reasons": [],
-        "last_checked": iso_now_et(),
-    }
-
-    if not metrics.has_data:
-        base["rejected_reasons"] = ["No intraday bars from Alpaca for this session/feed"]
-        return base
-
-    watch_ok, watch_reasons = watch_criteria_pass(row, metrics, regime)
-
-    if metrics.pullback_holding_vwap:
-        provisional_setup = "VWAP_PULLBACK_CONTINUATION"
-    elif metrics.base_compression:
-        provisional_setup = "BASE_SQUEEZE_BREAKOUT"
-    else:
-        provisional_setup = "HOD_BREAKOUT_CONTINUATION"
-    plan = build_trade_plan(row, metrics, provisional_setup, quote)
-    live = live_signal_score(row, metrics, plan, regime, phase)
-    conf = final_confidence(scanner_score, live)
-    blockers = ready_blockers(metrics, plan, conf)
-
-    base.update({
         "live_signal_score": round(live, 1),
         "confidence": round(conf, 1),
         "reward_risk": safe_float(plan.get("reward_risk"), 0),
         "plan_valid": bool(plan.get("valid")),
+        "rejected_reasons": rejected_reasons,
+        "not_ready_reasons": not_ready_reasons(metrics, plan, conf),
+        "last_checked": iso_now_et(),
         "entry_trigger": plan.get("entry_trigger"),
         "stop_loss": plan.get("stop_loss"),
         "target_1": plan.get("target_1"),
@@ -1748,31 +1430,7 @@ def candidate_diagnostic_record(
         "structure_label": plan.get("structure_label"),
         "min_target_1": plan.get("min_target_1"),
         "buffer_pct_used": plan.get("buffer_pct_used"),
-        "not_ready_reasons": blockers,
-    })
-
-    rejected: List[str] = []
-
-    if not watch_ok:
-        rejected.extend(watch_reasons)
-
-    if conf < MIN_CONF_WATCH:
-        rejected.append(f"Confidence {round(conf, 1)} < WATCH minimum {MIN_CONF_WATCH:.0f}")
-
-    if safe_float(plan.get("reward_risk"), 0) < MIN_RR_WATCH:
-        rejected.append(f"No usable trade plan: R/R {round(safe_float(plan.get('reward_risk'), 0), 2)} < WATCH minimum {MIN_RR_WATCH:.2f}")
-
-    if not is_market_open_phase(phase) and phase != "PREMARKET":
-        rejected.append(f"Market phase {phase} does not allow new monitor signals")
-
-    if rejected:
-        base["diagnostic_status"] = "REJECTED"
-        base["rejected_reasons"] = rejected[:10]
-    else:
-        base["diagnostic_status"] = "WATCH_NOT_READY"
-        base["rejected_reasons"] = []
-
-    return base
+    }
 
 
 # ==============================================================
@@ -1789,6 +1447,7 @@ def signal_base(
     live_score: float,
     reason: str,
     phase: str,
+    regime: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     symbol = normalize_symbol(row.get("symbol"))
     now_text = iso_now_et()
@@ -1812,9 +1471,14 @@ def signal_base(
         "structure_label": plan.get("structure_label"),
         "min_target_1": plan.get("min_target_1"),
         "buffer_pct_used": plan.get("buffer_pct_used"),
+        "atr_pct": safe_float(row.get("atr_pct"), 0),
+        "dollar_vol_M": safe_float(row.get("dollar_vol_M"), 0),
+        "risk_category": safe_str(row.get("risk_category"), "NORMAL"),
+        "setup_bucket": safe_str(row.get("setup_bucket"), ""),
         "price": round(metrics.price, 4),
         "session_open": round(metrics.session_open, 4),
         "day_change_pct": round(metrics.day_change_pct, 2),
+        "relative_strength_long": is_relative_strength_long(row, metrics, regime or {}),
         "vwap": round(metrics.vwap, 4),
         "hod": round(metrics.hod, 4),
         "vwap_dist_pct": round(metrics.vwap_dist_pct, 2),
@@ -1824,13 +1488,13 @@ def signal_base(
         "base_range_pct": round(metrics.base_range_pct, 2),
         "base_high": round(metrics.base_high, 4),
         "base_low": round(metrics.base_low, 4),
-        "execution_timeframe": metrics.execution_timeframe,
-        "structure_timeframe": metrics.structure_timeframe,
+        "execution_timeframe": EXECUTION_TIMEFRAME,
+        "structure_timeframe": STRUCTURE_TIMEFRAME,
         "structure_bar_count": metrics.structure_bar_count,
         "sector_status": safe_str(row.get("sector_status"), ""),
         "market_phase": phase,
         "reason": reason,
-        "invalidation": "Lose VWAP, lose trigger, break pullback low, stop would hit, or signal becomes stale.",
+        "invalidation": "Lose VWAP, lose trigger, break pullback/base low, stop would hit, or signal becomes stale.",
         "last_checked": now_text,
         "updated_at": now_text,
         "session_date": session_date_str(),
@@ -1839,6 +1503,7 @@ def signal_base(
         "suppression_reason": "",
         "risk_flags": safe_str(row.get("risk_flags"), ""),
         "company_name": safe_str(row.get("company_name"), ""),
+        "not_ready_reasons": not_ready_reasons(metrics, plan, confidence) if status == "WATCH" else [],
     }
 
 
@@ -1921,19 +1586,18 @@ def ready_invalidated(signal: Dict[str, Any], metrics: IntradayMetrics) -> Tuple
     if not metrics.has_data:
         return True, "No intraday data available", "EXTERNAL_RISK"
 
-    pullback_low = safe_float(signal.get("pullback_low"), 0)
+    support = safe_float(signal.get("support_level"), 0)
     trigger = safe_float(signal.get("entry_trigger"), 0)
 
     if not metrics.above_vwap:
         return True, "Lost VWAP before trigger", "FAILED_SETUP"
 
-    if pullback_low > 0 and metrics.price < pullback_low:
-        return True, "Broke pullback low before trigger", "FAILED_SETUP"
+    if support > 0 and metrics.price < support:
+        return True, "Broke setup support before trigger", "FAILED_SETUP"
 
     if expired_by_age(signal, TRIGGER_READY_STALE_MINUTES):
         return True, "Trigger-ready setup became stale", "MISSED_WINDOW"
 
-    # If price moved too far above trigger without becoming active, do not chase.
     if trigger > 0 and pct_change(metrics.price, trigger) > 2.0:
         return True, "Price moved too far above trigger without valid active signal", "MISSED_WINDOW"
 
@@ -1947,13 +1611,6 @@ def suppress_trigger_during_blackout(
     phase: str,
     regime: Dict[str, Any],
 ) -> Dict[str, Any]:
-    """
-    TRIGGER_READY fired during blackout:
-      - Do not promote to ACTIVE_SIGNAL.
-      - Stay TRIGGER_READY but suppressed.
-      - Log to suppressed_signals.csv.
-      - Require a fresh post-blackout trigger later.
-    """
     now_text = iso_now_et()
     out = dict(signal)
     out.update({
@@ -1969,8 +1626,6 @@ def suppress_trigger_during_blackout(
         "updated_at": now_text,
         "market_phase": phase,
         "price": round(metrics.price, 4),
-        "session_open": round(metrics.session_open, 4),
-        "day_change_pct": round(metrics.day_change_pct, 2),
         "vwap": round(metrics.vwap, 4),
         "hod": round(metrics.hod, 4),
     })
@@ -1997,73 +1652,6 @@ def suppress_trigger_during_blackout(
         "notes": "Trigger suppressed by Signal Desk v1 blackout rule.",
     })
 
-    return out
-
-
-def reassess_after_blackout(
-    signal: Dict[str, Any],
-    row: Dict[str, Any],
-    metrics: IntradayMetrics,
-    phase: str,
-) -> Optional[Dict[str, Any]]:
-    """
-    If a trigger fired during blackout, reassess after valid window resumes.
-    Return None if no special handling needed.
-    """
-    if not signal.get("requires_fresh_trigger"):
-        return None
-
-    blackout_price = safe_float(signal.get("blackout_trigger_price"), 0)
-    if blackout_price <= 0 or not metrics.has_data:
-        return None
-
-    extension = pct_change(metrics.price, blackout_price)
-
-    if extension > 2.0:
-        return make_invalidated(
-            signal,
-            row,
-            metrics,
-            "Triggered during blackout and is now extended. No chase.",
-            "MISSED_WINDOW",
-            phase,
-        )
-
-    if metrics.price < blackout_price or not metrics.above_vwap:
-        return make_invalidated(
-            signal,
-            row,
-            metrics,
-            "Lost trigger/VWAP hold after blackout trigger.",
-            "FAILED_SETUP",
-            phase,
-        )
-
-    # Still clean: remain TRIGGER_READY, but require a fresh trigger from current structure.
-    out = dict(signal)
-    fresh_trigger = max(metrics.pullback_high, metrics.hod) * 1.0002 if metrics.has_data else safe_float(signal.get("entry_trigger"), 0)
-    now_text = iso_now_et()
-
-    out.update({
-        "signal_status": "TRIGGER_READY",
-        "actionability": "ACTIVE",
-        "actionable": False,
-        "entry_trigger": round(fresh_trigger, 4),
-        "suppression_reason": "",
-        "blackout_trigger_price": "",
-        "blackout_trigger_time": "",
-        "requires_fresh_trigger": True,
-        "reason": "Setup still valid after blackout. Awaiting fresh post-blackout trigger.",
-        "last_checked": now_text,
-        "updated_at": now_text,
-        "ready_since": now_text,
-        "market_phase": phase,
-        "price": round(metrics.price, 4),
-        "session_open": round(metrics.session_open, 4),
-        "day_change_pct": round(metrics.day_change_pct, 2),
-        "vwap": round(metrics.vwap, 4),
-        "hod": round(metrics.hod, 4),
-    })
     return out
 
 
@@ -2102,22 +1690,14 @@ def process_existing_signal(
         return out
 
     if status == "TRIGGER_READY":
-        # If trigger fired during blackout, suppress it.
         if trigger_fired(existing, metrics) and not is_valid_signal_phase(phase):
             return suppress_trigger_during_blackout(existing, row, metrics, phase, regime)
-
-        # After a suppressed blackout trigger, reassess once valid phase resumes.
-        if is_valid_signal_phase(phase) and existing.get("requires_fresh_trigger"):
-            reassessed = reassess_after_blackout(existing, row, metrics, phase)
-            if reassessed:
-                return reassessed
 
         invalid, reason, category = ready_invalidated(existing, metrics)
         if invalid:
             return make_invalidated(existing, row, metrics, reason, category, phase)
 
         if trigger_fired(existing, metrics) and is_valid_signal_phase(phase):
-            # Rebuild confidence using the current plan/metrics.
             setup_type = safe_str(existing.get("setup_type"), "")
             plan = build_trade_plan(row, metrics, setup_type, quote)
             live = live_signal_score(row, metrics, plan, regime, phase)
@@ -2134,11 +1714,11 @@ def process_existing_signal(
                     live,
                     f"Trigger fired and still holds above VWAP. {safe_str(existing.get('reason'), '')}",
                     phase,
+                    regime,
                 )
                 out["triggered_at"] = now_text
                 out["detected_at"] = existing.get("detected_at") or existing.get("ready_since") or now_text
                 out["ready_since"] = existing.get("ready_since") or now_text
-                out["pullback_low"] = existing.get("pullback_low", metrics.pullback_low)
                 return out
 
             return make_invalidated(
@@ -2150,7 +1730,6 @@ def process_existing_signal(
                 phase,
             )
 
-        # Still ready; refresh live fields.
         out = dict(existing)
         out.update({
             "last_checked": now_text,
@@ -2166,7 +1745,6 @@ def process_existing_signal(
         })
         return out
 
-    # Invalidated can remain briefly for dashboard context.
     if status == "INVALIDATED":
         age = minutes_since(existing.get("invalidated_at") or existing.get("updated_at"))
         if age is not None and age <= RECENT_INVALIDATED_KEEP_MINUTES:
@@ -2183,33 +1761,37 @@ def process_new_or_watch(
     quote: Dict[str, Any],
     regime: Dict[str, Any],
     phase: str,
-) -> Dict[str, Any]:
+) -> Tuple[Dict[str, Any], Optional[Dict[str, Any]]]:
+    """
+    Returns:
+      (signal, diagnostic)
+    Exactly one can be non-empty.
+    """
     symbol = normalize_symbol(row.get("symbol"))
 
     if not metrics.has_data:
-        # No Alpaca bars: no signal.
-        return {}
+        return {}, None
 
-    watch_ok, watch_reasons = watch_criteria_pass(row, metrics, regime)
-    if not watch_ok:
-        debug(f"  {symbol}: WATCH fail: {watch_reasons}")
-        return {}
+    watch_ok, watch_reasons, rs_long = watch_criteria_pass(row, metrics, regime)
 
-    # Use a provisional setup type to compute a conservative plan.
-    if metrics.pullback_holding_vwap:
-        provisional_setup = "VWAP_PULLBACK_CONTINUATION"
-    elif metrics.base_compression:
-        provisional_setup = "BASE_SQUEEZE_BREAKOUT"
-    else:
-        provisional_setup = "HOD_BREAKOUT_CONTINUATION"
-    plan = build_trade_plan(row, metrics, provisional_setup, quote)
+    setup_type, plan = choose_best_provisional_plan(row, metrics, quote)
     live = live_signal_score(row, metrics, plan, regime, phase)
     conf = final_confidence(safe_float(row.get("score"), 0), live)
-    provisional_rr = safe_float(plan.get("reward_risk"), 0)
-    usable_watch_plan = provisional_rr >= MIN_RR_WATCH
 
+    rejected_reasons = list(watch_reasons)
+
+    if conf < MIN_CONF_WATCH:
+        rejected_reasons.append(f"Confidence {conf:.1f} < WATCH minimum 60")
+
+    if not plan.get("valid"):
+        rejected_reasons.append(f"Plan invalid: {safe_str(plan.get('rejection_reason'), 'Invalid plan')}")
+
+    if plan.get("valid") and safe_float(plan.get("reward_risk"), 0) < MIN_RR_WATCH:
+        rejected_reasons.append(f"R/R {safe_float(plan.get('reward_risk'), 0):.2f} < WATCH minimum 0.75")
+
+    # Premarket: monitor only, but still require usable plan for WATCH.
     if phase == "PREMARKET":
-        if conf >= MIN_CONF_WATCH and usable_watch_plan:
+        if watch_ok and plan.get("valid") and safe_float(plan.get("reward_risk"), 0) >= MIN_RR_WATCH and conf >= MIN_CONF_WATCH:
             out = signal_base(
                 row,
                 metrics,
@@ -2220,16 +1802,20 @@ def process_new_or_watch(
                 live,
                 "Premarket monitoring only. No trigger-ready or active signals before regular session.",
                 phase,
+                regime,
             )
             out["detected_at"] = iso_now_et()
-            out["not_ready_reasons"] = ready_blockers(metrics, plan, conf)
-            return out
-        return {}
+            return out, None
 
-    # Blackout or closed: do not create new TRIGGER_READY or ACTIVE_SIGNAL.
-    # WATCH can exist during opening/final/lunch only if market is open, but no urgency.
+        return {}, diagnostic_candidate(row, metrics, plan, live, conf, rejected_reasons, phase, regime)
+
+    # Outside regular market open phases: no new signals.
+    if not is_market_open_phase(phase):
+        return {}, diagnostic_candidate(row, metrics, plan, live, conf, rejected_reasons or [f"Market phase {phase}"], phase, regime)
+
+    # Blackout phases: WATCH only if usable; no READY.
     if not is_valid_signal_phase(phase):
-        if is_market_open_phase(phase) and conf >= MIN_CONF_WATCH:
+        if watch_ok and plan.get("valid") and safe_float(plan.get("reward_risk"), 0) >= MIN_RR_WATCH and conf >= MIN_CONF_WATCH:
             out = signal_base(
                 row,
                 metrics,
@@ -2238,47 +1824,50 @@ def process_new_or_watch(
                 "BLACKOUT_MONITOR",
                 conf,
                 live,
-                (
-                    f"Relative-strength monitor candidate, but {phase.lower().replace('_', ' ')} prevents new signals."
-                    if severe_risk_off(regime) and relative_strength_long_candidate(row, metrics, regime)
-                    else f"Valid monitor candidate, but {phase.lower().replace('_', ' ')} prevents new signals."
-                ),
+                f"Valid monitor candidate, but {phase.lower().replace('_', ' ')} prevents new signals.",
                 phase,
+                regime,
             )
             out["detected_at"] = iso_now_et()
-            out["not_ready_reasons"] = ready_blockers(metrics, plan, conf)
-            return out
-        return {}
+            return out, None
 
-    # Valid signal phase: decide whether it is trigger-ready.
-    if plan.get("valid") and conf >= MIN_CONF_READY:
-        setup_type, setup_reason = choose_setup(metrics, plan, conf, phase)
+        return {}, diagnostic_candidate(row, metrics, plan, live, conf, rejected_reasons, phase, regime)
 
-        if setup_type:
-            plan = build_trade_plan(row, metrics, setup_type, quote)
-            live = live_signal_score(row, metrics, plan, regime, phase)
-            conf = final_confidence(safe_float(row.get("score"), 0), live)
+    # Valid signal phase:
+    # If the plan is invalid, it must NOT show as WATCH.
+    if not watch_ok or not plan.get("valid") or safe_float(plan.get("reward_risk"), 0) < MIN_RR_WATCH or conf < MIN_CONF_WATCH:
+        debug(f"  {symbol}: rejected: {rejected_reasons}")
+        return {}, diagnostic_candidate(row, metrics, plan, live, conf, rejected_reasons, phase, regime)
 
-            if plan.get("valid") and conf >= MIN_CONF_READY:
+    # Decide whether it is trigger-ready.
+    if plan.get("valid") and safe_float(plan.get("reward_risk"), 0) >= MIN_RR and conf >= MIN_CONF_READY:
+        setup_ready_type, setup_reason, setup_fail_reasons = choose_setup(metrics, plan, conf, phase)
+
+        if setup_ready_type:
+            # Rebuild plan using the exact ready setup type.
+            exact_plan = build_trade_plan(row, metrics, setup_ready_type, quote)
+            exact_live = live_signal_score(row, metrics, exact_plan, regime, phase)
+            exact_conf = final_confidence(safe_float(row.get("score"), 0), exact_live)
+
+            if exact_plan.get("valid") and safe_float(exact_plan.get("reward_risk"), 0) >= MIN_RR and exact_conf >= MIN_CONF_READY:
                 out = signal_base(
                     row,
                     metrics,
-                    plan,
+                    exact_plan,
                     "TRIGGER_READY",
-                    setup_type,
-                    conf,
-                    live,
+                    setup_ready_type,
+                    exact_conf,
+                    exact_live,
                     setup_reason,
                     phase,
+                    regime,
                 )
                 now_text = iso_now_et()
                 out["ready_since"] = now_text
                 out["detected_at"] = now_text
-                out["pullback_low"] = round(metrics.pullback_low, 4)
-                return out
+                return out, None
 
-    # Otherwise WATCH only.
-    if conf >= MIN_CONF_WATCH and usable_watch_plan:
+        # Good plan, but setup itself is not ready. WATCH.
         out = signal_base(
             row,
             metrics,
@@ -2287,29 +1876,36 @@ def process_new_or_watch(
             "MONITORING",
             conf,
             live,
-            (
-                "Relative-strength long candidate. Waiting for VWAP pullback, base squeeze, or HOD breakout structure."
-                if severe_risk_off(regime) and relative_strength_long_candidate(row, metrics, regime)
-                else "Clean candidate. Waiting for VWAP pullback, base squeeze, or HOD breakout structure."
-            ),
+            "Clean candidate with usable 5-min trade plan. Waiting for VWAP pullback, base squeeze, or HOD breakout trigger.",
             phase,
+            regime,
         )
         out["detected_at"] = iso_now_et()
-        out["not_ready_reasons"] = ready_blockers(metrics, plan, conf)
-        return out
+        out["not_ready_reasons"] = setup_fail_reasons or not_ready_reasons(metrics, plan, conf)
+        return out, None
 
-    return {}
+    # WATCH only if plan is valid and at least minimally usable.
+    out = signal_base(
+        row,
+        metrics,
+        plan,
+        "WATCH",
+        "MONITORING",
+        conf,
+        live,
+        "Relative-strength long candidate with usable 5-min trade plan. Waiting for setup quality to improve.",
+        phase,
+        regime,
+    )
+    out["detected_at"] = iso_now_et()
+    return out, None
 
 
 # ==============================================================
-# MAIN ENGINE
+# MAIN ENGINE HELPERS
 # ==============================================================
 
 def build_row_lookup(focus: Dict[str, Dict[str, Any]], prior_state: Dict[str, Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
-    """
-    Protected TRIGGER_READY / ACTIVE_SIGNAL names might drop from Top 20.
-    If no current row exists, use stored minimal fields from prior state.
-    """
     rows = dict(focus)
 
     for sym, signal in prior_state.items():
@@ -2325,8 +1921,8 @@ def build_row_lookup(focus: Dict[str, Dict[str, Any]], prior_state: Dict[str, Di
             "score": safe_float(signal.get("scanner_score"), 0),
             "sector_status": safe_str(signal.get("sector_status"), "UNKNOWN"),
             "signal_source_bucket": "PROTECTED",
-            "risk_category": "NORMAL",
-            "dollar_vol_M": MIN_AVG_DOLLAR_VOL_M,
+            "risk_category": safe_str(signal.get("risk_category"), "NORMAL"),
+            "dollar_vol_M": safe_float(signal.get("dollar_vol_M"), MIN_AVG_DOLLAR_VOL_M),
             "atr_pct": safe_float(signal.get("atr_pct"), 3.0),
             "company_name": safe_str(signal.get("company_name"), sym),
         }
@@ -2346,10 +1942,6 @@ def prepare_monitor_symbols(focus: Dict[str, Dict[str, Any]], prior_state: Dict[
 
 
 def build_signal_outputs(new_state: Dict[str, Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """
-    Dashboard-friendly list.
-    Order: ACTIVE, TRIGGER_READY, WATCH, INVALIDATED.
-    """
     rank = {
         "ACTIVE_SIGNAL": 1,
         "ACTIVE": 1,
@@ -2365,6 +1957,7 @@ def build_signal_outputs(new_state: Dict[str, Dict[str, Any]]) -> List[Dict[str,
         key=lambda x: (
             rank.get(normalize_status(x.get("signal_status")), 9),
             -safe_float(x.get("confidence"), 0),
+            -safe_float(x.get("reward_risk"), 0),
             safe_str(x.get("symbol"), ""),
         )
     )
@@ -2400,6 +1993,10 @@ def summarize_signals(signals: List[Dict[str, Any]]) -> Dict[str, int]:
     return counts
 
 
+# ==============================================================
+# MAIN ENGINE
+# ==============================================================
+
 def run_signal_engine() -> None:
     now = ny_now()
     phase = get_market_phase(now)
@@ -2410,6 +2007,8 @@ def run_signal_engine() -> None:
     log(f"Time: {now.isoformat(timespec='seconds')}")
     log(f"Market phase: {phase}")
     log(f"Alpaca feed: {DATA_FEED}")
+    log(f"Execution timeframe: {EXECUTION_TIMEFRAME}")
+    log(f"Structure timeframe: {STRUCTURE_TIMEFRAME}")
 
     focus = load_focus_candidates()
     prior_state = load_signal_state()
@@ -2423,12 +2022,13 @@ def run_signal_engine() -> None:
 
     market_data = AlpacaMarketData(DATA_FEED)
 
-    bars_by_symbol: Dict[str, List[Dict[str, Any]]] = {}
+    bars_1m_by_symbol: Dict[str, List[Dict[str, Any]]] = {}
+    bars_5m_by_symbol: Dict[str, List[Dict[str, Any]]] = {}
     quotes_by_symbol: Dict[str, Dict[str, Any]] = {}
 
     if market_data.available and monitor_symbols:
-        # Fetch bars during market phases. In premarket/closed, this may return empty for regular session.
-        bars_by_symbol = market_data.fetch_intraday_bars(monitor_symbols)
+        bars_1m_by_symbol = market_data.fetch_bars(monitor_symbols, EXECUTION_TIMEFRAME)
+        bars_5m_by_symbol = market_data.fetch_bars(monitor_symbols, STRUCTURE_TIMEFRAME)
         quotes_by_symbol = market_data.fetch_latest_quotes(monitor_symbols)
     elif not market_data.available:
         log("  ⚠ No Alpaca credentials. signal_desk.json will be empty or historical only.")
@@ -2438,7 +2038,9 @@ def run_signal_engine() -> None:
 
     for sym in monitor_symbols:
         row = row_lookup.get(sym, {"symbol": sym})
-        metrics = analyze_bars_with_structure(sym, bars_by_symbol.get(sym, []))
+        metrics = analyze_execution_bars(sym, bars_1m_by_symbol.get(sym, []))
+        metrics = enrich_structure_from_5min(metrics, bars_5m_by_symbol.get(sym, []))
+
         quote = quotes_by_symbol.get(sym, {})
         existing = prior_state.get(sym, {})
         existing_status = normalize_status(existing.get("signal_status"))
@@ -2464,28 +2066,34 @@ def run_signal_engine() -> None:
                 continue
 
         # WATCH is not protected. If it fell out of current focus, remove it.
-        in_current_top20 = sym in focus
-        if not in_current_top20:
+        in_current_focus = sym in focus
+        if not in_current_focus:
             continue
 
-        processed = process_new_or_watch(row, metrics, quote, regime, phase)
-        if processed:
-            new_state[sym] = processed
-        elif in_current_top20:
-            diagnostic = candidate_diagnostic_record(row, metrics, quote, regime, phase)
-            if diagnostic:
-                rejected_candidates.append(diagnostic)
-                if DEBUG:
-                    reasons = diagnostic.get("rejected_reasons") or diagnostic.get("not_ready_reasons") or []
-                    debug(f"  {sym}: DIAGNOSTIC {diagnostic.get('diagnostic_status')}: {reasons}")
+        signal, diagnostic = process_new_or_watch(row, metrics, quote, regime, phase)
+
+        if signal:
+            new_state[sym] = signal
+        elif diagnostic:
+            rejected_candidates.append(diagnostic)
 
     signals = build_signal_outputs(new_state)
     counts = summarize_signals(signals)
+
+    rejected_candidates.sort(
+        key=lambda x: (
+            -safe_float(x.get("confidence"), 0),
+            -safe_float(x.get("reward_risk"), 0),
+            safe_str(x.get("symbol"), ""),
+        )
+    )
 
     signal_desk_payload = {
         "generated_at_et": iso_now_et(),
         "market_phase": phase,
         "alpaca_feed": DATA_FEED,
+        "execution_timeframe": EXECUTION_TIMEFRAME,
+        "structure_timeframe": STRUCTURE_TIMEFRAME,
         "universe": {
             "potential_limit": POTENTIAL_LIMIT,
             "active_limit": ACTIVE_LIMIT,
@@ -2494,14 +2102,7 @@ def run_signal_engine() -> None:
         },
         "counts": counts,
         "signals": signals,
-        "rejected_candidates": sorted(
-            rejected_candidates,
-            key=lambda x: (
-                safe_int(x.get("signal_rank"), 999),
-                -safe_float(x.get("confidence"), 0),
-                safe_str(x.get("symbol"), ""),
-            ),
-        ),
+        "rejected_candidates": rejected_candidates,
     }
 
     write_json(SIGNAL_DESK_FILE, signal_desk_payload)
@@ -2511,10 +2112,12 @@ def run_signal_engine() -> None:
         {
             "market_phase": phase,
             "alpaca_feed": DATA_FEED,
+            "execution_timeframe": EXECUTION_TIMEFRAME,
+            "structure_timeframe": STRUCTURE_TIMEFRAME,
             "current_focus_count": len(focus),
             "monitor_count": len(monitor_symbols),
-            "rejected_count": len(rejected_candidates),
             "counts": counts,
+            "rejected_count": len(rejected_candidates),
         },
     )
 
@@ -2522,12 +2125,7 @@ def run_signal_engine() -> None:
     log(f"  {SIGNAL_DESK_FILE}")
     log(f"  {SIGNAL_STATE_FILE}")
     log(f"Counts: {counts}")
-    log(f"Rejected/diagnostic candidates: {len(rejected_candidates)}")
-
-    if rejected_candidates and DEBUG:
-        for item in rejected_candidates[:20]:
-            reasons = item.get("rejected_reasons") or item.get("not_ready_reasons") or []
-            log(f"  {item.get('symbol')}: {item.get('diagnostic_status')} — {reasons}")
+    log(f"Rejected diagnostics: {len(rejected_candidates)}")
 
     if not signals:
         log("No signal at this moment. Scanner is monitoring top candidates.")
