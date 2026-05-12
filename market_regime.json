@@ -1,11 +1,11 @@
 {
-  "spy_change": -0.6492612,
-  "qqq_change": -1.8109033,
-  "iwm_change": -1.6279358000000002,
-  "vix_level": 18.35,
-  "vix_change": -0.1634811,
-  "regime": "BEARISH",
-  "bias": "SHORT_FAVORED",
-  "label": "\ud83d\udd34 Bearish (-0.6%) | \u26a0\ufe0f Small-cap weak",
+  "spy_change": -0.35911919999999997,
+  "qqq_change": -1.3739135,
+  "iwm_change": -1.2283933,
+  "vix_level": 18.06,
+  "vix_change": -1.7391289,
+  "regime": "NORMAL",
+  "bias": "NEUTRAL",
+  "label": "\u26aa Normal (-0.4%) | \u26a0\ufe0f Small-cap weak",
   "smallcap_caution": true
 }
