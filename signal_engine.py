@@ -608,6 +608,9 @@ class IntradayMetrics:
     base_breakout_level: float = 0.0
     base_higher_lows: bool = False
     base_volume_contracting: bool = False
+    execution_timeframe: str = "1Min"
+    structure_timeframe: str = "1Min"
+    structure_bar_count: int = 0
 
 
 def typical_price(bar: Dict[str, Any]) -> float:
@@ -776,6 +779,144 @@ def analyze_bars(symbol: str, bars: List[Dict[str, Any]]) -> IntradayMetrics:
             )
 
     return metrics
+
+
+def parse_bar_datetime(bar: Dict[str, Any]) -> Optional[datetime]:
+    """
+    Parse Alpaca bar timestamp safely.
+    """
+    t = safe_str(bar.get("t"), "")
+    if not t:
+        return None
+
+    dt = parse_iso_dt(t)
+    if dt is None:
+        return None
+
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+
+    return dt
+
+
+def aggregate_bars_to_minutes(bars: List[Dict[str, Any]], minutes: int = 5) -> List[Dict[str, Any]]:
+    """
+    Convert 1-minute bars into larger structure bars.
+
+    We keep the original 1-minute bars for execution/price, but use these
+    aggregated bars for cleaner setup structure:
+      - VWAP pullback quality
+      - VWAP touch count
+      - base / bull-flag compression
+      - volume stability
+    """
+    clean = [b for b in bars if safe_float(b.get("c"), 0) > 0]
+    if not clean:
+        return []
+
+    timed: List[Tuple[datetime, Dict[str, Any]]] = []
+    untimed: List[Dict[str, Any]] = []
+
+    for b in clean:
+        dt = parse_bar_datetime(b)
+        if dt is None:
+            untimed.append(b)
+        else:
+            timed.append((dt, b))
+
+    if not timed:
+        # Fallback: chunk every N bars if timestamps are unavailable.
+        output = []
+        for i in range(0, len(clean), minutes):
+            chunk = clean[i:i + minutes]
+            if not chunk:
+                continue
+            output.append({
+                "t": safe_str(chunk[0].get("t"), ""),
+                "o": safe_float(chunk[0].get("o"), safe_float(chunk[0].get("c"), 0)),
+                "h": max(safe_float(x.get("h"), 0) for x in chunk),
+                "l": min(safe_float(x.get("l"), safe_float(x.get("c"), 0)) for x in chunk if safe_float(x.get("l"), 0) > 0),
+                "c": safe_float(chunk[-1].get("c"), 0),
+                "v": sum(safe_float(x.get("v"), 0) for x in chunk),
+            })
+        return output
+
+    timed.sort(key=lambda x: x[0])
+
+    buckets: Dict[datetime, List[Dict[str, Any]]] = {}
+
+    for dt, b in timed:
+        bucket_minute = (dt.minute // minutes) * minutes
+        bucket_dt = dt.replace(minute=bucket_minute, second=0, microsecond=0)
+        buckets.setdefault(bucket_dt, []).append(b)
+
+    output = []
+    for bucket_dt in sorted(buckets.keys()):
+        chunk = buckets[bucket_dt]
+        lows = [safe_float(x.get("l"), 0) for x in chunk if safe_float(x.get("l"), 0) > 0]
+        output.append({
+            "t": bucket_dt.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "o": safe_float(chunk[0].get("o"), safe_float(chunk[0].get("c"), 0)),
+            "h": max(safe_float(x.get("h"), 0) for x in chunk),
+            "l": min(lows) if lows else safe_float(chunk[-1].get("c"), 0),
+            "c": safe_float(chunk[-1].get("c"), 0),
+            "v": sum(safe_float(x.get("v"), 0) for x in chunk),
+        })
+
+    return output
+
+
+def analyze_bars_with_structure(symbol: str, bars: List[Dict[str, Any]]) -> IntradayMetrics:
+    """
+    Hybrid analysis:
+      - 1-minute bars drive execution fields: last price, HOD, VWAP, HOD distance.
+      - 5-minute aggregated bars drive setup structure: pullback, base/flag, VWAP touch count.
+
+    This reduces false failures from noisy 1-minute candles while preserving
+    precise execution levels from the 1-minute feed.
+    """
+    execution = analyze_bars(symbol, bars)
+
+    if not execution.has_data:
+        return execution
+
+    structure_bars = aggregate_bars_to_minutes(bars, 5)
+    structure = analyze_bars(symbol, structure_bars) if len(structure_bars) >= 3 else IntradayMetrics(symbol=symbol)
+
+    execution.execution_timeframe = "1Min"
+    execution.structure_timeframe = "5Min" if structure.has_data else "1Min"
+    execution.structure_bar_count = len(structure_bars)
+
+    if not structure.has_data:
+        return execution
+
+    # Copy only structure-quality fields from 5-minute analysis.
+    # Keep execution price/VWAP/HOD from the 1-minute feed.
+    for attr in [
+        "avg_volume_5",
+        "avg_volume_prev_5",
+        "volume_stable_or_increasing",
+        "volume_drying",
+        "pullback_holding_vwap",
+        "pullback_high",
+        "pullback_low",
+        "recent_swing_low",
+        "vwap_touch_count",
+        "consolidating_near_high",
+        "base_compression",
+        "base_range_pct",
+        "base_high",
+        "base_low",
+        "base_breakout_level",
+        "base_higher_lows",
+        "base_volume_contracting",
+    ]:
+        setattr(execution, attr, getattr(structure, attr))
+
+    # Opening range support should remain regular-session support from execution bars.
+    # If 5-minute base data is available, keep it structure-only.
+
+    return execution
 
 
 def quote_spread_dollars(quote: Dict[str, Any]) -> Optional[float]:
@@ -1439,6 +1580,13 @@ def candidate_diagnostic_record(
         "vwap_dist_pct": round(metrics.vwap_dist_pct, 2) if metrics.has_data else 0,
         "hod_distance_pct": round(metrics.hod_distance_pct, 2) if metrics.has_data else 0,
         "above_vwap": metrics.above_vwap if metrics.has_data else False,
+        "base_compression": metrics.base_compression if metrics.has_data else False,
+        "base_range_pct": round(metrics.base_range_pct, 2) if metrics.has_data else 0,
+        "base_high": round(metrics.base_high, 4) if metrics.has_data else 0,
+        "base_low": round(metrics.base_low, 4) if metrics.has_data else 0,
+        "execution_timeframe": metrics.execution_timeframe,
+        "structure_timeframe": metrics.structure_timeframe,
+        "structure_bar_count": metrics.structure_bar_count,
         "live_signal_score": 0.0,
         "confidence": 0.0,
         "reward_risk": 0.0,
@@ -1544,10 +1692,9 @@ def signal_base(
         "base_range_pct": round(metrics.base_range_pct, 2),
         "base_high": round(metrics.base_high, 4),
         "base_low": round(metrics.base_low, 4),
-        "base_compression": metrics.base_compression,
-        "base_range_pct": round(metrics.base_range_pct, 2),
-        "base_high": round(metrics.base_high, 4),
-        "base_low": round(metrics.base_low, 4),
+        "execution_timeframe": metrics.execution_timeframe,
+        "structure_timeframe": metrics.structure_timeframe,
+        "structure_bar_count": metrics.structure_bar_count,
         "sector_status": safe_str(row.get("sector_status"), ""),
         "market_phase": phase,
         "reason": reason,
@@ -2157,7 +2304,7 @@ def run_signal_engine() -> None:
 
     for sym in monitor_symbols:
         row = row_lookup.get(sym, {"symbol": sym})
-        metrics = analyze_bars(sym, bars_by_symbol.get(sym, []))
+        metrics = analyze_bars_with_structure(sym, bars_by_symbol.get(sym, []))
         quote = quotes_by_symbol.get(sym, {})
         existing = prior_state.get(sym, {})
         existing_status = normalize_status(existing.get("signal_status"))
