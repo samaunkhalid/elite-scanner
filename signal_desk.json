@@ -1,6 +1,6 @@
 {
-  "generated_at_et": "2026-05-12T11:28:25-04:00",
-  "market_phase": "VALID_MORNING",
+  "generated_at_et": "2026-05-12T12:06:23-04:00",
+  "market_phase": "LUNCH_BLACKOUT",
   "alpaca_feed": "iex",
   "universe": {
     "potential_limit": 12,
