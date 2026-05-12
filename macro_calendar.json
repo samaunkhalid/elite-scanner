@@ -11,7 +11,7 @@
       "impact": "HIGH",
       "source": "New York Fed",
       "source_url": "https://www.newyorkfed.org/research/calendars/nationalecon_cal",
-      "minutes_until": 980
+      "minutes_until": 930
     },
     {
       "name": "Initial Claims",
@@ -21,7 +21,7 @@
       "impact": "MEDIUM",
       "source": "New York Fed",
       "source_url": "https://www.newyorkfed.org/research/calendars/nationalecon_cal",
-      "minutes_until": 2420
+      "minutes_until": 2370
     },
     {
       "name": "Advance Retail Sales",
@@ -31,7 +31,7 @@
       "impact": "HIGH",
       "source": "New York Fed",
       "source_url": "https://www.newyorkfed.org/research/calendars/nationalecon_cal",
-      "minutes_until": 2420
+      "minutes_until": 2370
     },
     {
       "name": "Imports and Exports",
@@ -41,7 +41,7 @@
       "impact": "MEDIUM",
       "source": "New York Fed",
       "source_url": "https://www.newyorkfed.org/research/calendars/nationalecon_cal",
-      "minutes_until": 2420
+      "minutes_until": 2370
     },
     {
       "name": "Business Inventories",
@@ -51,7 +51,7 @@
       "impact": "MEDIUM",
       "source": "New York Fed",
       "source_url": "https://www.newyorkfed.org/research/calendars/nationalecon_cal",
-      "minutes_until": 2510
+      "minutes_until": 2460
     },
     {
       "name": "Empire State Manufacturing Survey",
@@ -61,7 +61,7 @@
       "impact": "MEDIUM",
       "source": "New York Fed",
       "source_url": "https://www.newyorkfed.org/research/calendars/nationalecon_cal",
-      "minutes_until": 3860
+      "minutes_until": 3810
     },
     {
       "name": "Industrial Production and Capacity Utilization",
@@ -71,7 +71,7 @@
       "impact": "MEDIUM",
       "source": "New York Fed",
       "source_url": "https://www.newyorkfed.org/research/calendars/nationalecon_cal",
-      "minutes_until": 3905
+      "minutes_until": 3855
     },
     {
       "name": "New Residential Construction",
@@ -81,7 +81,7 @@
       "impact": "MEDIUM",
       "source": "New York Fed",
       "source_url": "https://www.newyorkfed.org/research/calendars/nationalecon_cal",
-      "minutes_until": 9620
+      "minutes_until": 9570
     },
     {
       "name": "NAR Pending Home Sales Index",
@@ -91,13 +91,13 @@
       "impact": "MEDIUM",
       "source": "New York Fed",
       "source_url": "https://www.newyorkfed.org/research/calendars/nationalecon_cal",
-      "minutes_until": 9710
+      "minutes_until": 9660
     }
   ],
   "source": "New York Fed Economic Indicators Calendar",
   "source_url": "https://www.newyorkfed.org/research/calendars/nationalecon_cal",
-  "generated_at_et": "2026-05-12 16:09 ET",
-  "generated_at": "2026-05-12 16:09 ET",
+  "generated_at_et": "2026-05-12 16:59 ET",
+  "generated_at": "2026-05-12 16:59 ET",
   "lookahead_days": 7,
   "fetch_error": ""
 }
