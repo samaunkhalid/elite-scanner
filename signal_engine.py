@@ -83,6 +83,13 @@ ACTIVE_HOD_MAX_DISTANCE = -2.5
 POTENTIAL_HOD_MAX_DISTANCE = -4.0
 HOD_BREAKOUT_READY_DISTANCE = -0.75
 MIN_RR = 1.5
+MIN_RR_WATCH = 0.75
+MAX_STOP_DISTANCE_PCT = 3.0
+MAX_STOP_DISTANCE_HOD_PCT = 3.5
+MIN_STOP_BUFFER_PCT = 0.8
+VOLATILE_STOP_BUFFER_PCT = 1.0
+MIN_TARGET_R_MULTIPLE = 1.5
+TARGET_2_R_MULTIPLE = 2.5
 MIN_CONF_WATCH = 60.0
 MIN_CONF_READY = 75.0
 MIN_CONF_ACTIVE = 85.0
@@ -1278,6 +1285,126 @@ def adjust_before_magnetic(level: float) -> float:
     return level * 0.999  # ~0.1% before obvious level.
 
 
+
+def setup_stop_buffer_dollars(
+    price: float,
+    support: float,
+    atr_pct: float,
+    quote: Optional[Dict[str, Any]] = None,
+) -> Tuple[float, bool, Optional[float], float]:
+    """
+    Breathing-room buffer below the 5-minute structure support.
+
+    Project rule:
+      - normal stocks: at least ~0.8% below structure support
+      - volatile names: slightly wider buffer
+      - also respect spread if available
+    """
+    if support <= 0:
+        return 0.0, False, None, 0.0
+
+    spread = quote_spread_dollars(quote or {})
+    spread_used = False
+
+    buffer_pct = VOLATILE_STOP_BUFFER_PCT if atr_pct >= 5.0 else MIN_STOP_BUFFER_PCT
+    pct_buffer = support * (buffer_pct / 100.0)
+
+    price_buffer = price * 0.001 if price > 0 else 0.0
+
+    candidates = [pct_buffer, price_buffer]
+
+    if spread is not None and spread > 0:
+        candidates.append(2 * spread)
+        spread_used = True
+
+    return max(candidates), spread_used, spread, buffer_pct
+
+
+def structure_levels_for_setup(
+    setup_type: str,
+    metrics: IntradayMetrics,
+) -> Tuple[float, float, str]:
+    """
+    Return (entry_base, support, label) from 5-minute structure fields.
+
+    The engine uses:
+      - 5-minute levels for trade setup construction
+      - 1-minute latest price/VWAP/HOD for execution/invalidation
+    """
+    if setup_type == "VWAP_PULLBACK_CONTINUATION":
+        entry_base = metrics.pullback_high
+        support = metrics.pullback_low
+        return entry_base, support, "5Min pullback high/low"
+
+    if setup_type == "BASE_SQUEEZE_BREAKOUT":
+        entry_base = metrics.base_high or metrics.pullback_high
+        support = metrics.base_low or metrics.pullback_low
+        return entry_base, support, "5Min base high/low"
+
+    if setup_type == "HOD_BREAKOUT_CONTINUATION":
+        entry_base = metrics.hod
+        # For HOD breakout, do not use distant daily support.
+        # Use the nearest valid 5-minute base/pullback structure.
+        support_candidates = [
+            x for x in [
+                metrics.base_low,
+                metrics.pullback_low,
+                metrics.recent_swing_low,
+            ]
+            if x and x > 0
+        ]
+        support = max(support_candidates) if support_candidates else 0.0
+        return entry_base, support, "5Min HOD/base support"
+
+    # Fallback for monitoring only.
+    entry_base = max(metrics.base_high, metrics.pullback_high, metrics.hod)
+    support_candidates = [
+        x for x in [
+            metrics.base_low,
+            metrics.pullback_low,
+            metrics.recent_swing_low,
+        ]
+        if x and x > 0
+    ]
+    support = max(support_candidates) if support_candidates else 0.0
+    return entry_base, support, "5Min structure fallback"
+
+
+def nearest_trade_target_above(min_target: float, entry: float, metrics: IntradayMetrics, row: Dict[str, Any]) -> float:
+    """
+    Target 1 must be at least 1.5R.
+    If a clean resistance/magnetic level exists above that minimum, use it.
+    Otherwise use the 1.5R level itself.
+    """
+    if min_target <= 0:
+        return 0.0
+
+    levels: List[float] = []
+
+    for level in [
+        metrics.hod,
+        safe_float(row.get("premarket_high"), 0),
+        safe_float(row.get("prior_day_high"), 0),
+        safe_float(row.get("resistance"), 0),
+    ]:
+        if level >= min_target:
+            levels.append(level)
+
+    # Magnetic levels above the minimum target, not merely above entry.
+    levels.extend([x for x in round_level_candidates_above(min_target) if x >= min_target])
+    levels.extend([x for x in vwap_extension_levels(metrics.vwap, min_target) if x >= min_target])
+
+    levels = sorted(set(round(x, 4) for x in levels if x >= min_target))
+
+    if levels:
+        # If a level is much higher, still use it; never adjust below min_target.
+        target = levels[0]
+        adjusted = adjust_before_magnetic(target)
+        return max(adjusted, min_target)
+
+    return min_target
+
+
 def build_trade_plan(
     row: Dict[str, Any],
     metrics: IntradayMetrics,
@@ -1285,88 +1412,79 @@ def build_trade_plan(
     quote: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
-    Build entry, stop, targets, and R/R.
-    The function stays conservative; if the stop or target is unrealistic,
-    plan["valid"] becomes False.
+    Build entry, stop, targets, and R/R from 5-minute setup structure.
+
+    Design:
+      - 5Min chart defines entry support/stop/target math.
+      - 1Min chart only monitors latest price and trigger firing.
+      - No daily/weekly fallback support for intraday plans.
+      - Target 1 must be at least 1.5R.
+      - WATCH requires a usable provisional plan (R/R >= MIN_RR_WATCH).
     """
     atr_pct = safe_float(row.get("atr_pct"), 0)
     price = metrics.price or safe_float(row.get("price"), 0)
 
-    entry = trigger_level_for_setup(setup_type, metrics)
+    entry_base, support, structure_label = structure_levels_for_setup(setup_type, metrics)
+
+    entry = entry_base * 1.0002 if entry_base > 0 else 0.0
     if entry <= 0 and price > 0:
         entry = price
 
-    spread = quote_spread_dollars(quote or {})
-    daily_atr_dollars = price * (atr_pct / 100.0) if price > 0 and atr_pct > 0 else 0.0
+    buffer_dollars, spread_used, spread, buffer_pct = setup_stop_buffer_dollars(
+        price=price,
+        support=support,
+        atr_pct=atr_pct,
+        quote=quote,
+    )
 
-    buffer_options = [
-        0.08 * daily_atr_dollars if daily_atr_dollars > 0 else 0,
-        0.001 * price if price > 0 else 0,
-    ]
-
-    spread_used = False
-    if spread is not None and spread > 0:
-        buffer_options.append(2 * spread)
-        spread_used = True
-
-    buffer_dollars = max(buffer_options) if buffer_options else 0
-    support = support_level_for_setup(setup_type, metrics, entry)
-    stop = support - buffer_dollars
-
+    stop = support - buffer_dollars if support > 0 else 0.0
     risk = entry - stop
     stop_distance_pct = pct(risk, entry) if entry > 0 else 999.0
+
+    max_stop_pct = MAX_STOP_DISTANCE_HOD_PCT if setup_type == "HOD_BREAKOUT_CONTINUATION" else MAX_STOP_DISTANCE_PCT
 
     valid = True
     rejection_reason = ""
 
-    if entry <= 0 or stop <= 0 or risk <= 0:
+    if not metrics.has_data:
         valid = False
-        rejection_reason = "Invalid entry/stop"
-    elif stop_distance_pct > 3.0 and not (atr_pct > 5.0 and stop_distance_pct <= 3.5):
+        rejection_reason = "No intraday data"
+    elif entry <= 0 or support <= 0 or stop <= 0 or risk <= 0:
         valid = False
-        rejection_reason = "Stop distance too wide"
+        rejection_reason = "Invalid 5Min entry/support/stop"
+    elif stop_distance_pct > max_stop_pct:
+        valid = False
+        rejection_reason = f"Stop distance {round(stop_distance_pct, 2)}% > max {max_stop_pct}%"
     elif atr_pct > 0 and stop_distance_pct > 0.75 * atr_pct:
         valid = False
         rejection_reason = "Stop distance exceeds 0.75x ATR"
 
-    one_r = entry + risk
-    two_r = entry + 2 * risk
+    min_target_1 = entry + (MIN_TARGET_R_MULTIPLE * risk) if risk > 0 else 0.0
+    target_1 = nearest_trade_target_above(min_target_1, entry, metrics, row) if min_target_1 > 0 else 0.0
 
-    resistance_levels = []
+    rr = (target_1 - entry) / risk if risk > 0 else 0.0
 
-    # Only include levels above entry.
+    if rr < MIN_RR and valid:
+        valid = False
+        rejection_reason = "Target 1 R/R below 1.5"
+
+    target_2_min = entry + (TARGET_2_R_MULTIPLE * risk) if risk > 0 else 0.0
+
+    higher_levels = []
     for level in [
         metrics.hod,
         safe_float(row.get("premarket_high"), 0),
         safe_float(row.get("prior_day_high"), 0),
         safe_float(row.get("resistance"), 0),
     ]:
-        if level > entry * 1.001:
-            resistance_levels.append(level)
+        if level >= target_2_min:
+            higher_levels.append(level)
 
-    resistance_levels.extend(round_level_candidates_above(entry))
-    resistance_levels.extend(vwap_extension_levels(metrics.vwap, entry))
+    higher_levels.extend([x for x in round_level_candidates_above(target_2_min) if x >= target_2_min])
+    higher_levels.extend([x for x in vwap_extension_levels(metrics.vwap, target_2_min) if x >= target_2_min])
+    higher_levels = sorted(set(round(x, 4) for x in higher_levels if x >= target_2_min))
 
-    resistance_levels = sorted(set(round(x, 4) for x in resistance_levels if x > entry * 1.001))
-
-    target_candidates = [one_r] + resistance_levels
-    target_1_raw = min(target_candidates) if target_candidates else one_r
-
-    # If target is one of the obvious levels, set just before it.
-    if any(abs(target_1_raw - level) / level <= 0.003 for level in resistance_levels if level > 0):
-        target_1 = adjust_before_magnetic(target_1_raw)
-    else:
-        target_1 = target_1_raw
-
-    rr = (target_1 - entry) / risk if risk > 0 else 0
-
-    if rr < MIN_RR:
-        valid = False
-        rejection_reason = "Target 1 R/R below 1.5"
-
-    next_levels = [x for x in resistance_levels if x > target_1 * 1.001]
-    target_2_candidates = [two_r] + next_levels
-    target_2 = min(target_2_candidates) if target_2_candidates else two_r
+    target_2 = higher_levels[0] if higher_levels else target_2_min
 
     return {
         "valid": valid,
@@ -1378,10 +1496,13 @@ def build_trade_plan(
         "reward_risk": round(rr, 2),
         "stop_distance_pct": round(stop_distance_pct, 2),
         "support_level": round(support, 4),
+        "structure_label": structure_label,
         "buffer_dollars": round(buffer_dollars, 4),
+        "buffer_pct_used": round(buffer_pct, 2),
         "spread_used": spread_used,
         "spread_dollars": round(spread, 4) if spread is not None else None,
-        "daily_atr_dollars": round(daily_atr_dollars, 4),
+        "min_target_1": round(min_target_1, 4),
+        "min_target_r": MIN_TARGET_R_MULTIPLE,
     }
 
 
@@ -1623,6 +1744,10 @@ def candidate_diagnostic_record(
         "target_1": plan.get("target_1"),
         "target_2": plan.get("target_2"),
         "stop_distance_pct": plan.get("stop_distance_pct"),
+        "support_level": plan.get("support_level"),
+        "structure_label": plan.get("structure_label"),
+        "min_target_1": plan.get("min_target_1"),
+        "buffer_pct_used": plan.get("buffer_pct_used"),
         "not_ready_reasons": blockers,
     })
 
@@ -1633,6 +1758,9 @@ def candidate_diagnostic_record(
 
     if conf < MIN_CONF_WATCH:
         rejected.append(f"Confidence {round(conf, 1)} < WATCH minimum {MIN_CONF_WATCH:.0f}")
+
+    if safe_float(plan.get("reward_risk"), 0) < MIN_RR_WATCH:
+        rejected.append(f"No usable trade plan: R/R {round(safe_float(plan.get('reward_risk'), 0), 2)} < WATCH minimum {MIN_RR_WATCH:.2f}")
 
     if not is_market_open_phase(phase) and phase != "PREMARKET":
         rejected.append(f"Market phase {phase} does not allow new monitor signals")
@@ -1680,6 +1808,10 @@ def signal_base(
         "target_2": plan.get("target_2"),
         "reward_risk": plan.get("reward_risk"),
         "stop_distance_pct": plan.get("stop_distance_pct"),
+        "support_level": plan.get("support_level"),
+        "structure_label": plan.get("structure_label"),
+        "min_target_1": plan.get("min_target_1"),
+        "buffer_pct_used": plan.get("buffer_pct_used"),
         "price": round(metrics.price, 4),
         "session_open": round(metrics.session_open, 4),
         "day_change_pct": round(metrics.day_change_pct, 2),
@@ -2073,9 +2205,11 @@ def process_new_or_watch(
     plan = build_trade_plan(row, metrics, provisional_setup, quote)
     live = live_signal_score(row, metrics, plan, regime, phase)
     conf = final_confidence(safe_float(row.get("score"), 0), live)
+    provisional_rr = safe_float(plan.get("reward_risk"), 0)
+    usable_watch_plan = provisional_rr >= MIN_RR_WATCH
 
     if phase == "PREMARKET":
-        if conf >= MIN_CONF_WATCH:
+        if conf >= MIN_CONF_WATCH and usable_watch_plan:
             out = signal_base(
                 row,
                 metrics,
@@ -2144,7 +2278,7 @@ def process_new_or_watch(
                 return out
 
     # Otherwise WATCH only.
-    if conf >= MIN_CONF_WATCH:
+    if conf >= MIN_CONF_WATCH and usable_watch_plan:
         out = signal_base(
             row,
             metrics,
