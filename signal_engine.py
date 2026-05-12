@@ -21,6 +21,7 @@ Core design:
   - Red/risk-off market can still allow RELATIVE-STRENGTH WATCH candidates.
   - Invalid trade plans must NOT appear as WATCH.
   - Late-day setups require stronger volume, no bearish divergence, and EMA9 confirmation.
+  - VWAP touch logic is setup-relative: opening VWAP noise is ignored and counts reset after bullish reclaim.
 
 Important:
   - This engine generates dashboard signals only.
@@ -668,6 +669,12 @@ class IntradayMetrics:
     recent_swing_low: float = 0.0
     opening_range_low: float = 0.0
     vwap_touch_count: int = 0
+    vwap_opening_touches_ignored: int = 0
+    vwap_recent_touch_count: int = 0
+    vwap_clean_hold_count: int = 0
+    vwap_failed_touch_count: int = 0
+    vwap_touch_status: str = "UNKNOWN"
+    bullish_structure_start_et: str = ""
     consolidating_near_high: bool = False
 
     base_compression: bool = False
@@ -696,6 +703,39 @@ def clean_bars(bars: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         if c > 0:
             out.append(b)
     return out
+
+
+def bar_time_et(bar: Dict[str, Any]) -> Optional[datetime]:
+    """Return an Alpaca bar timestamp in New York time when available."""
+    dt = parse_iso_dt(bar.get("t"))
+    if not dt:
+        return None
+
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+
+    if ZoneInfo:
+        return dt.astimezone(ZoneInfo("America/New_York"))
+
+    return dt
+
+
+def is_opening_noise_bar(bar: Dict[str, Any]) -> bool:
+    """Opening VWAP crosses before 9:45 ET are ignored for VWAP-touch quality."""
+    dt = bar_time_et(bar)
+    if not dt:
+        return False
+    return dt.time() < dtime(9, 45)
+
+
+def ema_at_index(values: List[float], idx: int) -> float:
+    if not values:
+        return 0.0
+    if idx < 0:
+        return values[0]
+    if idx >= len(values):
+        return values[-1]
+    return values[idx]
 
 
 def ema_series(values: List[float], span: int) -> List[float]:
@@ -945,18 +985,159 @@ def enrich_structure_from_5min(metrics: IntradayMetrics, bars_5m: List[Dict[str,
             hold_count += 1
     metrics.pullback_holding_vwap = hold_count >= min(2, len(recent3))
 
-    # VWAP touch count on 5-min structure, not noisy 1-min wiggles.
-    touches = 0
-    for b in clean:
+    # VWAP touch quality on 5-minute structure.
+    #
+    # Important:
+    #   - Ignore 9:30-9:45 opening VWAP noise.
+    #   - Reset the count after the first real bullish reclaim:
+    #       two consecutive 5-min closes above VWAP + EMA9.
+    #   - Count only the most recent 60-90 minutes after that reclaim.
+    #   - Treat clean VWAP holds differently from failed VWAP touches.
+    #
+    # This prevents a good afternoon setup from being blocked just because
+    # the stock chopped around VWAP during the opening volatility window.
+    opening_touches = 0
+    all_touch_indices: List[int] = []
+
+    for idx, b in enumerate(clean):
         high = safe_float(b.get("h"), 0)
         low = safe_float(b.get("l"), 0)
         close = safe_float(b.get("c"), 0)
-        if metrics.vwap > 0 and (
-            (low <= metrics.vwap <= high)
-            or abs(pct_change(close, metrics.vwap)) <= 0.20
-        ):
-            touches += 1
-    metrics.vwap_touch_count = touches
+        is_touch = bool(
+            metrics.vwap > 0
+            and (
+                (low <= metrics.vwap <= high)
+                or abs(pct_change(close, metrics.vwap)) <= 0.20
+            )
+        )
+
+        if not is_touch:
+            continue
+
+        all_touch_indices.append(idx)
+        if is_opening_noise_bar(b):
+            opening_touches += 1
+
+    metrics.vwap_opening_touches_ignored = opening_touches
+
+    # Find bullish VWAP+EMA9 reclaim after the opening noise.
+    post_open_start_idx = 0
+    for idx, b in enumerate(clean):
+        dt = bar_time_et(b)
+        if dt and dt.time() >= dtime(9, 45):
+            post_open_start_idx = idx
+            break
+    else:
+        # Fallback when timestamps are unavailable: skip first 3 x 5-minute bars.
+        post_open_start_idx = min(3, max(0, len(clean) - 1))
+
+    bullish_start_idx: Optional[int] = None
+    for idx in range(max(1, post_open_start_idx), len(clean)):
+        prev_bar = clean[idx - 1]
+        cur_bar = clean[idx]
+
+        prev_close = safe_float(prev_bar.get("c"), 0)
+        cur_close = safe_float(cur_bar.get("c"), 0)
+        prev_ema = ema_at_index(ema9_values, idx - 1)
+        cur_ema = ema_at_index(ema9_values, idx)
+
+        prev_ok = (
+            metrics.vwap > 0
+            and prev_close >= metrics.vwap
+            and (prev_ema <= 0 or prev_close >= prev_ema)
+        )
+        cur_ok = (
+            metrics.vwap > 0
+            and cur_close >= metrics.vwap
+            and (cur_ema <= 0 or cur_close >= cur_ema)
+        )
+
+        if prev_ok and cur_ok:
+            bullish_start_idx = idx - 1
+            break
+
+    if bullish_start_idx is None:
+        bullish_start_idx = post_open_start_idx
+
+    start_bar = clean[bullish_start_idx] if clean and bullish_start_idx < len(clean) else None
+    if start_bar:
+        start_dt = bar_time_et(start_bar)
+        metrics.bullish_structure_start_et = (
+            start_dt.isoformat(timespec="minutes") if start_dt else ""
+        )
+
+    # Rolling structure window: last 18 x 5-min bars = 90 minutes.
+    rolling_start_idx = max(bullish_start_idx, len(clean) - 18)
+    touch_scope = clean[rolling_start_idx:]
+
+    meaningful_touches = 0
+    clean_holds = 0
+    failed_touches = 0
+
+    for local_idx, b in enumerate(touch_scope):
+        idx = rolling_start_idx + local_idx
+        high = safe_float(b.get("h"), 0)
+        low = safe_float(b.get("l"), 0)
+        close = safe_float(b.get("c"), 0)
+        open_ = safe_float(b.get("o"), close)
+        ema_i = ema_at_index(ema9_values, idx)
+
+        is_touch = bool(
+            metrics.vwap > 0
+            and (
+                (low <= metrics.vwap <= high)
+                or abs(pct_change(close, metrics.vwap)) <= 0.20
+            )
+        )
+        if not is_touch:
+            continue
+
+        meaningful_touches += 1
+
+        clean_hold = (
+            close >= metrics.vwap
+            and low >= metrics.vwap * 0.992
+            and (ema_i <= 0 or close >= ema_i * 0.998)
+        )
+
+        failed_touch = (
+            close < metrics.vwap
+            or (ema_i > 0 and close < ema_i * 0.998)
+        )
+
+        # Selling pressure makes a touch more suspicious.
+        if metrics.avg_volume_prev_5 > 0:
+            vol = safe_float(b.get("v"), 0)
+            red_bar = close < open_
+            if red_bar and vol > metrics.avg_volume_prev_5 * 1.15:
+                failed_touch = True
+
+        if clean_hold:
+            clean_holds += 1
+        if failed_touch:
+            failed_touches += 1
+
+    metrics.vwap_touch_count = meaningful_touches
+    metrics.vwap_recent_touch_count = meaningful_touches
+    metrics.vwap_clean_hold_count = clean_holds
+    metrics.vwap_failed_touch_count = failed_touches
+
+    if failed_touches >= 2:
+        metrics.vwap_touch_status = "RECENT_FAILED_RETESTS"
+    elif meaningful_touches >= 4 and (
+        not metrics.price_above_ema9
+        or metrics.ema9_falling
+        or metrics.volume_fading_vs_morning
+        or metrics.bearish_momentum_divergence
+        or metrics.macd_histogram_falling
+    ):
+        metrics.vwap_touch_status = "MANY_TOUCHES_WITH_WEAK_STRUCTURE"
+    elif clean_holds >= 1 and failed_touches == 0:
+        metrics.vwap_touch_status = "RECENT_CLEAN_HOLD"
+    elif meaningful_touches == 0:
+        metrics.vwap_touch_status = "NO_RECENT_TOUCH"
+    else:
+        metrics.vwap_touch_status = "MIXED"
 
     # Base/flag compression from last 5x 5-min bars.
     recent_highs = [safe_float(b.get("h"), 0) for b in recent5 if safe_float(b.get("h"), 0) > 0]
@@ -1477,8 +1658,12 @@ def setup_vwap_pullback_ready(metrics: IntradayMetrics, rr: float, confidence: f
     if metrics.volume_drying and not metrics.base_volume_constructive:
         return False, "Pullback volume not constructive"
 
-    if metrics.vwap_touch_count >= 4:
-        return False, "4th+ VWAP touch"
+    # Do not punish old/opening VWAP noise. Only block weak recent VWAP retests.
+    if metrics.vwap_failed_touch_count >= 2:
+        return False, "Repeated recent failed VWAP retests"
+
+    if metrics.vwap_recent_touch_count >= 4 and metrics.vwap_touch_status == "MANY_TOUCHES_WITH_WEAK_STRUCTURE":
+        return False, "4th+ recent VWAP touches with weak structure"
 
     if rr < MIN_RR:
         return False, "R/R below 1.5"
@@ -1849,6 +2034,13 @@ def diagnostic_candidate(
         "vwap_dist_pct": round(metrics.vwap_dist_pct, 2),
         "hod_distance_pct": round(metrics.hod_distance_pct, 2),
         "above_vwap": metrics.above_vwap,
+        "vwap_touch_count": metrics.vwap_touch_count,
+        "vwap_opening_touches_ignored": metrics.vwap_opening_touches_ignored,
+        "vwap_recent_touch_count": metrics.vwap_recent_touch_count,
+        "vwap_clean_hold_count": metrics.vwap_clean_hold_count,
+        "vwap_failed_touch_count": metrics.vwap_failed_touch_count,
+        "vwap_touch_status": metrics.vwap_touch_status,
+        "bullish_structure_start_et": metrics.bullish_structure_start_et,
         "ema9": round(metrics.ema9, 4),
         "ema9_prev": round(metrics.ema9_prev, 4),
         "ema9_slope_pct": round(metrics.ema9_slope_pct, 3),
@@ -1954,6 +2146,13 @@ def signal_base(
         "vwap_dist_pct": round(metrics.vwap_dist_pct, 2),
         "hod_distance_pct": round(metrics.hod_distance_pct, 2),
         "above_vwap": metrics.above_vwap,
+        "vwap_touch_count": metrics.vwap_touch_count,
+        "vwap_opening_touches_ignored": metrics.vwap_opening_touches_ignored,
+        "vwap_recent_touch_count": metrics.vwap_recent_touch_count,
+        "vwap_clean_hold_count": metrics.vwap_clean_hold_count,
+        "vwap_failed_touch_count": metrics.vwap_failed_touch_count,
+        "vwap_touch_status": metrics.vwap_touch_status,
+        "bullish_structure_start_et": metrics.bullish_structure_start_et,
         "ema9": round(metrics.ema9, 4),
         "ema9_prev": round(metrics.ema9_prev, 4),
         "ema9_slope_pct": round(metrics.ema9_slope_pct, 3),
