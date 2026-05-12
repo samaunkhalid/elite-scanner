@@ -103,6 +103,14 @@ EMA9_BELOW_PRICE_PENALTY = 5
 EMA9_FALLING_PENALTY = 4
 EMA9_BELOW_VWAP_PENALTY = 4
 
+# MACD confirmation.
+MACD_FAST_SPAN = 12
+MACD_SLOW_SPAN = 26
+MACD_SIGNAL_SPAN = 9
+MACD_BULLISH_BONUS_MAX = 8
+MACD_BEARISH_CROSSOVER_PENALTY = 8
+MACD_HISTOGRAM_WEAKENING_PENALTY = 4
+
 MAX_STOP_DIST_NORMAL = 3.0
 MAX_STOP_DIST_HOD = 3.5
 
@@ -630,6 +638,18 @@ class IntradayMetrics:
     macd_recent_high: float = 0.0
     price_prior_high: float = 0.0
     price_recent_high: float = 0.0
+
+    macd_value: float = 0.0
+    macd_signal: float = 0.0
+    macd_histogram: float = 0.0
+    macd_histogram_prev: float = 0.0
+    macd_above_signal: bool = False
+    macd_above_zero: bool = False
+    macd_bullish_crossover_recent: bool = False
+    macd_bearish_crossover_recent: bool = False
+    macd_histogram_rising: bool = False
+    macd_histogram_falling: bool = False
+    macd_status: str = "UNKNOWN"
     momentum_status: str = "CLEAN"
 
     ema9: float = 0.0
@@ -690,12 +710,26 @@ def ema_series(values: List[float], span: int) -> List[float]:
 
 
 def macd_line(values: List[float]) -> List[float]:
-    if len(values) < 26:
+    if len(values) < MACD_SLOW_SPAN:
         return []
 
-    fast = ema_series(values, 12)
-    slow = ema_series(values, 26)
+    fast = ema_series(values, MACD_FAST_SPAN)
+    slow = ema_series(values, MACD_SLOW_SPAN)
     return [f - s for f, s in zip(fast, slow)]
+
+
+def macd_components(values: List[float]) -> Tuple[List[float], List[float], List[float]]:
+    """
+    Returns MACD line, signal line, and histogram.
+    Uses 5-minute closes in this engine.
+    """
+    macd = macd_line(values)
+    if not macd:
+        return [], [], []
+
+    signal = ema_series(macd, MACD_SIGNAL_SPAN)
+    hist = [m - s for m, s in zip(macd, signal)]
+    return macd, signal, hist
 
 
 def analyze_execution_bars(symbol: str, bars: List[Dict[str, Any]]) -> IntradayMetrics:
@@ -822,8 +856,39 @@ def enrich_structure_from_5min(metrics: IntradayMetrics, bars_5m: List[Dict[str,
         else:
             metrics.ema9_status = "NEUTRAL"
 
-    # Momentum / divergence using 5-minute MACD.
-    macd = macd_line(closes)
+    # MACD / momentum confirmation using 5-minute closes.
+    # MACD is used as a confirmation booster and a risk filter.
+    macd, macd_signal, macd_hist = macd_components(closes)
+    if len(macd) >= 3 and len(macd_signal) >= 3 and len(macd_hist) >= 3:
+        metrics.macd_value = macd[-1]
+        metrics.macd_signal = macd_signal[-1]
+        metrics.macd_histogram = macd_hist[-1]
+        metrics.macd_histogram_prev = macd_hist[-2]
+
+        metrics.macd_above_signal = metrics.macd_value >= metrics.macd_signal
+        metrics.macd_above_zero = metrics.macd_value >= 0
+        metrics.macd_histogram_rising = (
+            macd_hist[-1] > macd_hist[-2]
+            and (len(macd_hist) < 4 or macd_hist[-2] >= macd_hist[-3] * 0.98)
+        )
+        metrics.macd_histogram_falling = (
+            macd_hist[-1] < macd_hist[-2]
+            and (len(macd_hist) < 4 or macd_hist[-2] <= macd_hist[-3] * 1.02)
+        )
+
+        # Recent MACD crossovers in the last 5 completed 5-minute bars.
+        recent_pairs = list(zip(macd[-6:], macd_signal[-6:]))
+        for i in range(1, len(recent_pairs)):
+            prev_macd, prev_sig = recent_pairs[i - 1]
+            cur_macd, cur_sig = recent_pairs[i]
+
+            if prev_macd <= prev_sig and cur_macd > cur_sig:
+                metrics.macd_bullish_crossover_recent = True
+
+            if prev_macd >= prev_sig and cur_macd < cur_sig:
+                metrics.macd_bearish_crossover_recent = True
+
+    # Bearish divergence: price makes a higher high while MACD makes a lower high.
     if len(clean) >= 30 and len(macd) >= 12:
         recent_window = clean[-12:]
         recent_macd = macd[-12:]
@@ -842,7 +907,28 @@ def enrich_structure_from_5min(metrics: IntradayMetrics, bars_5m: List[Dict[str,
 
         if price_higher_high and macd_lower_high:
             metrics.bearish_momentum_divergence = True
-            metrics.momentum_status = "BEARISH_DIVERGENCE"
+
+    if metrics.bearish_momentum_divergence:
+        metrics.momentum_status = "BEARISH_DIVERGENCE"
+        metrics.macd_status = "BEARISH_DIVERGENCE"
+    elif metrics.macd_bearish_crossover_recent:
+        metrics.momentum_status = "BEARISH_CROSSOVER"
+        metrics.macd_status = "BEARISH_CROSSOVER"
+    elif metrics.macd_bullish_crossover_recent:
+        metrics.momentum_status = "BULLISH_CROSSOVER"
+        metrics.macd_status = "BULLISH_CROSSOVER"
+    elif metrics.macd_above_signal and metrics.macd_histogram_rising:
+        metrics.momentum_status = "BULLISH_MOMENTUM"
+        metrics.macd_status = "BULLISH_MOMENTUM"
+    elif metrics.macd_above_signal:
+        metrics.momentum_status = "MACD_ABOVE_SIGNAL"
+        metrics.macd_status = "MACD_ABOVE_SIGNAL"
+    elif metrics.macd_histogram_falling:
+        metrics.momentum_status = "HISTOGRAM_WEAKENING"
+        metrics.macd_status = "HISTOGRAM_WEAKENING"
+    elif metrics.macd_value or metrics.macd_signal:
+        metrics.momentum_status = "MACD_NEUTRAL"
+        metrics.macd_status = "NEUTRAL"
 
     # Pullback structure from last 3x 5-min bars.
     metrics.pullback_high = max(safe_float(b.get("h"), 0) for b in recent3)
@@ -1291,6 +1377,52 @@ def ema9_confirmation_score(metrics: IntradayMetrics) -> float:
     return round(min(EMA9_BULLISH_BONUS_MAX, score), 2)
 
 
+
+def macd_confirmation_score(metrics: IntradayMetrics) -> float:
+    """
+    MACD is a confirmation booster, not a primary trigger.
+    Good MACD can lift borderline late-day candidates; bearish MACD reduces quality.
+    """
+    score = 0.0
+
+    if metrics.macd_bullish_crossover_recent:
+        score += 5.0
+
+    if metrics.macd_above_signal:
+        score += 3.0
+
+    if metrics.macd_histogram_rising:
+        score += 2.0
+
+    if metrics.macd_above_zero:
+        score += 1.0
+
+    if metrics.macd_bearish_crossover_recent:
+        score -= 5.0
+
+    if metrics.macd_histogram_falling and not metrics.macd_above_signal:
+        score -= 3.0
+
+    if metrics.bearish_momentum_divergence:
+        score -= 8.0
+
+    return round(clamp(score, -8.0, MACD_BULLISH_BONUS_MAX), 2)
+
+
+def macd_ready_confirmation(metrics: IntradayMetrics) -> Tuple[bool, str]:
+    """
+    MACD should not be a hard requirement for WATCH.
+    For READY, bearish MACD conditions are blockers; bullish MACD is a bonus through scoring.
+    """
+    if metrics.bearish_momentum_divergence:
+        return False, "Bearish MACD/momentum divergence"
+
+    if metrics.macd_bearish_crossover_recent and metrics.macd_histogram_falling:
+        return False, "Bearish MACD crossover / histogram weakening"
+
+    return True, "MACD confirmation acceptable"
+
+
 def ema9_ready_confirmation(metrics: IntradayMetrics, late_day: Optional[bool] = None) -> Tuple[bool, str]:
     """
     Trigger Ready should have EMA9 confirmation.
@@ -1329,8 +1461,9 @@ def setup_vwap_pullback_ready(metrics: IntradayMetrics, rr: float, confidence: f
     if not ema_ok:
         return False, ema_reason
 
-    if metrics.bearish_momentum_divergence:
-        return False, "Bearish MACD/momentum divergence"
+    macd_ok, macd_reason = macd_ready_confirmation(metrics)
+    if not macd_ok:
+        return False, macd_reason
 
     if metrics.volume_fading_vs_morning:
         return False, "Volume fading vs morning reference"
@@ -1403,8 +1536,9 @@ def setup_base_squeeze_ready(metrics: IntradayMetrics, rr: float, confidence: fl
     if not ema_ok:
         return False, ema_reason
 
-    if metrics.bearish_momentum_divergence:
-        return False, "Bearish MACD/momentum divergence"
+    macd_ok, macd_reason = macd_ready_confirmation(metrics)
+    if not macd_ok:
+        return False, macd_reason
 
     if metrics.volume_fading_vs_morning:
         return False, "Volume fading vs morning reference"
@@ -1439,8 +1573,9 @@ def setup_hod_breakout_ready(metrics: IntradayMetrics, rr: float, confidence: fl
     if not ema_ok:
         return False, ema_reason
 
-    if metrics.bearish_momentum_divergence:
-        return False, "Bearish MACD/momentum divergence"
+    macd_ok, macd_reason = macd_ready_confirmation(metrics)
+    if not macd_ok:
+        return False, macd_reason
 
     if metrics.volume_fading_vs_morning:
         return False, "Volume fading vs morning reference"
@@ -1524,7 +1659,10 @@ def live_signal_score(
     # 2. EMA9 confirmation: 10
     ema_score = ema9_confirmation_score(metrics)
 
-    # 3. HOD/range position: 15
+    # 3. MACD / momentum confirmation: booster/penalty.
+    macd_score = macd_confirmation_score(metrics)
+
+    # 4. HOD/range position: 15
     if metrics.hod_distance_pct >= -0.75:
         hod_score = 15
     elif metrics.hod_distance_pct >= -2.5:
@@ -1614,6 +1752,12 @@ def live_signal_score(
     if metrics.bearish_momentum_divergence:
         penalty += BEARISH_DIVERGENCE_PENALTY
 
+    if metrics.macd_bearish_crossover_recent:
+        penalty += MACD_BEARISH_CROSSOVER_PENALTY
+
+    if metrics.macd_histogram_falling and not metrics.macd_above_signal:
+        penalty += MACD_HISTOGRAM_WEAKENING_PENALTY
+
     if is_late_day() and not late_day_volume_confirmed(metrics):
         penalty += LATE_DAY_NO_VOLUME_EXPANSION_PENALTY
 
@@ -1621,6 +1765,7 @@ def live_signal_score(
         vwap_score
         + hod_score
         + ema_score
+        + macd_score
         + volume_score
         + rr_score
         + sector_score
@@ -1713,6 +1858,17 @@ def diagnostic_candidate(
         "ema9_above_vwap": metrics.ema9_above_vwap,
         "ema9_crossed_above_vwap_recent": metrics.ema9_crossed_above_vwap_recent,
         "ema9_status": metrics.ema9_status,
+        "macd_value": round(metrics.macd_value, 4),
+        "macd_signal": round(metrics.macd_signal, 4),
+        "macd_histogram": round(metrics.macd_histogram, 4),
+        "macd_histogram_prev": round(metrics.macd_histogram_prev, 4),
+        "macd_above_signal": metrics.macd_above_signal,
+        "macd_above_zero": metrics.macd_above_zero,
+        "macd_bullish_crossover_recent": metrics.macd_bullish_crossover_recent,
+        "macd_bearish_crossover_recent": metrics.macd_bearish_crossover_recent,
+        "macd_histogram_rising": metrics.macd_histogram_rising,
+        "macd_histogram_falling": metrics.macd_histogram_falling,
+        "macd_status": metrics.macd_status,
         "base_compression": metrics.base_compression,
         "base_range_pct": round(metrics.base_range_pct, 2),
         "base_high": round(metrics.base_high, 4),
@@ -1807,6 +1963,17 @@ def signal_base(
         "ema9_above_vwap": metrics.ema9_above_vwap,
         "ema9_crossed_above_vwap_recent": metrics.ema9_crossed_above_vwap_recent,
         "ema9_status": metrics.ema9_status,
+        "macd_value": round(metrics.macd_value, 4),
+        "macd_signal": round(metrics.macd_signal, 4),
+        "macd_histogram": round(metrics.macd_histogram, 4),
+        "macd_histogram_prev": round(metrics.macd_histogram_prev, 4),
+        "macd_above_signal": metrics.macd_above_signal,
+        "macd_above_zero": metrics.macd_above_zero,
+        "macd_bullish_crossover_recent": metrics.macd_bullish_crossover_recent,
+        "macd_bearish_crossover_recent": metrics.macd_bearish_crossover_recent,
+        "macd_histogram_rising": metrics.macd_histogram_rising,
+        "macd_histogram_falling": metrics.macd_histogram_falling,
+        "macd_status": metrics.macd_status,
         "base_compression": metrics.base_compression,
         "base_range_pct": round(metrics.base_range_pct, 2),
         "base_high": round(metrics.base_high, 4),
@@ -1936,8 +2103,9 @@ def ready_invalidated(signal: Dict[str, Any], metrics: IntradayMetrics) -> Tuple
     if is_late_day() and metrics.ema9_falling:
         return True, "Late-day setup EMA9 turned down before trigger", "FAILED_SETUP"
 
-    if metrics.bearish_momentum_divergence:
-        return True, "Bearish momentum divergence developed before trigger", "FAILED_SETUP"
+    macd_ok, macd_reason = macd_ready_confirmation(metrics)
+    if not macd_ok:
+        return True, f"{macd_reason} developed before trigger", "FAILED_SETUP"
 
     if metrics.volume_fading_vs_morning:
         return True, "Volume faded versus morning reference before trigger", "FAILED_SETUP"
@@ -2005,6 +2173,146 @@ def suppress_trigger_during_blackout(
     return out
 
 
+
+def trigger_ready_reassessment(
+    existing: Dict[str, Any],
+    row: Dict[str, Any],
+    metrics: IntradayMetrics,
+    quote: Dict[str, Any],
+    regime: Dict[str, Any],
+    phase: str,
+) -> Tuple[bool, Dict[str, Any], str]:
+    """
+    Reassess protected TRIGGER_READY signals on every refresh.
+
+    This prevents stale Ready states from surviving after:
+      - late-day confidence threshold rises,
+      - EMA9 turns down,
+      - MACD weakens,
+      - volume fades,
+      - setup structure is no longer ready.
+    """
+    setup_type = safe_str(existing.get("setup_type"), "")
+    plan = build_trade_plan(row, metrics, setup_type, quote)
+    live = live_signal_score(row, metrics, plan, regime, phase)
+    conf = final_confidence(
+        safe_float(row.get("score"), safe_float(existing.get("scanner_score"), 0)),
+        live,
+    )
+
+    setup_ready_type, setup_reason, setup_fail_reasons = choose_setup(metrics, plan, conf, phase)
+    ready_min = ready_confidence_required(phase)
+
+    fail_reasons: List[str] = []
+
+    if not plan.get("valid"):
+        fail_reasons.append(f"Plan invalid: {safe_str(plan.get('rejection_reason'), 'Invalid plan')}")
+
+    if safe_float(plan.get("reward_risk"), 0) < MIN_RR:
+        fail_reasons.append(f"R/R {safe_float(plan.get('reward_risk'), 0):.2f} < minimum 1.5")
+
+    if conf < ready_min:
+        fail_reasons.append(f"Confidence {conf:.1f} < ready minimum {ready_min:.0f}")
+
+    macd_ok, macd_reason = macd_ready_confirmation(metrics)
+    if not macd_ok:
+        fail_reasons.append(macd_reason)
+
+    ema_ok, ema_reason = ema9_ready_confirmation(metrics)
+    if not ema_ok:
+        fail_reasons.append(ema_reason)
+
+    if metrics.volume_fading_vs_morning:
+        fail_reasons.append("Volume fading vs morning reference")
+
+    if is_late_day() and not late_day_volume_confirmed(metrics):
+        fail_reasons.append("Late-day setup needs volume expansion")
+
+    if not setup_ready_type:
+        fail_reasons.extend(setup_fail_reasons)
+
+    if fail_reasons:
+        watch_plan = plan
+        if not watch_plan.get("valid") or safe_float(watch_plan.get("reward_risk"), 0) < MIN_RR_WATCH:
+            return False, {}, "; ".join(dict.fromkeys(fail_reasons))
+
+        out = signal_base(
+            row,
+            metrics,
+            watch_plan,
+            "WATCH",
+            "MONITORING",
+            conf,
+            live,
+            "Demoted from Trigger Ready after live reassessment. Waiting for setup quality to improve.",
+            phase,
+            regime,
+        )
+        out["detected_at"] = existing.get("detected_at") or existing.get("ready_since") or iso_now_et()
+        out["previous_ready_since"] = existing.get("ready_since", "")
+        out["demoted_from_trigger_ready_at"] = iso_now_et()
+        out["not_ready_reasons"] = list(dict.fromkeys(fail_reasons))
+        return False, out, "; ".join(dict.fromkeys(fail_reasons))
+
+    exact_plan = build_trade_plan(row, metrics, setup_ready_type, quote)
+    exact_live = live_signal_score(row, metrics, exact_plan, regime, phase)
+    exact_conf = final_confidence(
+        safe_float(row.get("score"), safe_float(existing.get("scanner_score"), 0)),
+        exact_live,
+    )
+
+    exact_ready_min = ready_confidence_required(phase)
+    if (
+        not exact_plan.get("valid")
+        or safe_float(exact_plan.get("reward_risk"), 0) < MIN_RR
+        or exact_conf < exact_ready_min
+    ):
+        fail = []
+        if not exact_plan.get("valid"):
+            fail.append(f"Plan invalid: {safe_str(exact_plan.get('rejection_reason'), 'Invalid plan')}")
+        if safe_float(exact_plan.get("reward_risk"), 0) < MIN_RR:
+            fail.append(f"R/R {safe_float(exact_plan.get('reward_risk'), 0):.2f} < minimum 1.5")
+        if exact_conf < exact_ready_min:
+            fail.append(f"Confidence {exact_conf:.1f} < ready minimum {exact_ready_min:.0f}")
+
+        if exact_plan.get("valid") and safe_float(exact_plan.get("reward_risk"), 0) >= MIN_RR_WATCH:
+            out = signal_base(
+                row,
+                metrics,
+                exact_plan,
+                "WATCH",
+                "MONITORING",
+                exact_conf,
+                exact_live,
+                "Demoted from Trigger Ready after exact setup reassessment.",
+                phase,
+                regime,
+            )
+            out["detected_at"] = existing.get("detected_at") or existing.get("ready_since") or iso_now_et()
+            out["previous_ready_since"] = existing.get("ready_since", "")
+            out["demoted_from_trigger_ready_at"] = iso_now_et()
+            out["not_ready_reasons"] = list(dict.fromkeys(fail))
+            return False, out, "; ".join(dict.fromkeys(fail))
+
+        return False, {}, "; ".join(dict.fromkeys(fail))
+
+    out = signal_base(
+        row,
+        metrics,
+        exact_plan,
+        "TRIGGER_READY",
+        setup_ready_type,
+        exact_conf,
+        exact_live,
+        setup_reason,
+        phase,
+        regime,
+    )
+    out["ready_since"] = existing.get("ready_since") or iso_now_et()
+    out["detected_at"] = existing.get("detected_at") or existing.get("ready_since") or iso_now_et()
+    return True, out, ""
+
+
 def process_existing_signal(
     existing: Dict[str, Any],
     row: Dict[str, Any],
@@ -2037,6 +2345,11 @@ def process_existing_signal(
             "ema9": round(metrics.ema9, 4),
             "price_above_ema9": metrics.price_above_ema9,
             "ema9_status": metrics.ema9_status,
+            "macd_value": round(metrics.macd_value, 4),
+            "macd_signal": round(metrics.macd_signal, 4),
+            "macd_histogram": round(metrics.macd_histogram, 4),
+            "macd_status": metrics.macd_status,
+            "momentum_status": metrics.momentum_status,
             "actionable": True,
             "actionability": "ACTIVE",
         })
@@ -2050,21 +2363,56 @@ def process_existing_signal(
         if invalid:
             return make_invalidated(existing, row, metrics, reason, category, phase)
 
-        if trigger_fired(existing, metrics) and is_valid_signal_phase(phase):
-            setup_type = safe_str(existing.get("setup_type"), "")
+        ready_ok, reassessed_signal, reassess_reason = trigger_ready_reassessment(
+            existing,
+            row,
+            metrics,
+            quote,
+            regime,
+            phase,
+        )
+
+        if not ready_ok:
+            # If the trigger has already fired while the setup no longer passes quality,
+            # invalidate rather than demote. Otherwise demote to WATCH when the plan is still usable.
+            if trigger_fired(existing, metrics):
+                return make_invalidated(
+                    existing,
+                    row,
+                    metrics,
+                    f"Trigger fired but current Trigger Ready quality failed: {reassess_reason}",
+                    "FAILED_SETUP",
+                    phase,
+                )
+
+            if reassessed_signal:
+                return reassessed_signal
+
+            return make_invalidated(
+                existing,
+                row,
+                metrics,
+                f"Trigger-ready setup no longer valid: {reassess_reason}",
+                "FAILED_SETUP",
+                phase,
+            )
+
+        # Still trigger-ready after live reassessment.
+        if trigger_fired(reassessed_signal, metrics) and is_valid_signal_phase(phase):
+            setup_type = safe_str(reassessed_signal.get("setup_type"), "")
             plan = build_trade_plan(row, metrics, setup_type, quote)
             live = live_signal_score(row, metrics, plan, regime, phase)
-            conf = final_confidence(safe_float(row.get("score"), safe_float(existing.get("scanner_score"), 0)), live)
+            conf = final_confidence(safe_float(row.get("score"), safe_float(reassessed_signal.get("scanner_score"), 0)), live)
 
             active_quality_ok = (
                 plan.get("valid")
                 and conf >= MIN_CONF_ACTIVE
                 and safe_float(plan.get("reward_risk"), 0) >= MIN_RR
-                and not metrics.bearish_momentum_divergence
-                and not metrics.volume_fading_vs_morning
                 and metrics.price_above_ema9
                 and not metrics.ema9_falling
-                and late_day_volume_confirmed(metrics)
+                and macd_ready_confirmation(metrics)[0]
+                and not metrics.volume_fading_vs_morning
+                and (not is_late_day() or late_day_volume_confirmed(metrics))
             )
 
             if active_quality_ok:
@@ -2076,17 +2424,17 @@ def process_existing_signal(
                     setup_type,
                     conf,
                     live,
-                    f"Trigger fired and still holds above VWAP. {safe_str(existing.get('reason'), '')}",
+                    f"Trigger fired and still holds above VWAP. {safe_str(reassessed_signal.get('reason'), '')}",
                     phase,
                     regime,
                 )
                 out["triggered_at"] = now_text
-                out["detected_at"] = existing.get("detected_at") or existing.get("ready_since") or now_text
-                out["ready_since"] = existing.get("ready_since") or now_text
+                out["detected_at"] = reassessed_signal.get("detected_at") or reassessed_signal.get("ready_since") or now_text
+                out["ready_since"] = reassessed_signal.get("ready_since") or now_text
                 return out
 
             return make_invalidated(
-                existing,
+                reassessed_signal,
                 row,
                 metrics,
                 plan.get("rejection_reason") or "Trigger fired but active-signal quality failed.",
@@ -2094,23 +2442,8 @@ def process_existing_signal(
                 phase,
             )
 
-        out = dict(existing)
-        out.update({
-            "last_checked": now_text,
-            "updated_at": now_text,
-            "market_phase": phase,
-            "price": round(metrics.price, 4),
-            "vwap": round(metrics.vwap, 4),
-            "hod": round(metrics.hod, 4),
-            "vwap_dist_pct": round(metrics.vwap_dist_pct, 2),
-            "hod_distance_pct": round(metrics.hod_distance_pct, 2),
-            "ema9": round(metrics.ema9, 4),
-            "price_above_ema9": metrics.price_above_ema9,
-            "ema9_status": metrics.ema9_status,
-            "actionable": False,
-            "actionability": "TRIGGER_READY" if not existing.get("suppression_reason") else "SUPPRESSED",
-        })
-        return out
+        # Not triggered yet; return refreshed Trigger Ready payload.
+        return reassessed_signal
 
     if status == "INVALIDATED":
         age = minutes_since(existing.get("invalidated_at") or existing.get("updated_at"))
