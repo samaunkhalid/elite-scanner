@@ -580,6 +580,8 @@ class IntradayMetrics:
     symbol: str
     has_data: bool = False
     price: float = 0.0
+    session_open: float = 0.0
+    day_change_pct: float = 0.0
     vwap: float = 0.0
     above_vwap: bool = False
     vwap_dist_pct: float = 0.0
@@ -635,6 +637,8 @@ def analyze_bars(symbol: str, bars: List[Dict[str, Any]]) -> IntradayMetrics:
 
     metrics.has_data = True
     metrics.price = safe_float(clean[-1].get("c"), 0)
+    metrics.session_open = safe_float(clean[0].get("o"), 0) or safe_float(clean[0].get("c"), 0)
+    metrics.day_change_pct = pct_change(metrics.price, metrics.session_open) if metrics.session_open > 0 else 0.0
     metrics.hod = max(safe_float(b.get("h"), 0) for b in clean)
     metrics.lod = min(safe_float(b.get("l"), metrics.price) for b in clean if safe_float(b.get("l"), 0) > 0)
     metrics.latest_bar_time = safe_str(clean[-1].get("t"), "")
@@ -834,6 +838,67 @@ def severe_risk_off(regime: Dict[str, Any]) -> bool:
     )
 
 
+
+def market_down_reference(regime: Dict[str, Any]) -> float:
+    """
+    Most relevant broad-market reference for relative-strength checks.
+    Uses the weakest available major index move. Negative value = red market.
+    """
+    refs = [
+        safe_float(regime.get("spy_change"), 0),
+        safe_float(regime.get("qqq_change"), 0),
+        safe_float(regime.get("iwm_change"), 0),
+    ]
+    return min(refs)
+
+
+def relative_strength_long_candidate(
+    row: Dict[str, Any],
+    metrics: IntradayMetrics,
+    regime: Dict[str, Any],
+) -> bool:
+    """
+    Allows long-side WATCH candidates on red/risk-off days without forcing near-HOD.
+    This does NOT make the setup TRIGGER_READY or ACTIVE.
+    Ready/Active still require R/R, confidence, and a valid VWAP/base/HOD trigger.
+
+    Red-day WATCH logic:
+      - ticker is green or clearly outperforming the weakest index
+      - above/reclaiming VWAP
+      - sector is not weak
+      - not high-risk/extreme
+      - liquid enough
+      - not extremely extended
+    """
+    if not metrics.has_data:
+        return False
+
+    if high_risk_extreme(row):
+        return False
+
+    if safe_float(row.get("dollar_vol_M"), 0) < MIN_AVG_DOLLAR_VOL_M:
+        return False
+
+    if sector_weak(row):
+        return False
+
+    atr_pct = safe_float(row.get("atr_pct"), 0)
+
+    if not vwap_condition_pass(metrics, atr_pct):
+        return False
+
+    if metrics.vwap_dist_pct > MAX_VWAP_EXTENSION_PCT:
+        return False
+
+    weakest_index = market_down_reference(regime)
+
+    # Prefer true green names, but allow clear outperformance on a red tape.
+    stock_green = metrics.day_change_pct >= 0.15
+    clear_outperformance = weakest_index < 0 and metrics.day_change_pct >= weakest_index + 2.0
+
+    return stock_green or clear_outperformance
+
+
 def sector_weak(row: Dict[str, Any]) -> bool:
     status = safe_str(row.get("sector_status"), "").upper()
     sector_score = safe_float(row.get("sector_score"), 0)
@@ -848,19 +913,28 @@ def high_risk_extreme(row: Dict[str, Any]) -> bool:
 
 def watch_criteria_pass(row: Dict[str, Any], metrics: IntradayMetrics, regime: Dict[str, Any]) -> Tuple[bool, List[str]]:
     reasons = []
+    rs_long_ok = relative_strength_long_candidate(row, metrics, regime)
 
     if high_risk_extreme(row):
         reasons.append("High risk/extreme category")
     if safe_float(row.get("dollar_vol_M"), 0) < MIN_AVG_DOLLAR_VOL_M:
         reasons.append("Dollar volume below $25M")
-    if severe_risk_off(regime):
+
+    # Red/risk-off markets should not automatically block strong relative-strength WATCH names.
+    # They still block normal longs. Ready/Active remain protected by confidence/R:R/setup checks.
+    if severe_risk_off(regime) and not rs_long_ok:
         reasons.append("Market severe risk-off")
+
     if sector_weak(row):
         reasons.append("Sector weak")
     if not vwap_condition_pass(metrics, safe_float(row.get("atr_pct"), 0)):
         reasons.append("VWAP condition failed")
-    if not hod_condition_pass(metrics, safe_str(row.get("signal_source_bucket"), "")):
+
+    # Near-HOD is NOT mandatory for relative-strength WATCH because it may be in a VWAP pullback stage.
+    # It remains a filter for normal WATCH candidates.
+    if not hod_condition_pass(metrics, safe_str(row.get("signal_source_bucket"), "")) and not rs_long_ok:
         reasons.append("Too far below HOD")
+
     if metrics.vwap_dist_pct > MAX_VWAP_EXTENSION_PCT:
         reasons.append("Too extended above VWAP")
 
@@ -1357,6 +1431,9 @@ def candidate_diagnostic_record(
         "dollar_vol_M": safe_float(row.get("dollar_vol_M"), 0),
         "atr_pct": safe_float(row.get("atr_pct"), 0),
         "price": round(metrics.price, 4) if metrics.has_data else 0,
+        "session_open": round(metrics.session_open, 4) if metrics.has_data else 0,
+        "day_change_pct": round(metrics.day_change_pct, 2) if metrics.has_data else 0,
+        "relative_strength_long": relative_strength_long_candidate(row, metrics, regime) if metrics.has_data else False,
         "vwap": round(metrics.vwap, 4) if metrics.has_data else 0,
         "hod": round(metrics.hod, 4) if metrics.has_data else 0,
         "vwap_dist_pct": round(metrics.vwap_dist_pct, 2) if metrics.has_data else 0,
@@ -1456,6 +1533,8 @@ def signal_base(
         "reward_risk": plan.get("reward_risk"),
         "stop_distance_pct": plan.get("stop_distance_pct"),
         "price": round(metrics.price, 4),
+        "session_open": round(metrics.session_open, 4),
+        "day_change_pct": round(metrics.day_change_pct, 2),
         "vwap": round(metrics.vwap, 4),
         "hod": round(metrics.hod, 4),
         "vwap_dist_pct": round(metrics.vwap_dist_pct, 2),
@@ -1611,6 +1690,8 @@ def suppress_trigger_during_blackout(
         "updated_at": now_text,
         "market_phase": phase,
         "price": round(metrics.price, 4),
+        "session_open": round(metrics.session_open, 4),
+        "day_change_pct": round(metrics.day_change_pct, 2),
         "vwap": round(metrics.vwap, 4),
         "hod": round(metrics.hod, 4),
     })
@@ -1699,6 +1780,8 @@ def reassess_after_blackout(
         "ready_since": now_text,
         "market_phase": phase,
         "price": round(metrics.price, 4),
+        "session_open": round(metrics.session_open, 4),
+        "day_change_pct": round(metrics.day_change_pct, 2),
         "vwap": round(metrics.vwap, 4),
         "hod": round(metrics.hod, 4),
     })
@@ -1874,7 +1957,11 @@ def process_new_or_watch(
                 "BLACKOUT_MONITOR",
                 conf,
                 live,
-                f"Valid monitor candidate, but {phase.lower().replace('_', ' ')} prevents new signals.",
+                (
+                    f"Relative-strength monitor candidate, but {phase.lower().replace('_', ' ')} prevents new signals."
+                    if severe_risk_off(regime) and relative_strength_long_candidate(row, metrics, regime)
+                    else f"Valid monitor candidate, but {phase.lower().replace('_', ' ')} prevents new signals."
+                ),
                 phase,
             )
             out["detected_at"] = iso_now_et()
@@ -1919,7 +2006,11 @@ def process_new_or_watch(
             "MONITORING",
             conf,
             live,
-            "Clean candidate. Waiting for VWAP pullback or HOD breakout structure.",
+            (
+                "Relative-strength long candidate. Waiting for VWAP pullback, base squeeze, or HOD breakout structure."
+                if severe_risk_off(regime) and relative_strength_long_candidate(row, metrics, regime)
+                else "Clean candidate. Waiting for VWAP pullback, base squeeze, or HOD breakout structure."
+            ),
             phase,
         )
         out["detected_at"] = iso_now_et()
