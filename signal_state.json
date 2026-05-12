@@ -1,10 +1,10 @@
 {
-  "generated_at_et": "2026-05-12T07:33:07-04:00",
+  "generated_at_et": "2026-05-12T08:31:19-04:00",
   "meta": {
     "market_phase": "PREMARKET",
     "alpaca_feed": "iex",
-    "current_focus_count": 8,
-    "monitor_count": 8,
+    "current_focus_count": 10,
+    "monitor_count": 10,
     "counts": {
       "active": 0,
       "trigger_ready": 0,

@@ -1,18 +1,8 @@
 {
   "risk_level": "HIGH",
-  "headline": "Macro Risk: HIGH \u2014 Consumer Price Index 2026-05-12 08:30 ET",
+  "headline": "Macro Risk: HIGH \u2014 Producer Price Index (PPI) 2026-05-13 08:30 ET",
   "action": "Reduce size or wait until after the release/initial volatility clears.",
   "events": [
-    {
-      "name": "Consumer Price Index",
-      "date": "2026-05-12",
-      "time_et": "08:30",
-      "datetime_et": "2026-05-12T08:30:00-04:00",
-      "impact": "HIGH",
-      "source": "New York Fed",
-      "source_url": "https://www.newyorkfed.org/research/calendars/nationalecon_cal",
-      "minutes_until": 107
-    },
     {
       "name": "Producer Price Index (PPI)",
       "date": "2026-05-13",
@@ -21,7 +11,7 @@
       "impact": "HIGH",
       "source": "New York Fed",
       "source_url": "https://www.newyorkfed.org/research/calendars/nationalecon_cal",
-      "minutes_until": 1547
+      "minutes_until": 1438
     },
     {
       "name": "Initial Claims",
@@ -31,7 +21,7 @@
       "impact": "MEDIUM",
       "source": "New York Fed",
       "source_url": "https://www.newyorkfed.org/research/calendars/nationalecon_cal",
-      "minutes_until": 2987
+      "minutes_until": 2878
     },
     {
       "name": "Advance Retail Sales",
@@ -41,7 +31,7 @@
       "impact": "HIGH",
       "source": "New York Fed",
       "source_url": "https://www.newyorkfed.org/research/calendars/nationalecon_cal",
-      "minutes_until": 2987
+      "minutes_until": 2878
     },
     {
       "name": "Imports and Exports",
@@ -51,7 +41,7 @@
       "impact": "MEDIUM",
       "source": "New York Fed",
       "source_url": "https://www.newyorkfed.org/research/calendars/nationalecon_cal",
-      "minutes_until": 2987
+      "minutes_until": 2878
     },
     {
       "name": "Business Inventories",
@@ -61,7 +51,7 @@
       "impact": "MEDIUM",
       "source": "New York Fed",
       "source_url": "https://www.newyorkfed.org/research/calendars/nationalecon_cal",
-      "minutes_until": 3077
+      "minutes_until": 2968
     },
     {
       "name": "Empire State Manufacturing Survey",
@@ -71,7 +61,7 @@
       "impact": "MEDIUM",
       "source": "New York Fed",
       "source_url": "https://www.newyorkfed.org/research/calendars/nationalecon_cal",
-      "minutes_until": 4427
+      "minutes_until": 4318
     },
     {
       "name": "Industrial Production and Capacity Utilization",
@@ -81,13 +71,23 @@
       "impact": "MEDIUM",
       "source": "New York Fed",
       "source_url": "https://www.newyorkfed.org/research/calendars/nationalecon_cal",
-      "minutes_until": 4472
+      "minutes_until": 4363
+    },
+    {
+      "name": "New Residential Construction",
+      "date": "2026-05-19",
+      "time_et": "08:30",
+      "datetime_et": "2026-05-19T08:30:00-04:00",
+      "impact": "MEDIUM",
+      "source": "New York Fed",
+      "source_url": "https://www.newyorkfed.org/research/calendars/nationalecon_cal",
+      "minutes_until": 10078
     }
   ],
   "source": "New York Fed Economic Indicators Calendar",
   "source_url": "https://www.newyorkfed.org/research/calendars/nationalecon_cal",
-  "generated_at_et": "2026-05-12 06:42 ET",
-  "generated_at": "2026-05-12 06:42 ET",
+  "generated_at_et": "2026-05-12 08:31 ET",
+  "generated_at": "2026-05-12 08:31 ET",
   "lookahead_days": 7,
   "fetch_error": ""
 }
