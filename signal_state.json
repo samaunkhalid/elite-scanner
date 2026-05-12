@@ -1,10 +1,11 @@
 {
-  "generated_at_et": "2026-05-12T12:06:23-04:00",
+  "generated_at_et": "2026-05-12T12:29:00-04:00",
   "meta": {
     "market_phase": "LUNCH_BLACKOUT",
     "alpaca_feed": "iex",
     "current_focus_count": 18,
     "monitor_count": 18,
+    "rejected_count": 18,
     "counts": {
       "active": 0,
       "trigger_ready": 0,
