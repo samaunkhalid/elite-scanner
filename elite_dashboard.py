@@ -1077,18 +1077,33 @@ def build_macro_html(macro):
     high_events = [e for e in events if safe_str(e.get("impact"), "").upper() == "HIGH"]
     medium_events = [e for e in events if safe_str(e.get("impact"), "").upper() == "MEDIUM"]
 
+    def is_headline_event(event):
+        """
+        Avoid repeating the same macro event twice:
+          - once in the banner headline
+          - again as the first event chip
+        """
+        event_name = macro_display_name(event.get("name") or event.get("event") or "")
+        if not event_name:
+            return False
+
+        return event_name.lower() in headline.lower()
+
     # Compact display:
     # Row 1 = HIGH events, Row 2 = MEDIUM events.
-    # Limit visible chips so the trade candidates stay near the top.
+    # Do not repeat the event already named in the banner headline.
     # The full 7-day list remains stored in macro_calendar.json.
     high_limit = 3
     medium_limit = 3
 
-    high_rows = "".join(render_event_chip(e) for e in high_events[:high_limit])
-    high_rows += render_more_chip(len(high_events) - high_limit, "HIGH")
+    high_events_visible = [e for e in high_events if not is_headline_event(e)]
+    medium_events_visible = [e for e in medium_events if not is_headline_event(e)]
 
-    medium_rows = "".join(render_event_chip(e) for e in medium_events[:medium_limit])
-    medium_rows += render_more_chip(len(medium_events) - medium_limit, "MEDIUM")
+    high_rows = "".join(render_event_chip(e) for e in high_events_visible[:high_limit])
+    high_rows += render_more_chip(len(high_events_visible) - high_limit, "HIGH")
+
+    medium_rows = "".join(render_event_chip(e) for e in medium_events_visible[:medium_limit])
+    medium_rows += render_more_chip(len(medium_events_visible) - medium_limit, "MEDIUM")
 
     event_rows = ""
 
@@ -2402,8 +2417,8 @@ body {
 }
 
 .signal-diagnostics {
-    margin-top: 10px;
-    padding: 10px;
+    margin-top: 8px;
+    padding: 8px;
     border-radius: 12px;
     border: 1px solid rgba(56, 189, 248, 0.16);
     background: rgba(2, 6, 23, 0.26);
@@ -2414,7 +2429,7 @@ body {
     justify-content: space-between;
     gap: 12px;
     align-items: flex-start;
-    margin-bottom: 8px;
+    margin-bottom: 6px;
 }
 
 .signal-diagnostics-top strong {
@@ -2444,20 +2459,20 @@ body {
 .diagnostic-blockers {
     display: flex;
     flex-wrap: wrap;
-    gap: 6px;
-    margin-bottom: 8px;
+    gap: 5px;
+    margin-bottom: 6px;
 }
 
 .diagnostic-pill {
     display: inline-flex;
     align-items: center;
     gap: 5px;
-    padding: 4px 8px;
+    padding: 3px 7px;
     border-radius: 999px;
     border: 1px solid rgba(148, 163, 184, 0.14);
     background: rgba(15, 23, 42, 0.62);
     color: #cbd5e1;
-    font-size: 10px;
+    font-size: 9.5px;
 }
 
 .diagnostic-pill b {
@@ -2466,44 +2481,56 @@ body {
 
 .diagnostic-preview {
     display: grid;
-    gap: 6px;
+    gap: 4px;
 }
 
 .diagnostic-row {
-    display: flex;
-    justify-content: space-between;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
     gap: 10px;
-    padding: 8px 9px;
-    border-radius: 10px;
+    padding: 5px 8px;
+    border-radius: 8px;
     background: rgba(15, 23, 42, 0.48);
     border: 1px solid rgba(148, 163, 184, 0.08);
 }
 
+.diagnostic-row > div:first-child {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+}
+
 .diagnostic-row strong {
-    display: block;
+    display: inline-block;
     color: #38bdf8;
     font-size: 12px;
     font-weight: 850;
+    min-width: 44px;
 }
 
 .diagnostic-row span {
     color: #94a3b8;
-    font-size: 10.5px;
-    line-height: 1.35;
+    font-size: 10px;
+    line-height: 1.2;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 .diagnostic-metrics {
     display: flex;
-    gap: 6px;
-    flex-wrap: wrap;
+    gap: 4px;
+    flex-wrap: nowrap;
     justify-content: flex-end;
-    align-content: flex-start;
-    min-width: 210px;
+    align-content: center;
+    min-width: 190px;
 }
 
 .diagnostic-metrics span {
-    border-radius: 8px;
-    padding: 4px 6px;
+    border-radius: 7px;
+    padding: 3px 5px;
     background: rgba(2, 6, 23, 0.35);
     border: 1px solid rgba(148, 163, 184, 0.08);
     white-space: nowrap;
