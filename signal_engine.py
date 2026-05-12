@@ -599,6 +599,13 @@ class IntradayMetrics:
     opening_range_low: float = 0.0
     vwap_touch_count: int = 0
     consolidating_near_high: bool = False
+    base_compression: bool = False
+    base_range_pct: float = 0.0
+    base_high: float = 0.0
+    base_low: float = 0.0
+    base_breakout_level: float = 0.0
+    base_higher_lows: bool = False
+    base_volume_contracting: bool = False
 
 
 def typical_price(bar: Dict[str, Any]) -> float:
@@ -704,6 +711,64 @@ def analyze_bars(symbol: str, bars: List[Dict[str, Any]]) -> IntradayMetrics:
             metrics.consolidating_near_high = (
                 pct_change(min_recent_low, metrics.hod) >= -1.5
                 and recent_range_pct <= 2.0
+            )
+
+    # Base / flag / squeeze compression:
+    # Last 8-10 candles stay tight near HOD, with a defined breakout level.
+    # This is intentionally conservative so it does not chase extended names.
+    base_window = clean[-10:] if len(clean) >= 10 else clean[-8:] if len(clean) >= 8 else []
+    prior_window = clean[-20:-10] if len(clean) >= 20 else clean[:-10]
+
+    if base_window and len(base_window) >= 8 and metrics.hod > 0:
+        base_highs = [safe_float(b.get("h"), 0) for b in base_window if safe_float(b.get("h"), 0) > 0]
+        base_lows = [safe_float(b.get("l"), 0) for b in base_window if safe_float(b.get("l"), 0) > 0]
+        base_vols = [safe_float(b.get("v"), 0) for b in base_window]
+        prior_vols = [safe_float(b.get("v"), 0) for b in prior_window]
+
+        if base_highs and base_lows:
+            metrics.base_high = max(base_highs)
+            metrics.base_low = min(base_lows)
+            metrics.base_breakout_level = metrics.base_high * 1.0002
+            metrics.base_range_pct = pct_change(metrics.base_high, metrics.base_low)
+
+            # Higher-low / flat-base check:
+            # second-half lows should not undercut first-half lows materially.
+            half = len(base_window) // 2
+            first_half_lows = [
+                safe_float(b.get("l"), 0)
+                for b in base_window[:half]
+                if safe_float(b.get("l"), 0) > 0
+            ]
+            second_half_lows = [
+                safe_float(b.get("l"), 0)
+                for b in base_window[half:]
+                if safe_float(b.get("l"), 0) > 0
+            ]
+
+            if first_half_lows and second_half_lows:
+                metrics.base_higher_lows = min(second_half_lows) >= min(first_half_lows) * 0.997
+
+            base_avg_vol = sum(base_vols) / len(base_vols) if base_vols else 0
+            prior_avg_vol = sum(prior_vols) / len(prior_vols) if prior_vols else 0
+
+            # Volume contraction is preferred but not mandatory; stable volume is acceptable.
+            metrics.base_volume_contracting = (
+                prior_avg_vol <= 0
+                or base_avg_vol <= 0.95 * prior_avg_vol
+                or metrics.volume_stable_or_increasing
+            )
+
+            near_hod_base = pct_change(metrics.base_low, metrics.hod) >= -2.0
+            tight_enough = metrics.base_range_pct <= 2.0
+            price_near_breakout = pct_change(metrics.price, metrics.base_high) >= -0.85
+
+            metrics.base_compression = (
+                metrics.above_vwap
+                and near_hod_base
+                and tight_enough
+                and price_near_breakout
+                and metrics.base_higher_lows
+                and metrics.base_volume_contracting
             )
 
     return metrics
@@ -858,12 +923,54 @@ def setup_hod_breakout_ready(metrics: IntradayMetrics, rr: float, confidence: fl
     return True, "HOD breakout setup; waiting for break above HOD"
 
 
+def setup_base_squeeze_ready(metrics: IntradayMetrics, rr: float, confidence: float) -> Tuple[bool, str]:
+    """
+    Base / bull-flag / squeeze ready setup.
+
+    This is not a chase setup. It requires a tight short-term base near HOD,
+    price above VWAP, stable/contracting volume during the base, and acceptable
+    R/R before a break above the base high.
+    """
+    if not metrics.has_data:
+        return False, "No intraday bars"
+
+    if not metrics.above_vwap:
+        return False, "Below VWAP"
+
+    if metrics.vwap_dist_pct > MAX_VWAP_EXTENSION_PCT:
+        return False, "Too extended above VWAP"
+
+    if metrics.hod_distance_pct < -1.75:
+        return False, "Base too far from HOD"
+
+    if not metrics.base_compression:
+        details = []
+        if metrics.base_range_pct > 2.0:
+            details.append(f"base range {round(metrics.base_range_pct, 2)}% > 2.0%")
+        if not metrics.base_higher_lows:
+            details.append("no higher-low/flat-base structure")
+        if not metrics.base_volume_contracting:
+            details.append("base volume not contracting/stable")
+        if metrics.base_high > 0 and pct_change(metrics.price, metrics.base_high) < -0.85:
+            details.append("price not close to base breakout")
+        return False, "No clean base/flag compression" + (": " + "; ".join(details) if details else "")
+
+    if rr < MIN_RR:
+        return False, "R/R below 1.5"
+
+    if confidence < MIN_CONF_READY:
+        return False, "Confidence below 75"
+
+    return True, "Base/flag squeeze setup; waiting for break above compression high"
+
+
 def choose_setup(metrics: IntradayMetrics, plan: Dict[str, Any], confidence: float, phase: str) -> Tuple[str, str]:
     """
     Returns (setup_type, reason) for TRIGGER_READY candidate.
     Priority:
       1. VWAP Pullback
-      2. HOD Breakout
+      2. Base / Flag Squeeze
+      3. HOD Breakout
     """
     rr = safe_float(plan.get("reward_risk"), 0)
 
@@ -871,22 +978,27 @@ def choose_setup(metrics: IntradayMetrics, plan: Dict[str, Any], confidence: flo
     if vwap_ready:
         return "VWAP_PULLBACK_CONTINUATION", vwap_reason
 
+    base_ready, base_reason = setup_base_squeeze_ready(metrics, rr, confidence)
+    if base_ready:
+        return "BASE_SQUEEZE_BREAKOUT", base_reason
+
     # HOD breakout is not allowed during lunch. Since lunch is a blackout phase,
     # this function usually only runs in valid signal phases.
     hod_ready, hod_reason = setup_hod_breakout_ready(metrics, rr, confidence)
     if hod_ready:
         return "HOD_BREAKOUT_CONTINUATION", hod_reason
 
-    return "", f"No trigger-ready setup. VWAP: {vwap_reason}; HOD: {hod_reason}"
-
+    return "", f"No trigger-ready setup. VWAP: {vwap_reason}; Base: {base_reason}; HOD: {hod_reason}"
 
 def trigger_level_for_setup(setup_type: str, metrics: IntradayMetrics) -> float:
     if setup_type == "VWAP_PULLBACK_CONTINUATION":
         return metrics.pullback_high * 1.0002
+    if setup_type == "BASE_SQUEEZE_BREAKOUT":
+        return (metrics.base_high or max(metrics.pullback_high, metrics.hod)) * 1.0002
     if setup_type == "HOD_BREAKOUT_CONTINUATION":
         return metrics.hod * 1.0002
     # Fresh post-blackout trigger fallback: recent local high.
-    return max(metrics.pullback_high, metrics.hod) * 1.0002
+    return max(metrics.pullback_high, metrics.hod, metrics.base_high) * 1.0002
 
 
 def support_level_for_setup(setup_type: str, metrics: IntradayMetrics, entry: float) -> float:
@@ -897,6 +1009,9 @@ def support_level_for_setup(setup_type: str, metrics: IntradayMetrics, entry: fl
 
     if metrics.pullback_low > 0 and abs(pct_change(metrics.pullback_low, entry)) <= 2.5:
         candidates.append(metrics.pullback_low)
+
+    if setup_type == "BASE_SQUEEZE_BREAKOUT" and metrics.base_low > 0 and abs(pct_change(metrics.base_low, entry)) <= 3.0:
+        candidates.append(metrics.base_low)
 
     if metrics.opening_range_low > 0 and abs(pct_change(metrics.opening_range_low, entry)) <= 3.0:
         candidates.append(metrics.opening_range_low)
@@ -1148,6 +1263,8 @@ def live_signal_score(
     if metrics.hod_distance_pct < -4.0:
         penalty += 3
 
+    base_bonus = 5 if metrics.base_compression else 0
+
     score = (
         vwap_score
         + hod_score
@@ -1156,6 +1273,7 @@ def live_signal_score(
         + sector_score
         + market_score
         + time_score
+        + base_bonus
         - min(10, penalty)
     )
 
@@ -1189,10 +1307,14 @@ def ready_blockers(metrics: IntradayMetrics, plan: Dict[str, Any], confidence: f
         blockers.append(f"R/R {round(rr, 2)} < minimum {MIN_RR:.1f}")
 
     vwap_ready, vwap_reason = setup_vwap_pullback_ready(metrics, rr, confidence)
+    base_ready, base_reason = setup_base_squeeze_ready(metrics, rr, confidence)
     hod_ready, hod_reason = setup_hod_breakout_ready(metrics, rr, confidence)
 
     if not vwap_ready:
         blockers.append(f"VWAP pullback not ready: {vwap_reason}")
+
+    if not base_ready:
+        blockers.append(f"Base/flag squeeze not ready: {base_reason}")
 
     if not hod_ready:
         blockers.append(f"HOD breakout not ready: {hod_reason}")
@@ -1255,7 +1377,12 @@ def candidate_diagnostic_record(
 
     watch_ok, watch_reasons = watch_criteria_pass(row, metrics, regime)
 
-    provisional_setup = "VWAP_PULLBACK_CONTINUATION" if metrics.pullback_holding_vwap else "HOD_BREAKOUT_CONTINUATION"
+    if metrics.pullback_holding_vwap:
+        provisional_setup = "VWAP_PULLBACK_CONTINUATION"
+    elif metrics.base_compression:
+        provisional_setup = "BASE_SQUEEZE_BREAKOUT"
+    else:
+        provisional_setup = "HOD_BREAKOUT_CONTINUATION"
     plan = build_trade_plan(row, metrics, provisional_setup, quote)
     live = live_signal_score(row, metrics, plan, regime, phase)
     conf = final_confidence(scanner_score, live)
@@ -1334,6 +1461,14 @@ def signal_base(
         "vwap_dist_pct": round(metrics.vwap_dist_pct, 2),
         "hod_distance_pct": round(metrics.hod_distance_pct, 2),
         "above_vwap": metrics.above_vwap,
+        "base_compression": metrics.base_compression,
+        "base_range_pct": round(metrics.base_range_pct, 2),
+        "base_high": round(metrics.base_high, 4),
+        "base_low": round(metrics.base_low, 4),
+        "base_compression": metrics.base_compression,
+        "base_range_pct": round(metrics.base_range_pct, 2),
+        "base_high": round(metrics.base_high, 4),
+        "base_low": round(metrics.base_low, 4),
         "sector_status": safe_str(row.get("sector_status"), ""),
         "market_phase": phase,
         "reason": reason,
@@ -1699,7 +1834,12 @@ def process_new_or_watch(
         return {}
 
     # Use a provisional setup type to compute a conservative plan.
-    provisional_setup = "VWAP_PULLBACK_CONTINUATION" if metrics.pullback_holding_vwap else "HOD_BREAKOUT_CONTINUATION"
+    if metrics.pullback_holding_vwap:
+        provisional_setup = "VWAP_PULLBACK_CONTINUATION"
+    elif metrics.base_compression:
+        provisional_setup = "BASE_SQUEEZE_BREAKOUT"
+    else:
+        provisional_setup = "HOD_BREAKOUT_CONTINUATION"
     plan = build_trade_plan(row, metrics, provisional_setup, quote)
     live = live_signal_score(row, metrics, plan, regime, phase)
     conf = final_confidence(safe_float(row.get("score"), 0), live)
