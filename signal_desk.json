@@ -1,12 +1,12 @@
 {
-  "generated_at_et": "2026-05-12T02:49:33-04:00",
-  "market_phase": "CLOSED",
+  "generated_at_et": "2026-05-12T04:05:19-04:00",
+  "market_phase": "PREMARKET",
   "alpaca_feed": "iex",
   "universe": {
     "potential_limit": 12,
     "active_limit": 8,
-    "current_focus_count": 18,
-    "monitor_count": 18
+    "current_focus_count": 8,
+    "monitor_count": 8
   },
   "counts": {
     "active": 0,
