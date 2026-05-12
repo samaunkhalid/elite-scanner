@@ -1167,6 +1167,135 @@ def final_confidence(scanner_score: float, live_score: float) -> float:
 
 
 # ==============================================================
+# DIAGNOSTICS
+# ==============================================================
+
+def ready_blockers(metrics: IntradayMetrics, plan: Dict[str, Any], confidence: float) -> List[str]:
+    """
+    Explain why a WATCH candidate is not TRIGGER_READY yet.
+    This is diagnostic only; it does not loosen the strategy rules.
+    """
+    blockers: List[str] = []
+
+    rr = safe_float(plan.get("reward_risk"), 0)
+
+    if not plan.get("valid"):
+        blockers.append(f"Plan invalid: {safe_str(plan.get('rejection_reason'), 'Unknown plan issue')}")
+
+    if confidence < MIN_CONF_READY:
+        blockers.append(f"Confidence {round(confidence, 1)} < ready minimum {MIN_CONF_READY:.0f}")
+
+    if rr < MIN_RR:
+        blockers.append(f"R/R {round(rr, 2)} < minimum {MIN_RR:.1f}")
+
+    vwap_ready, vwap_reason = setup_vwap_pullback_ready(metrics, rr, confidence)
+    hod_ready, hod_reason = setup_hod_breakout_ready(metrics, rr, confidence)
+
+    if not vwap_ready:
+        blockers.append(f"VWAP pullback not ready: {vwap_reason}")
+
+    if not hod_ready:
+        blockers.append(f"HOD breakout not ready: {hod_reason}")
+
+    # Keep this list readable in dashboard/json.
+    deduped: List[str] = []
+    for item in blockers:
+        if item and item not in deduped:
+            deduped.append(item)
+
+    return deduped[:8]
+
+
+def candidate_diagnostic_record(
+    row: Dict[str, Any],
+    metrics: IntradayMetrics,
+    quote: Dict[str, Any],
+    regime: Dict[str, Any],
+    phase: str,
+) -> Dict[str, Any]:
+    """
+    Build a transparent diagnostic record for candidates that do not become
+    WATCH / TRIGGER_READY / ACTIVE_SIGNAL.
+
+    This is for debugging signal quality only. It does not create signals.
+    """
+    symbol = normalize_symbol(row.get("symbol"))
+    scanner_score = safe_float(row.get("score"), 0)
+
+    base: Dict[str, Any] = {
+        "symbol": symbol,
+        "diagnostic_status": "REJECTED",
+        "scanner_score": scanner_score,
+        "source_bucket": safe_str(row.get("signal_source_bucket"), ""),
+        "signal_rank": safe_int(row.get("signal_rank"), 0),
+        "market_phase": phase,
+        "sector_status": safe_str(row.get("sector_status"), ""),
+        "risk_category": safe_str(row.get("risk_category"), "NORMAL"),
+        "setup_bucket": safe_str(row.get("setup_bucket"), ""),
+        "dollar_vol_M": safe_float(row.get("dollar_vol_M"), 0),
+        "atr_pct": safe_float(row.get("atr_pct"), 0),
+        "price": round(metrics.price, 4) if metrics.has_data else 0,
+        "vwap": round(metrics.vwap, 4) if metrics.has_data else 0,
+        "hod": round(metrics.hod, 4) if metrics.has_data else 0,
+        "vwap_dist_pct": round(metrics.vwap_dist_pct, 2) if metrics.has_data else 0,
+        "hod_distance_pct": round(metrics.hod_distance_pct, 2) if metrics.has_data else 0,
+        "above_vwap": metrics.above_vwap if metrics.has_data else False,
+        "live_signal_score": 0.0,
+        "confidence": 0.0,
+        "reward_risk": 0.0,
+        "plan_valid": False,
+        "rejected_reasons": [],
+        "not_ready_reasons": [],
+        "last_checked": iso_now_et(),
+    }
+
+    if not metrics.has_data:
+        base["rejected_reasons"] = ["No intraday bars from Alpaca for this session/feed"]
+        return base
+
+    watch_ok, watch_reasons = watch_criteria_pass(row, metrics, regime)
+
+    provisional_setup = "VWAP_PULLBACK_CONTINUATION" if metrics.pullback_holding_vwap else "HOD_BREAKOUT_CONTINUATION"
+    plan = build_trade_plan(row, metrics, provisional_setup, quote)
+    live = live_signal_score(row, metrics, plan, regime, phase)
+    conf = final_confidence(scanner_score, live)
+    blockers = ready_blockers(metrics, plan, conf)
+
+    base.update({
+        "live_signal_score": round(live, 1),
+        "confidence": round(conf, 1),
+        "reward_risk": safe_float(plan.get("reward_risk"), 0),
+        "plan_valid": bool(plan.get("valid")),
+        "entry_trigger": plan.get("entry_trigger"),
+        "stop_loss": plan.get("stop_loss"),
+        "target_1": plan.get("target_1"),
+        "target_2": plan.get("target_2"),
+        "stop_distance_pct": plan.get("stop_distance_pct"),
+        "not_ready_reasons": blockers,
+    })
+
+    rejected: List[str] = []
+
+    if not watch_ok:
+        rejected.extend(watch_reasons)
+
+    if conf < MIN_CONF_WATCH:
+        rejected.append(f"Confidence {round(conf, 1)} < WATCH minimum {MIN_CONF_WATCH:.0f}")
+
+    if not is_market_open_phase(phase) and phase != "PREMARKET":
+        rejected.append(f"Market phase {phase} does not allow new monitor signals")
+
+    if rejected:
+        base["diagnostic_status"] = "REJECTED"
+        base["rejected_reasons"] = rejected[:10]
+    else:
+        base["diagnostic_status"] = "WATCH_NOT_READY"
+        base["rejected_reasons"] = []
+
+    return base
+
+
+# ==============================================================
 # SIGNAL STATE LOGIC
 # ==============================================================
 
@@ -1193,10 +1322,6 @@ def signal_base(
         "scanner_score": safe_float(row.get("score"), 0),
         "source_bucket": safe_str(row.get("signal_source_bucket"), ""),
         "signal_rank": safe_int(row.get("signal_rank"), 0),
-        "atr_pct": safe_float(row.get("atr_pct"), 0),
-        "dollar_vol_M": safe_float(row.get("dollar_vol_M"), 0),
-        "risk_category": safe_str(row.get("risk_category"), "NORMAL"),
-        "setup_bucket": safe_str(row.get("setup_bucket"), ""),
         "entry_trigger": plan.get("entry_trigger"),
         "stop_loss": plan.get("stop_loss"),
         "target_1": plan.get("target_1"),
@@ -1593,6 +1718,7 @@ def process_new_or_watch(
                 phase,
             )
             out["detected_at"] = iso_now_et()
+            out["not_ready_reasons"] = ready_blockers(metrics, plan, conf)
             return out
         return {}
 
@@ -1612,6 +1738,7 @@ def process_new_or_watch(
                 phase,
             )
             out["detected_at"] = iso_now_et()
+            out["not_ready_reasons"] = ready_blockers(metrics, plan, conf)
             return out
         return {}
 
@@ -1656,6 +1783,7 @@ def process_new_or_watch(
             phase,
         )
         out["detected_at"] = iso_now_et()
+        out["not_ready_reasons"] = ready_blockers(metrics, plan, conf)
         return out
 
     return {}
@@ -1685,8 +1813,8 @@ def build_row_lookup(focus: Dict[str, Dict[str, Any]], prior_state: Dict[str, Di
             "score": safe_float(signal.get("scanner_score"), 0),
             "sector_status": safe_str(signal.get("sector_status"), "UNKNOWN"),
             "signal_source_bucket": "PROTECTED",
-            "risk_category": safe_str(signal.get("risk_category"), "NORMAL"),
-            "dollar_vol_M": safe_float(signal.get("dollar_vol_M"), MIN_AVG_DOLLAR_VOL_M),
+            "risk_category": "NORMAL",
+            "dollar_vol_M": MIN_AVG_DOLLAR_VOL_M,
             "atr_pct": safe_float(signal.get("atr_pct"), 3.0),
             "company_name": safe_str(signal.get("company_name"), sym),
         }
@@ -1794,6 +1922,7 @@ def run_signal_engine() -> None:
         log("  ⚠ No Alpaca credentials. signal_desk.json will be empty or historical only.")
 
     new_state: Dict[str, Dict[str, Any]] = {}
+    rejected_candidates: List[Dict[str, Any]] = []
 
     for sym in monitor_symbols:
         row = row_lookup.get(sym, {"symbol": sym})
@@ -1830,6 +1959,13 @@ def run_signal_engine() -> None:
         processed = process_new_or_watch(row, metrics, quote, regime, phase)
         if processed:
             new_state[sym] = processed
+        elif in_current_top20:
+            diagnostic = candidate_diagnostic_record(row, metrics, quote, regime, phase)
+            if diagnostic:
+                rejected_candidates.append(diagnostic)
+                if DEBUG:
+                    reasons = diagnostic.get("rejected_reasons") or diagnostic.get("not_ready_reasons") or []
+                    debug(f"  {sym}: DIAGNOSTIC {diagnostic.get('diagnostic_status')}: {reasons}")
 
     signals = build_signal_outputs(new_state)
     counts = summarize_signals(signals)
@@ -1846,6 +1982,14 @@ def run_signal_engine() -> None:
         },
         "counts": counts,
         "signals": signals,
+        "rejected_candidates": sorted(
+            rejected_candidates,
+            key=lambda x: (
+                safe_int(x.get("signal_rank"), 999),
+                -safe_float(x.get("confidence"), 0),
+                safe_str(x.get("symbol"), ""),
+            ),
+        ),
     }
 
     write_json(SIGNAL_DESK_FILE, signal_desk_payload)
@@ -1857,6 +2001,7 @@ def run_signal_engine() -> None:
             "alpaca_feed": DATA_FEED,
             "current_focus_count": len(focus),
             "monitor_count": len(monitor_symbols),
+            "rejected_count": len(rejected_candidates),
             "counts": counts,
         },
     )
@@ -1865,6 +2010,12 @@ def run_signal_engine() -> None:
     log(f"  {SIGNAL_DESK_FILE}")
     log(f"  {SIGNAL_STATE_FILE}")
     log(f"Counts: {counts}")
+    log(f"Rejected/diagnostic candidates: {len(rejected_candidates)}")
+
+    if rejected_candidates and DEBUG:
+        for item in rejected_candidates[:20]:
+            reasons = item.get("rejected_reasons") or item.get("not_ready_reasons") or []
+            log(f"  {item.get('symbol')}: {item.get('diagnostic_status')} — {reasons}")
 
     if not signals:
         log("No signal at this moment. Scanner is monitoring top candidates.")
