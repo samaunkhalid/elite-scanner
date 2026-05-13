@@ -37,7 +37,7 @@ import math
 import os
 import re
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, time as dtime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
@@ -86,7 +86,9 @@ MIN_RR = 1.5
 MIN_CONF_WATCH = 60.0
 MIN_CONF_READY = 75.0
 MIN_CONF_READY_LATE_DAY = 80.0
-MIN_CONF_ACTIVE = 85.0
+MIN_CONF_ACTIVE = 80.0
+MAX_QUOTE_SPREAD_FOR_PRICE_PCT = 1.00
+
 
 # Late-day / quality filters.
 LATE_DAY_READY_START = dtime(14, 30)
@@ -604,6 +606,49 @@ class AlpacaMarketData:
 
         return output
 
+    def fetch_latest_trades(self, symbols: List[str]) -> Dict[str, Dict[str, Any]]:
+        """
+        Fetch latest Alpaca trade for each symbol.
+
+        This is used only as a price recency fallback. VWAP/HOD/structure still
+        come from the intraday bars.
+        """
+        if not self.available:
+            return {}
+
+        symbols = [normalize_symbol(s) for s in symbols if normalize_symbol(s)]
+        symbols = list(dict.fromkeys(symbols))
+
+        if not symbols:
+            return {}
+
+        url = f"{ALPACA_BASE_URL}/stocks/trades/latest"
+        output: Dict[str, Dict[str, Any]] = {}
+
+        for batch in self._chunks(symbols, 50):
+            params = {
+                "symbols": ",".join(batch),
+                "feed": self.feed,
+            }
+
+            try:
+                r = requests.get(url, headers=self.headers, params=params, timeout=20)
+
+                if r.status_code != 200:
+                    log(f"  ⚠ Alpaca trades error {r.status_code}: {r.text[:300]}")
+                    continue
+
+                data = r.json()
+                trades = data.get("trades", {}) or {}
+
+                for sym, trade in trades.items():
+                    output[sym] = trade or {}
+
+            except Exception as e:
+                log(f"  ⚠ Alpaca trades request failed: {e}")
+
+        return output
+
 
 # ==============================================================
 # BAR ANALYSIS
@@ -624,6 +669,15 @@ class IntradayMetrics:
     hod_distance_pct: float = 0.0
     day_volume: float = 0.0
     latest_bar_time: str = ""
+    price_source: str = "Alpaca bar close"
+    price_updated_at: str = ""
+    bid: float = 0.0
+    ask: float = 0.0
+    quote_mid: float = 0.0
+    quote_time: str = ""
+    trade_price: float = 0.0
+    trade_time: str = ""
+    execution_bars: List[Dict[str, Any]] = field(default_factory=list)
 
     avg_volume_5: float = 0.0
     avg_volume_prev_5: float = 0.0
@@ -780,12 +834,15 @@ def analyze_execution_bars(symbol: str, bars: List[Dict[str, Any]]) -> IntradayM
         return metrics
 
     metrics.has_data = True
+    metrics.execution_bars = clean[-60:]
     metrics.price = safe_float(clean[-1].get("c"), 0)
+    metrics.price_source = f"Alpaca {DATA_FEED.upper()} 1Min bar close"
     metrics.session_open = safe_float(clean[0].get("o"), safe_float(clean[0].get("c"), 0))
     metrics.day_change_pct = pct_change(metrics.price, metrics.session_open) if metrics.session_open > 0 else 0
     metrics.hod = max(safe_float(b.get("h"), 0) for b in clean)
     metrics.lod = min(safe_float(b.get("l"), metrics.price) for b in clean if safe_float(b.get("l"), 0) > 0)
     metrics.latest_bar_time = safe_str(clean[-1].get("t"), "")
+    metrics.price_updated_at = metrics.latest_bar_time
 
     pv = 0.0
     vol = 0.0
@@ -1189,6 +1246,150 @@ def quote_spread_dollars(quote: Dict[str, Any]) -> Optional[float]:
         return ask - bid
 
     return None
+
+
+def quote_midpoint(quote: Dict[str, Any]) -> Tuple[float, float, float, str]:
+    """
+    Return bid, ask, midpoint, and quote timestamp from Alpaca latest quote.
+    """
+    if not quote:
+        return 0.0, 0.0, 0.0, ""
+
+    bid = safe_float(quote.get("bp"), 0)
+    ask = safe_float(quote.get("ap"), 0)
+    ts = safe_str(quote.get("t"), "")
+
+    if bid > 0 and ask >= bid:
+        return bid, ask, (bid + ask) / 2.0, ts
+
+    return bid, ask, 0.0, ts
+
+
+def trade_price_time(trade: Dict[str, Any]) -> Tuple[float, str]:
+    """
+    Return price and timestamp from Alpaca latest trade.
+    """
+    if not trade:
+        return 0.0, ""
+
+    return safe_float(trade.get("p"), 0), safe_str(trade.get("t"), "")
+
+
+def timestamp_to_et_iso(value: Any) -> str:
+    """
+    Convert Alpaca UTC timestamps to ISO ET where possible.
+    """
+    raw = safe_str(value, "")
+    if not raw:
+        return ""
+
+    dt = parse_iso_dt(raw)
+    if not dt:
+        return raw
+
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+
+    if ZoneInfo:
+        dt = dt.astimezone(ZoneInfo("America/New_York"))
+
+    return dt.isoformat(timespec="seconds")
+
+
+def apply_live_price_overlay(
+    metrics: IntradayMetrics,
+    quote: Dict[str, Any],
+    trade: Optional[Dict[str, Any]] = None,
+) -> IntradayMetrics:
+    """
+    Use the freshest Alpaca live price for Signal Desk decisions.
+
+    Priority:
+      1. Valid latest quote midpoint when spread is reasonable.
+      2. Latest trade price.
+      3. Last 1-minute bar close.
+
+    VWAP/HOD still come from intraday bars, but after price overlay we recalculate
+    VWAP distance, HOD distance, above VWAP, and EMA9 price checks so trigger
+    promotion uses the same displayed/current price.
+    """
+    if not metrics.has_data:
+        return metrics
+
+    bid, ask, mid, quote_ts = quote_midpoint(quote or {})
+    trade_px, trade_ts = trade_price_time(trade or {})
+
+    metrics.bid = bid
+    metrics.ask = ask
+    metrics.quote_mid = mid
+    metrics.quote_time = timestamp_to_et_iso(quote_ts)
+    metrics.trade_price = trade_px
+    metrics.trade_time = timestamp_to_et_iso(trade_ts)
+
+    selected_price = 0.0
+    selected_source = ""
+    selected_time = ""
+
+    spread_pct = ((ask - bid) / mid * 100.0) if mid > 0 and ask >= bid else 999.0
+
+    if mid > 0 and spread_pct <= MAX_QUOTE_SPREAD_FOR_PRICE_PCT:
+        selected_price = mid
+        selected_source = f"Alpaca {DATA_FEED.upper()} quote mid"
+        selected_time = metrics.quote_time
+    elif trade_px > 0:
+        selected_price = trade_px
+        selected_source = f"Alpaca {DATA_FEED.upper()} latest trade"
+        selected_time = metrics.trade_time
+    elif mid > 0:
+        selected_price = mid
+        selected_source = f"Alpaca {DATA_FEED.upper()} quote mid/wide spread"
+        selected_time = metrics.quote_time
+
+    if selected_price <= 0:
+        return metrics
+
+    metrics.price = selected_price
+    metrics.price_source = selected_source
+    metrics.price_updated_at = selected_time or metrics.latest_bar_time
+
+    if metrics.session_open > 0:
+        metrics.day_change_pct = pct_change(metrics.price, metrics.session_open)
+
+    if metrics.vwap > 0:
+        metrics.above_vwap = metrics.price >= metrics.vwap
+        metrics.vwap_dist_pct = pct_change(metrics.price, metrics.vwap)
+
+    if metrics.hod > 0:
+        # If the live quote/trade prints above the last completed bar HOD,
+        # include it so HOD distance does not incorrectly show a negative value.
+        metrics.hod = max(metrics.hod, metrics.price)
+        metrics.hod_distance_pct = pct_change(metrics.price, metrics.hod)
+
+    if metrics.ema9 > 0:
+        metrics.price_above_ema9 = metrics.price >= metrics.ema9
+        if metrics.price_above_ema9 and metrics.ema9_above_vwap and not metrics.ema9_falling:
+            metrics.ema9_status = "BULLISH_ALIGNMENT"
+        elif metrics.ema9_crossed_above_vwap_recent and metrics.price_above_ema9:
+            metrics.ema9_status = "RECENT_BULLISH_CROSS"
+        elif not metrics.price_above_ema9:
+            metrics.ema9_status = "PRICE_BELOW_EMA9"
+        elif metrics.ema9_falling:
+            metrics.ema9_status = "EMA9_FALLING"
+        elif not metrics.ema9_above_vwap:
+            metrics.ema9_status = "EMA9_BELOW_VWAP"
+        else:
+            metrics.ema9_status = "NEUTRAL"
+
+    if metrics.base_high > 0:
+        metrics.price_near_base_breakout = metrics.price >= metrics.base_high * 0.995
+        metrics.base_compression = (
+            metrics.base_range_pct <= 2.0
+            and metrics.higher_low_or_flat_base
+            and metrics.base_volume_constructive
+            and metrics.price_near_base_breakout
+        )
+
+    return metrics
 
 
 # ==============================================================
@@ -2026,6 +2227,15 @@ def diagnostic_candidate(
         "dollar_vol_M": safe_float(row.get("dollar_vol_M"), 0),
         "atr_pct": safe_float(row.get("atr_pct"), 0),
         "price": round(metrics.price, 4),
+        "price_source": metrics.price_source,
+        "price_updated_at": metrics.price_updated_at,
+        "latest_bar_time": timestamp_to_et_iso(metrics.latest_bar_time),
+        "bid": round(metrics.bid, 4),
+        "ask": round(metrics.ask, 4),
+        "quote_mid": round(metrics.quote_mid, 4),
+        "quote_time": metrics.quote_time,
+        "trade_price": round(metrics.trade_price, 4),
+        "trade_time": metrics.trade_time,
         "session_open": round(metrics.session_open, 4),
         "day_change_pct": round(metrics.day_change_pct, 2),
         "relative_strength_long": is_relative_strength_long(row, metrics, regime),
@@ -2138,6 +2348,15 @@ def signal_base(
         "risk_category": safe_str(row.get("risk_category"), "NORMAL"),
         "setup_bucket": safe_str(row.get("setup_bucket"), ""),
         "price": round(metrics.price, 4),
+        "price_source": metrics.price_source,
+        "price_updated_at": metrics.price_updated_at,
+        "latest_bar_time": timestamp_to_et_iso(metrics.latest_bar_time),
+        "bid": round(metrics.bid, 4),
+        "ask": round(metrics.ask, 4),
+        "quote_mid": round(metrics.quote_mid, 4),
+        "quote_time": metrics.quote_time,
+        "trade_price": round(metrics.trade_price, 4),
+        "trade_time": metrics.trade_time,
         "session_open": round(metrics.session_open, 4),
         "day_change_pct": round(metrics.day_change_pct, 2),
         "relative_strength_long": is_relative_strength_long(row, metrics, regime or {}),
@@ -2232,6 +2451,15 @@ def make_invalidated(
         "updated_at": now_text,
         "market_phase": phase,
         "price": round(metrics.price, 4) if metrics.has_data else out.get("price", 0),
+        "price_source": metrics.price_source if metrics.has_data else out.get("price_source", ""),
+        "price_updated_at": metrics.price_updated_at if metrics.has_data else out.get("price_updated_at", ""),
+        "latest_bar_time": timestamp_to_et_iso(metrics.latest_bar_time) if metrics.has_data else out.get("latest_bar_time", ""),
+        "bid": round(metrics.bid, 4) if metrics.has_data else out.get("bid", 0),
+        "ask": round(metrics.ask, 4) if metrics.has_data else out.get("ask", 0),
+        "quote_mid": round(metrics.quote_mid, 4) if metrics.has_data else out.get("quote_mid", 0),
+        "quote_time": metrics.quote_time if metrics.has_data else out.get("quote_time", ""),
+        "trade_price": round(metrics.trade_price, 4) if metrics.has_data else out.get("trade_price", 0),
+        "trade_time": metrics.trade_time if metrics.has_data else out.get("trade_time", ""),
         "vwap": round(metrics.vwap, 4) if metrics.has_data else out.get("vwap", 0),
         "hod": round(metrics.hod, 4) if metrics.has_data else out.get("hod", 0),
         "vwap_dist_pct": round(metrics.vwap_dist_pct, 2) if metrics.has_data else out.get("vwap_dist_pct", 0),
@@ -2343,6 +2571,15 @@ def suppress_trigger_during_blackout(
         "updated_at": now_text,
         "market_phase": phase,
         "price": round(metrics.price, 4),
+        "price_source": metrics.price_source,
+        "price_updated_at": metrics.price_updated_at,
+        "latest_bar_time": timestamp_to_et_iso(metrics.latest_bar_time),
+        "bid": round(metrics.bid, 4),
+        "ask": round(metrics.ask, 4),
+        "quote_mid": round(metrics.quote_mid, 4),
+        "quote_time": metrics.quote_time,
+        "trade_price": round(metrics.trade_price, 4),
+        "trade_time": metrics.trade_time,
         "vwap": round(metrics.vwap, 4),
         "hod": round(metrics.hod, 4),
     })
@@ -2512,6 +2749,151 @@ def trigger_ready_reassessment(
     return True, out, ""
 
 
+
+def locked_plan_from_signal(signal: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Build a trade plan from the protected TRIGGER_READY state.
+
+    This prevents ACTIVE promotion from rebuilding entry/stop/targets after price
+    already moved. The trigger-ready plan is the locked execution plan.
+    """
+    entry = safe_float(signal.get("entry_trigger"), 0)
+    stop = safe_float(signal.get("stop_loss"), 0)
+    target_1 = safe_float(signal.get("target_1"), 0)
+    target_2 = safe_float(signal.get("target_2"), 0)
+    rr = safe_float(signal.get("reward_risk"), 0)
+
+    valid = entry > 0 and stop > 0 and target_1 > entry and stop < entry and rr >= MIN_RR
+
+    return {
+        "valid": valid,
+        "rejection_reason": "" if valid else "Locked Trigger Ready plan is invalid",
+        "entry_trigger": round(entry, 4),
+        "stop_loss": round(stop, 4),
+        "target_1": round(target_1, 4),
+        "target_2": round(target_2, 4),
+        "reward_risk": round(rr, 2),
+        "stop_distance_pct": safe_float(signal.get("stop_distance_pct"), 0),
+        "support_level": safe_float(signal.get("support_level"), 0),
+        "structure_label": safe_str(signal.get("structure_label"), "LOCKED_TRIGGER_READY_PLAN"),
+        "min_target_1": safe_float(signal.get("min_target_1"), target_1),
+        "buffer_pct_used": safe_float(signal.get("buffer_pct_used"), 0),
+        "spread_dollars": safe_float(signal.get("spread_dollars"), 0),
+    }
+
+
+def active_confidence_grade(confidence: float) -> str:
+    if confidence >= 90:
+        return "HIGH_CONVICTION"
+    if confidence >= 85:
+        return "STRONG"
+    return "MODERATE"
+
+
+def active_promotion_failure_reasons(
+    plan: Dict[str, Any],
+    confidence: float,
+    metrics: IntradayMetrics,
+    phase: str,
+) -> List[str]:
+    reasons: List[str] = []
+
+    if not plan.get("valid"):
+        reasons.append(safe_str(plan.get("rejection_reason"), "Plan invalid"))
+
+    if confidence < MIN_CONF_ACTIVE:
+        reasons.append(f"Confidence {confidence:.1f} < active minimum {MIN_CONF_ACTIVE:.0f}")
+
+    if safe_float(plan.get("reward_risk"), 0) < MIN_RR:
+        reasons.append(f"R/R {safe_float(plan.get('reward_risk'), 0):.2f} < minimum {MIN_RR:.1f}")
+
+    if not metrics.above_vwap:
+        reasons.append("Price is not above VWAP")
+
+    if metrics.ema9 > 0 and not metrics.price_above_ema9:
+        reasons.append("Price is below EMA9")
+
+    if metrics.ema9_falling:
+        reasons.append("EMA9 is falling")
+
+    macd_ok, macd_reason = macd_ready_confirmation(metrics)
+    if not macd_ok:
+        reasons.append(macd_reason)
+
+    if metrics.volume_fading_vs_morning:
+        reasons.append("Volume fading versus morning reference")
+
+    if is_late_day() and not late_day_volume_confirmed(metrics):
+        reasons.append("Late-day active signal needs volume expansion")
+
+    if not is_valid_signal_phase(phase):
+        reasons.append(f"Market phase {phase} does not allow new active signals")
+
+    return list(dict.fromkeys([r for r in reasons if r]))
+
+
+def promote_trigger_ready_to_active(
+    existing: Dict[str, Any],
+    row: Dict[str, Any],
+    metrics: IntradayMetrics,
+    regime: Dict[str, Any],
+    phase: str,
+) -> Tuple[bool, Dict[str, Any], str]:
+    """
+    Promote TRIGGER_READY to ACTIVE_SIGNAL using the locked plan.
+
+    This is intentionally evaluated before stale/missed-window invalidation.
+    A valid trigger should not be marked MISSED_WINDOW only because price has
+    already moved above the trigger by the time the 5-minute refresh runs.
+    """
+    plan = locked_plan_from_signal(existing)
+    live = live_signal_score(row, metrics, plan, regime, phase)
+    recomputed_conf = final_confidence(
+        safe_float(row.get("score"), safe_float(existing.get("scanner_score"), 0)),
+        live,
+    )
+    conf = max(safe_float(existing.get("confidence"), 0), recomputed_conf)
+
+    failure_reasons = active_promotion_failure_reasons(plan, conf, metrics, phase)
+    if failure_reasons:
+        return False, {}, "; ".join(failure_reasons)
+
+    now_text = iso_now_et()
+    setup_type = safe_str(existing.get("setup_type"), "")
+
+    out = signal_base(
+        row,
+        metrics,
+        plan,
+        "ACTIVE_SIGNAL",
+        setup_type,
+        conf,
+        live,
+        f"Trigger fired and still holds above VWAP. Promoted from protected Trigger Ready.",
+        phase,
+        regime,
+    )
+    out["triggered_at"] = now_text
+    out["detected_at"] = existing.get("detected_at") or existing.get("ready_since") or now_text
+    out["ready_since"] = existing.get("ready_since") or now_text
+    out["active_grade"] = active_confidence_grade(conf)
+    out["trigger_source"] = metrics.price_source
+
+    entry = safe_float(plan.get("entry_trigger"), 0)
+    target_1 = safe_float(plan.get("target_1"), 0)
+    target_2 = safe_float(plan.get("target_2"), 0)
+
+    if target_2 > 0 and metrics.price >= target_2:
+        out["entry_warning"] = "Triggered but current price is already at/above Target 2. No chase; wait for a fresh pullback."
+        out["actionability"] = "ACTIVE_EXTENDED"
+    elif target_1 > 0 and metrics.price >= target_1:
+        out["entry_warning"] = "Triggered but current price is already at/above Target 1. Manual confirmation required; avoid chasing."
+        out["actionability"] = "ACTIVE_EXTENDED"
+    elif entry > 0 and pct_change(metrics.price, entry) > 2.0:
+        out["entry_warning"] = "Triggered but price is more than 2% above the trigger. Manual confirmation required; avoid chasing."
+
+    return True, out, ""
+
 def process_existing_signal(
     existing: Dict[str, Any],
     row: Dict[str, Any],
@@ -2537,6 +2919,15 @@ def process_existing_signal(
             "updated_at": now_text,
             "market_phase": phase,
             "price": round(metrics.price, 4),
+            "price_source": metrics.price_source,
+            "price_updated_at": metrics.price_updated_at,
+            "latest_bar_time": timestamp_to_et_iso(metrics.latest_bar_time),
+            "bid": round(metrics.bid, 4),
+            "ask": round(metrics.ask, 4),
+            "quote_mid": round(metrics.quote_mid, 4),
+            "quote_time": metrics.quote_time,
+            "trade_price": round(metrics.trade_price, 4),
+            "trade_time": metrics.trade_time,
             "vwap": round(metrics.vwap, 4),
             "hod": round(metrics.hod, 4),
             "vwap_dist_pct": round(metrics.vwap_dist_pct, 2),
@@ -2550,13 +2941,41 @@ def process_existing_signal(
             "macd_status": metrics.macd_status,
             "momentum_status": metrics.momentum_status,
             "actionable": True,
-            "actionability": "ACTIVE",
+            "actionability": safe_str(existing.get("actionability"), "ACTIVE") or "ACTIVE",
         })
         return out
 
     if status == "TRIGGER_READY":
-        if trigger_fired(existing, metrics) and not is_valid_signal_phase(phase):
+        fired_now = trigger_fired(existing, metrics)
+
+        # Blackout remains strict: a trigger during blackout is suppressed,
+        # never retroactively promoted.
+        if fired_now and not is_valid_signal_phase(phase):
             return suppress_trigger_during_blackout(existing, row, metrics, phase, regime)
+
+        # Correct order:
+        # 1) If trigger fired during a valid signal window, attempt ACTIVE promotion first.
+        # 2) Only if it did not fire do we apply stale/missed-window invalidation.
+        if fired_now and is_valid_signal_phase(phase):
+            promoted, active_signal, fail_reason = promote_trigger_ready_to_active(
+                existing,
+                row,
+                metrics,
+                regime,
+                phase,
+            )
+
+            if promoted:
+                return active_signal
+
+            return make_invalidated(
+                existing,
+                row,
+                metrics,
+                f"Trigger fired but active-signal quality failed: {fail_reason}",
+                "FAILED_SETUP",
+                phase,
+            )
 
         invalid, reason, category = ready_invalidated(existing, metrics)
         if invalid:
@@ -2572,18 +2991,6 @@ def process_existing_signal(
         )
 
         if not ready_ok:
-            # If the trigger has already fired while the setup no longer passes quality,
-            # invalidate rather than demote. Otherwise demote to WATCH when the plan is still usable.
-            if trigger_fired(existing, metrics):
-                return make_invalidated(
-                    existing,
-                    row,
-                    metrics,
-                    f"Trigger fired but current Trigger Ready quality failed: {reassess_reason}",
-                    "FAILED_SETUP",
-                    phase,
-                )
-
             if reassessed_signal:
                 return reassessed_signal
 
@@ -2592,51 +2999,6 @@ def process_existing_signal(
                 row,
                 metrics,
                 f"Trigger-ready setup no longer valid: {reassess_reason}",
-                "FAILED_SETUP",
-                phase,
-            )
-
-        # Still trigger-ready after live reassessment.
-        if trigger_fired(reassessed_signal, metrics) and is_valid_signal_phase(phase):
-            setup_type = safe_str(reassessed_signal.get("setup_type"), "")
-            plan = build_trade_plan(row, metrics, setup_type, quote)
-            live = live_signal_score(row, metrics, plan, regime, phase)
-            conf = final_confidence(safe_float(row.get("score"), safe_float(reassessed_signal.get("scanner_score"), 0)), live)
-
-            active_quality_ok = (
-                plan.get("valid")
-                and conf >= MIN_CONF_ACTIVE
-                and safe_float(plan.get("reward_risk"), 0) >= MIN_RR
-                and metrics.price_above_ema9
-                and not metrics.ema9_falling
-                and macd_ready_confirmation(metrics)[0]
-                and not metrics.volume_fading_vs_morning
-                and (not is_late_day() or late_day_volume_confirmed(metrics))
-            )
-
-            if active_quality_ok:
-                out = signal_base(
-                    row,
-                    metrics,
-                    plan,
-                    "ACTIVE_SIGNAL",
-                    setup_type,
-                    conf,
-                    live,
-                    f"Trigger fired and still holds above VWAP. {safe_str(reassessed_signal.get('reason'), '')}",
-                    phase,
-                    regime,
-                )
-                out["triggered_at"] = now_text
-                out["detected_at"] = reassessed_signal.get("detected_at") or reassessed_signal.get("ready_since") or now_text
-                out["ready_since"] = reassessed_signal.get("ready_since") or now_text
-                return out
-
-            return make_invalidated(
-                reassessed_signal,
-                row,
-                metrics,
-                plan.get("rejection_reason") or "Trigger fired but active-signal quality failed.",
                 "FAILED_SETUP",
                 phase,
             )
@@ -2926,11 +3288,13 @@ def run_signal_engine() -> None:
     bars_1m_by_symbol: Dict[str, List[Dict[str, Any]]] = {}
     bars_5m_by_symbol: Dict[str, List[Dict[str, Any]]] = {}
     quotes_by_symbol: Dict[str, Dict[str, Any]] = {}
+    trades_by_symbol: Dict[str, Dict[str, Any]] = {}
 
     if market_data.available and monitor_symbols:
         bars_1m_by_symbol = market_data.fetch_bars(monitor_symbols, EXECUTION_TIMEFRAME)
         bars_5m_by_symbol = market_data.fetch_bars(monitor_symbols, STRUCTURE_TIMEFRAME)
         quotes_by_symbol = market_data.fetch_latest_quotes(monitor_symbols)
+        trades_by_symbol = market_data.fetch_latest_trades(monitor_symbols)
     elif not market_data.available:
         log("  ⚠ No Alpaca credentials. signal_desk.json will be empty or historical only.")
 
@@ -2943,6 +3307,9 @@ def run_signal_engine() -> None:
         metrics = enrich_structure_from_5min(metrics, bars_5m_by_symbol.get(sym, []))
 
         quote = quotes_by_symbol.get(sym, {})
+        trade = trades_by_symbol.get(sym, {})
+        metrics = apply_live_price_overlay(metrics, quote, trade)
+
         existing = prior_state.get(sym, {})
         existing_status = normalize_status(existing.get("signal_status"))
 
