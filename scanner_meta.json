@@ -1,11 +1,11 @@
 {
-  "scanner_generated_at_et": "2026-05-13T15:15:14-04:00",
+  "scanner_generated_at_et": "2026-05-13T15:41:58-04:00",
   "price_source_preference": "Alpaca IEX last intraday bar when available; Yahoo fallback",
   "note": "This is the broad scanner data timestamp. Signal Desk refresh may be newer.",
-  "raw_count": 139,
-  "potential_count": 29,
-  "active_count": 19,
-  "extended_count": 4,
-  "highrisk_count": 1,
+  "raw_count": 143,
+  "potential_count": 37,
+  "active_count": 18,
+  "extended_count": 5,
+  "highrisk_count": 0,
   "alpaca_enriched_count": 98
 }
