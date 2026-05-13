@@ -81,7 +81,7 @@ jobs:
           git add potential_movers.csv active_momentum.csv extended_movers.csv high_risk_movers.csv || true
 
           git add market_regime.json macro_calendar.json scanner_meta.json || true
-          git add signal_desk.json signal_state.json || true
+          git add signal_desk.json signal_state.json signal_decisions.log || true
 
           if [ -f suppressed_signals.csv ]; then
             git add suppressed_signals.csv
