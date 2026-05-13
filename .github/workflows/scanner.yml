@@ -2,13 +2,20 @@ name: Elite Scanner
 
 on:
   schedule:
-    # Runs every 5 minutes, every day, including weekends
-    - cron: '*/5 * * * *'
+    # NY market time during EDT:
+    # 09:00 ET = pre-market broad scanner refresh
+    - cron: '0 13 * * 1-5'
+
+    # 09:45 ET = first valid morning signal-window scanner refresh
+    - cron: '45 13 * * 1-5'
+
+    # 13:30 ET = post-lunch broad scanner refresh
+    - cron: '30 17 * * 1-5'
 
   workflow_dispatch:
 
 concurrency:
-  group: elite-scanner-publish
+  group: elite-scanner-write
   cancel-in-progress: false
 
 jobs:
@@ -68,30 +75,34 @@ jobs:
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
 
-          git pull --rebase origin main || true
+          git add index.html dashboard.html || true
 
-          git add index.html || true
-          git add dashboard.html || true
+          git add elite_watchlist.csv elite_watchlist_raw.csv elite_watchlist.json || true
+          git add potential_movers.csv active_momentum.csv extended_movers.csv high_risk_movers.csv || true
 
-          git add elite_watchlist.csv || true
-          git add elite_watchlist_raw.csv || true
-          git add elite_watchlist.json || true
+          git add market_regime.json macro_calendar.json scanner_meta.json || true
+          git add signal_desk.json signal_state.json || true
 
-          git add potential_movers.csv || true
-          git add active_momentum.csv || true
-          git add extended_movers.csv || true
-          git add high_risk_movers.csv || true
-
-          git add market_regime.json || true
-          git add macro_calendar.json || true
-
-          git add signal_desk.json || true
-          git add signal_state.json || true
-          git add suppressed_signals.csv || true
+          if [ -f suppressed_signals.csv ]; then
+            git add suppressed_signals.csv
+          fi
 
           if git diff --staged --quiet; then
             echo "No scanner/dashboard changes to commit"
-          else
-            git commit -m "scan: $(date -u '+%Y-%m-%d %H:%M UTC')"
-            git push
+            exit 0
           fi
+
+          git commit -m "scan: $(date -u '+%Y-%m-%d %H:%M UTC')"
+
+          for i in 1 2 3; do
+            git pull --rebase --autostash origin main || true
+            if git push origin main; then
+              echo "Push successful"
+              exit 0
+            fi
+            echo "Push failed, retrying..."
+            sleep 5
+          done
+
+          echo "Push failed after retries"
+          exit 1
