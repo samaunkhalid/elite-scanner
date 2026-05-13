@@ -150,6 +150,134 @@ def load_macro_calendar():
         return None
 
 
+def load_json_object(path, default=None):
+    """Load a JSON object safely. Returns default when missing/invalid."""
+    if default is None:
+        default = {}
+
+    if not os.path.exists(path):
+        return default
+
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else default
+    except Exception:
+        return default
+
+
+def load_scanner_meta():
+    """
+    scanner_meta.json is written only by elite_scanner.py.
+    It is the true broad-scanner data timestamp, not dashboard rebuild time.
+    """
+    return load_json_object("scanner_meta.json", {})
+
+
+def header_time_label(value, fallback="—"):
+    """Convert stored ISO timestamps into a header-friendly ET label."""
+    text = safe_str(value, "").strip()
+    if not text:
+        return fallback
+
+    cleaned = text.replace("Z", "+00:00").replace(" ET", "")
+
+    try:
+        dt = datetime.fromisoformat(cleaned)
+        if dt.tzinfo and ZoneInfo:
+            dt = dt.astimezone(ZoneInfo("America/New_York"))
+        return dt.strftime("%Y-%m-%d %H:%M ET")
+    except Exception:
+        pass
+
+    if "ET" in text:
+        return text[:22]
+
+    return text[:16]
+
+
+def build_live_market_map(signal_payload):
+    """
+    During signal_refresh.yml, signal_engine.py can have fresher Alpaca bar data
+    than the scanner CSV files. Use that data to update displayed card
+    price/VWAP/HOD without pretending the broad scanner was rerun.
+    """
+    live = {}
+
+    if not isinstance(signal_payload, dict):
+        return live
+
+    rows = []
+    rows.extend(signal_payload.get("rejected_candidates", []) or [])
+    rows.extend(signal_payload.get("signals", []) or [])
+
+    generated_at = safe_str(signal_payload.get("generated_at_et"), "")
+    feed = safe_str(signal_payload.get("alpaca_feed"), "IEX").upper()
+
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+
+        symbol = safe_str(row.get("symbol"), "").upper()
+        if not symbol:
+            continue
+
+        price = safe_float(row.get("price"), 0)
+        if price <= 0:
+            continue
+
+        hod_dist = safe_float(
+            row.get("hod_distance_pct"),
+            safe_float(row.get("from_hod_pct"), 0)
+        )
+
+        live[symbol] = {
+            "price": price,
+            "intraday_last_price": price,
+            "price_source": f"Alpaca {feed}",
+            "price_updated_at": safe_str(row.get("latest_bar_time"), "") or generated_at,
+            "live_price_overlay": True,
+            "vwap": safe_float(row.get("vwap"), 0),
+            "vwap_dist_pct": safe_float(
+                row.get("vwap_dist_pct"),
+                safe_float(row.get("vwap_distance_pct"), 0)
+            ),
+            "above_vwap": row.get("above_vwap"),
+            "hod": safe_float(row.get("hod"), 0),
+            "from_hod_pct": hod_dist,
+            "hod_distance_pct": hod_dist,
+            "near_hod": hod_dist >= -1.0,
+        }
+
+    return live
+
+
+def apply_live_market_overlay(rows, live_market_map):
+    """
+    Return copied dashboard rows with latest Signal Desk market data applied.
+    Scanner ranking and bucket membership remain unchanged.
+    """
+    updated = []
+
+    for row in rows:
+        item = dict(row)
+        symbol = safe_str(item.get("symbol"), "").upper()
+        live = live_market_map.get(symbol)
+
+        if live:
+            for key, value in live.items():
+                if value is None or value == "":
+                    continue
+                if isinstance(value, (int, float)) and not isinstance(value, bool) and value == 0:
+                    continue
+                item[key] = value
+
+        updated.append(item)
+
+    return updated
+
+
+
 # ==============================================================
 # DISPLAY LOGIC
 # ==============================================================
@@ -795,6 +923,13 @@ def build_card(stock, signal=None):
     score = safe_int(stock.get("score"), 0)
     price = safe_float(stock.get("price"), 0)
     change_pct = safe_float(stock.get("change_pct"), 0)
+
+    price_source = safe_str(stock.get("price_source") or stock.get("data_source") or "Scanner")
+    price_time = compact_time_et(stock.get("price_updated_at"))
+    price_meta_html = ""
+    if price_time:
+        price_meta_html = f'<div class="price-meta">{esc(price_source)} · {esc(price_time)}</div>'
+
     bucket = safe_str(stock.get("setup_bucket"), "MONITOR")
     risk = safe_str(stock.get("risk_category"), "NORMAL")
 
@@ -877,6 +1012,7 @@ def build_card(stock, signal=None):
             </div>
             <div class="price-box">
                 <div class="price">${price:.2f}</div>
+                {price_meta_html}
                 <div class="change {change_class}">{change_sign}{change_pct:.2f}%</div>
             </div>
         </div>
@@ -2004,15 +2140,30 @@ def build_dashboard(potential, active, extended, highrisk, raw, active_watchlist
     status, status_class = get_market_status(now_ny)
     market_open = is_regular_market_open(status)
 
+    scanner_meta = load_scanner_meta()
+    scanner_time_label = header_time_label(scanner_meta.get("scanner_generated_at_et"))
+    dashboard_time_label = now_ny.strftime("%Y-%m-%d %H:%M ET")
+
+    # Load once so header, Signal Desk, and live card overlay use the same payload.
+    signal_payload = load_signal_payload()
+    signal_refresh_time_label = header_time_label(signal_payload.get("generated_at_et"))
+
     regime_html = build_regime_html(regime)
     macro = load_macro_calendar()
     macro_html = build_macro_html(macro)
 
     if market_open:
-        signal_payload = load_signal_payload()
         signals = signal_payload.get("signals", [])
         rejected_candidates = signal_payload.get("rejected_candidates", [])
         signal_map = build_signal_map(signals)
+
+        # Refresh visible card price/VWAP/HOD from latest Signal Desk Alpaca data.
+        # This does not change scanner ranking or bucket membership.
+        live_market_map = build_live_market_map(signal_payload)
+        potential = apply_live_market_overlay(potential, live_market_map)
+        active = apply_live_market_overlay(active, live_market_map)
+        raw = apply_live_market_overlay(raw, live_market_map)
+
         signal_desk_html = build_signal_desk_panel(signals, rejected_candidates)
 
         # Main decision screen intentionally excludes Extended / High Risk names.
@@ -2867,6 +3018,13 @@ body {
     color: #f8fafc;
 }
 
+.price-meta {
+    margin-top: 2px;
+    font-size: 10px;
+    line-height: 1.2;
+    color: #94a3b8;
+}
+
 .change {
     font-size: 14px;
     font-weight: 700;
@@ -3521,7 +3679,9 @@ td small {
             <p>Technical Potential Movers + Catalyst Confirmation + Sector Context</p>
         </div>
         <div class="header-meta">
-            <span class="scan-pill">Last Scan: $ny_time ET</span>
+            <span class="scan-pill">Scanner Data: $scanner_time</span>
+            <span class="scan-pill">Signal Refresh: $signal_refresh_time</span>
+            <span class="scan-pill">Dashboard Built: $dashboard_time</span>
             <span class="status-pill $status_class">Market: $status</span>
         </div>
     </div>
@@ -3550,8 +3710,9 @@ td small {
     return page.safe_substitute(
         status=status,
         status_class=status_class,
-        ny_time=now_ny.strftime("%Y-%m-%d %H:%M"),
-        utc_time=now_utc.strftime("%Y-%m-%d %H:%M"),
+        scanner_time=scanner_time_label,
+        signal_refresh_time=signal_refresh_time_label,
+        dashboard_time=dashboard_time_label,
         regime_html=regime_html,
         macro_html=macro_html,
         sector_snapshot=sector_snapshot,
