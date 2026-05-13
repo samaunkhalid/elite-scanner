@@ -39,6 +39,38 @@ import requests
 import json
 from datetime import datetime, timedelta
 
+try:
+    from zoneinfo import ZoneInfo
+except Exception:
+    ZoneInfo = None
+
+
+def iso_now_et():
+    """Return current New York time as ISO string for scanner metadata."""
+    if ZoneInfo:
+        return datetime.now(ZoneInfo("America/New_York")).isoformat(timespec="seconds")
+    return datetime.now().isoformat(timespec="seconds")
+
+
+def write_scanner_meta(extra=None):
+    """
+    Write the true broad-scanner generation timestamp.
+
+    This prevents dashboard rebuild time or Signal Desk refresh time from being
+    confused with the broad scanner data timestamp.
+    """
+    meta = {
+        "scanner_generated_at_et": iso_now_et(),
+        "price_source_preference": "Alpaca IEX last intraday bar when available; Yahoo fallback",
+        "note": "This is the broad scanner data timestamp. Signal Desk refresh may be newer.",
+    }
+
+    if isinstance(extra, dict):
+        meta.update(extra)
+
+    with open("scanner_meta.json", "w", encoding="utf-8") as f:
+        json.dump(meta, f, indent=2)
+
 
 # ==============================================================
 # UNIVERSE
@@ -1344,7 +1376,14 @@ def main():
                 stock["score"] = min(100, stock["score"] + intraday_score)
                 stock["intraday_score"] = intraday_score
                 
-                # Add intraday fields
+                # Add intraday fields.
+                # IMPORTANT: displayed card price must use the same latest
+                # intraday bar source as VWAP/HOD when Alpaca data exists.
+                stock["price"] = rt["last_price"]
+                stock["intraday_last_price"] = rt["last_price"]
+                stock["price_source"] = "Alpaca IEX"
+                stock["price_updated_at"] = rt.get("last_bar_time", "")
+
                 stock["vwap"] = rt["vwap"]
                 stock["vwap_dist_pct"] = rt["vwap_dist_pct"]
                 stock["above_vwap"] = rt["above_vwap"]
@@ -1353,7 +1392,7 @@ def main():
                 stock["from_hod_pct"] = rt["from_hod_pct"]
                 stock["near_hod"] = rt["near_hod"]
                 stock["intraday_volume"] = rt["intraday_volume"]
-                stock["data_source"] = "Yahoo + IEX"
+                stock["data_source"] = "Yahoo + Alpaca IEX"
                 
                 # Add intraday reasons to tags
                 if intraday_reasons:
@@ -1446,6 +1485,15 @@ def main():
         with open("market_regime.json", "w") as f:
             json.dump(regime, f, indent=2)
 
+        write_scanner_meta({
+            "raw_count": 0,
+            "potential_count": 0,
+            "active_count": 0,
+            "extended_count": 0,
+            "highrisk_count": 0,
+            "alpaca_enriched_count": int(enriched_count) if "enriched_count" in locals() else 0,
+        })
+
         return
 
     # Bucketed watchlists
@@ -1510,13 +1558,22 @@ def main():
     active_watchlist.to_csv("elite_watchlist.csv", index=False)
     active_watchlist.to_json("elite_watchlist.json", orient="records", indent=2)
 
-    potential_df.head(10).to_csv("potential_movers.csv", index=False)
-    active_df.head(10).to_csv("active_momentum.csv", index=False)
+    potential_df.head(12).to_csv("potential_movers.csv", index=False)
+    active_df.head(8).to_csv("active_momentum.csv", index=False)
     extended_df.head(10).to_csv("extended_movers.csv", index=False)
     highrisk_df.head(10).to_csv("high_risk_movers.csv", index=False)
 
     with open("market_regime.json", "w") as f:
         json.dump(regime, f, indent=2)
+
+    write_scanner_meta({
+        "raw_count": int(len(df)),
+        "potential_count": int(len(potential_df)),
+        "active_count": int(len(active_df)),
+        "extended_count": int(len(extended_df)),
+        "highrisk_count": int(len(highrisk_df)),
+        "alpaca_enriched_count": int(enriched_count) if "enriched_count" in locals() else 0,
+    })
 
     print(f"\n  Saved: elite_watchlist_raw.csv ({len(df)} stocks - full diagnostic)")
     print(f"  Saved: elite_watchlist.csv (bucketed active watchlist)")
@@ -1526,6 +1583,7 @@ def main():
     print(f"  Saved: extended_movers.csv")
     print(f"  Saved: high_risk_movers.csv")
     print(f"  Saved: market_regime.json")
+    print(f"  Saved: scanner_meta.json")
     print(f"\n{'=' * 70}\n")
 
 
