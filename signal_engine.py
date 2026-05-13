@@ -122,6 +122,9 @@ STRUCTURE_TIMEFRAME = "5Min"
 
 DEBUG = os.getenv("SIGNAL_DEBUG", "0").strip() == "1"
 
+SIGNAL_DECISION_LOG_FILE = "signal_decisions.log"
+SIGNAL_DECISION_LOG_MAX_LINES = 2000
+
 
 # ==============================================================
 # SAFE HELPERS
@@ -134,6 +137,57 @@ def log(msg: str) -> None:
 def debug(msg: str) -> None:
     if DEBUG:
         print(msg)
+
+
+def _decision_value(value: Any) -> str:
+    """Compact one value for the lightweight Signal Desk decision log."""
+    if isinstance(value, float):
+        return f"{value:.4f}".rstrip("0").rstrip(".")
+    if isinstance(value, (dict, list, tuple, set)):
+        try:
+            return json.dumps(value, separators=(",", ":"), default=str)[:500]
+        except Exception:
+            return str(value)[:500]
+    text = str(value)
+    return text.replace("\n", " ").replace("|", "/")[:500]
+
+
+def decision_log(symbol: str, event: str, **details: Any) -> None:
+    """
+    Append one human-readable Signal Desk decision line.
+
+    This is NOT a performance journal. It is a debugging/audit trail showing why
+    a ticker became TRIGGER_READY, promoted to ACTIVE_SIGNAL, was suppressed, or
+    was invalidated.
+    """
+    symbol = normalize_symbol(symbol) if "normalize_symbol" in globals() else str(symbol).upper()
+    parts = [iso_now_et(), symbol or "-", event]
+    for key, value in details.items():
+        if value is None or value == "":
+            continue
+        parts.append(f"{key}={_decision_value(value)}")
+
+    line = " | ".join(parts)
+
+    try:
+        with open(SIGNAL_DECISION_LOG_FILE, "a", encoding="utf-8") as f:
+            f.write(line + "\n")
+    except Exception as exc:
+        debug(f"Could not write {SIGNAL_DECISION_LOG_FILE}: {exc}")
+
+
+def prune_decision_log(max_lines: int = SIGNAL_DECISION_LOG_MAX_LINES) -> None:
+    """Keep the debug log useful without letting the repo file grow forever."""
+    path = Path(SIGNAL_DECISION_LOG_FILE)
+    if not path.exists():
+        return
+
+    try:
+        lines = path.read_text(encoding="utf-8", errors="ignore").splitlines()
+        if len(lines) > max_lines:
+            path.write_text("\n".join(lines[-max_lines:]) + "\n", encoding="utf-8")
+    except Exception as exc:
+        debug(f"Could not prune {SIGNAL_DECISION_LOG_FILE}: {exc}")
 
 
 def safe_str(value: Any, default: str = "") -> str:
@@ -2465,6 +2519,15 @@ def make_invalidated(
         "vwap_dist_pct": round(metrics.vwap_dist_pct, 2) if metrics.has_data else out.get("vwap_dist_pct", 0),
         "hod_distance_pct": round(metrics.hod_distance_pct, 2) if metrics.has_data else out.get("hod_distance_pct", 0),
     })
+    decision_log(
+        symbol,
+        "INVALIDATED",
+        category=category,
+        reason=reason,
+        phase=phase,
+        price=out.get("price", 0),
+        status_before=normalize_status(existing.get("signal_status")),
+    )
     return out
 
 
@@ -2606,6 +2669,15 @@ def suppress_trigger_during_blackout(
         "notes": "Trigger suppressed by Signal Desk v1 blackout rule.",
     })
 
+    decision_log(
+        normalize_symbol(row.get("symbol")),
+        "TRIGGER_SUPPRESSED_BLACKOUT",
+        phase=phase,
+        price=metrics.price,
+        trigger=signal.get("entry_trigger"),
+        reason=f"{phase}_TRIGGER",
+    )
+
     return out
 
 
@@ -2688,6 +2760,14 @@ def trigger_ready_reassessment(
         out["previous_ready_since"] = existing.get("ready_since", "")
         out["demoted_from_trigger_ready_at"] = iso_now_et()
         out["not_ready_reasons"] = list(dict.fromkeys(fail_reasons))
+        decision_log(
+            normalize_symbol(row.get("symbol")),
+            "TRIGGER_READY_DEMOTED_TO_WATCH",
+            reason="; ".join(dict.fromkeys(fail_reasons)),
+            confidence=conf,
+            price=metrics.price,
+            phase=phase,
+        )
         return False, out, "; ".join(dict.fromkeys(fail_reasons))
 
     exact_plan = build_trade_plan(row, metrics, setup_ready_type, quote)
@@ -2730,6 +2810,14 @@ def trigger_ready_reassessment(
             out["not_ready_reasons"] = list(dict.fromkeys(fail))
             return False, out, "; ".join(dict.fromkeys(fail))
 
+        decision_log(
+            normalize_symbol(row.get("symbol")),
+            "TRIGGER_READY_REASSESSMENT_FAILED",
+            reason="; ".join(dict.fromkeys(fail)),
+            confidence=exact_conf,
+            price=metrics.price,
+            phase=phase,
+        )
         return False, {}, "; ".join(dict.fromkeys(fail))
 
     out = signal_base(
@@ -2746,6 +2834,15 @@ def trigger_ready_reassessment(
     )
     out["ready_since"] = existing.get("ready_since") or iso_now_et()
     out["detected_at"] = existing.get("detected_at") or existing.get("ready_since") or iso_now_et()
+    decision_log(
+        normalize_symbol(row.get("symbol")),
+        "TRIGGER_READY_RECONFIRMED",
+        setup=setup_ready_type,
+        confidence=exact_conf,
+        trigger=exact_plan.get("entry_trigger"),
+        price=metrics.price,
+        phase=phase,
+    )
     return True, out, ""
 
 
@@ -2856,6 +2953,15 @@ def promote_trigger_ready_to_active(
 
     failure_reasons = active_promotion_failure_reasons(plan, conf, metrics, phase)
     if failure_reasons:
+        decision_log(
+            normalize_symbol(row.get("symbol")),
+            "PROMOTION_BLOCKED",
+            reason="; ".join(failure_reasons),
+            confidence=conf,
+            trigger=plan.get("entry_trigger"),
+            price=metrics.price,
+            phase=phase,
+        )
         return False, {}, "; ".join(failure_reasons)
 
     now_text = iso_now_et()
@@ -2891,6 +2997,20 @@ def promote_trigger_ready_to_active(
         out["actionability"] = "ACTIVE_EXTENDED"
     elif entry > 0 and pct_change(metrics.price, entry) > 2.0:
         out["entry_warning"] = "Triggered but price is more than 2% above the trigger. Manual confirmation required; avoid chasing."
+
+    decision_log(
+        normalize_symbol(row.get("symbol")),
+        "PROMOTED_TO_ACTIVE_SIGNAL",
+        setup=setup_type,
+        grade=out.get("active_grade"),
+        confidence=conf,
+        trigger=entry,
+        price=metrics.price,
+        target_1=target_1,
+        target_2=target_2,
+        actionability=out.get("actionability"),
+        phase=phase,
+    )
 
     return True, out, ""
 
@@ -2947,6 +3067,16 @@ def process_existing_signal(
 
     if status == "TRIGGER_READY":
         fired_now = trigger_fired(existing, metrics)
+
+        if fired_now:
+            decision_log(
+                normalize_symbol(row.get("symbol")),
+                "TRIGGER_CROSSED",
+                trigger=existing.get("entry_trigger"),
+                price=metrics.price,
+                phase=phase,
+                price_source=metrics.price_source,
+            )
 
         # Blackout remains strict: a trigger during blackout is suppressed,
         # never retroactively promoted.
@@ -3128,6 +3258,19 @@ def process_new_or_watch(
                 now_text = iso_now_et()
                 out["ready_since"] = now_text
                 out["detected_at"] = now_text
+                decision_log(
+                    symbol,
+                    "BECAME_TRIGGER_READY",
+                    setup=setup_ready_type,
+                    confidence=exact_conf,
+                    trigger=exact_plan.get("entry_trigger"),
+                    stop=exact_plan.get("stop_loss"),
+                    target_1=exact_plan.get("target_1"),
+                    target_2=exact_plan.get("target_2"),
+                    rr=exact_plan.get("reward_risk"),
+                    price=metrics.price,
+                    phase=phase,
+                )
                 return out, None
 
         # Good plan, but setup itself is not ready. WATCH.
@@ -3282,6 +3425,14 @@ def run_signal_engine() -> None:
 
     log(f"Focus universe: {len(focus)} current scanner names")
     log(f"Monitor universe: {len(monitor_symbols)} including protected signals")
+    decision_log(
+        "-",
+        "RUN_START",
+        phase=phase,
+        focus_count=len(focus),
+        monitor_count=len(monitor_symbols),
+        feed=DATA_FEED,
+    )
 
     market_data = AlpacaMarketData(DATA_FEED)
 
@@ -3389,9 +3540,23 @@ def run_signal_engine() -> None:
         },
     )
 
+    decision_log(
+        "-",
+        "RUN_END",
+        phase=phase,
+        active=counts["active"],
+        trigger_ready=counts["trigger_ready"],
+        watch=counts["watch"],
+        invalidated=counts["invalidated"],
+        suppressed=counts["suppressed"],
+        rejected=len(rejected_candidates),
+    )
+    prune_decision_log()
+
     log("Signal Desk output written:")
     log(f"  {SIGNAL_DESK_FILE}")
     log(f"  {SIGNAL_STATE_FILE}")
+    log(f"  {SIGNAL_DECISION_LOG_FILE}")
     log(f"Counts: {counts}")
     log(f"Rejected diagnostics: {len(rejected_candidates)}")
 
