@@ -231,11 +231,22 @@ def build_live_market_map(signal_payload):
             safe_float(row.get("from_hod_pct"), 0)
         )
 
+        price_source = (
+            safe_str(row.get("price_source"), "")
+            or f"Alpaca {feed}"
+        )
+        price_updated_at = (
+            safe_str(row.get("price_updated_at"), "")
+            or safe_str(row.get("quote_time"), "")
+            or safe_str(row.get("trade_time"), "")
+            or safe_str(row.get("latest_bar_time"), "")
+        )
+
         live[symbol] = {
             "price": price,
             "intraday_last_price": price,
-            "price_source": f"Alpaca {feed}",
-            "price_updated_at": safe_str(row.get("latest_bar_time"), "") or generated_at,
+            "price_source": price_source,
+            "price_updated_at": price_updated_at,
             "live_price_overlay": True,
             "vwap": safe_float(row.get("vwap"), 0),
             "vwap_dist_pct": safe_float(
