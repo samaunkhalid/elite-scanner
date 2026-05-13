@@ -1,0 +1,37 @@
+# Secrets
+.env
+*.env
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# VPS runner state/logs
+elite_runner.log
+runner_state.json
+runner_status.json
+
+# Signal/state outputs
+signal_desk.json
+signal_state.json
+signal_decisions.log
+
+# Scanner generated outputs
+dashboard.html
+index.html
+elite_watchlist.csv
+elite_watchlist_raw.csv
+elite_watchlist.json
+potential_movers.csv
+active_momentum.csv
+extended_movers.csv
+high_risk_movers.csv
+market_regime.json
+macro_calendar.json
+scanner_meta.json
+
+# Local/system
+.DS_Store
+Thumbs.db
