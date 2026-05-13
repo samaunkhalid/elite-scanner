@@ -1,11 +1,11 @@
 {
-  "spy_change": 0.26687689000000003,
-  "qqq_change": 0.6129492000000001,
-  "iwm_change": -0.3751274,
-  "vix_level": 18.11,
-  "vix_change": 0.6670419000000001,
-  "regime": "NORMAL",
-  "bias": "NEUTRAL",
-  "label": "\u26aa Normal (+0.3%)",
+  "spy_change": 0.7247605,
+  "qqq_change": 1.1976008999999999,
+  "iwm_change": 0.26010733999999996,
+  "vix_level": 17.82,
+  "vix_change": -0.9449699,
+  "regime": "BULLISH",
+  "bias": "LONG_FAVORED",
+  "label": "\ud83d\udfe2 Bullish (+0.7%)",
   "smallcap_caution": false
 }
