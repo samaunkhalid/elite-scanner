@@ -70,7 +70,7 @@ SIGNAL_STATE_FILE = "signal_state.json"
 SUPPRESSED_SIGNALS_FILE = "suppressed_signals.csv"
 SIGNAL_OUTCOMES_FILE = "signal_outcomes.csv"
 SIGNAL_OUTCOMES_SUMMARY_FILE = "signal_outcomes_summary.json"
-SIGNAL_ENGINE_STRATEGY_VERSION = "v1.9_trigger_touch_confirmation"
+SIGNAL_ENGINE_STRATEGY_VERSION = "v2.1_state_lock_volume_grace_metrics"
 
 # State retention.
 ACTIVE_STALE_MINUTES = 10
@@ -98,7 +98,18 @@ TRIGGER_TOUCH_CONFIRM_MIN_SECONDS = 45
 TRIGGER_TOUCH_MAX_MINUTES = 4
 TRIGGER_REJECT_BUFFER_PCT = 0.25
 TRIGGER_WICK_REJECTION_PCT = 0.75
+# If an entry has already traded and price falls away, do not recycle it as a fresh Trigger Ready.
+TRIGGER_TOUCH_EPS_PCT = 0.03
+TRIGGER_PULLBACK_REJECT_PCT = 0.20
 MAX_QUOTE_SPREAD_FOR_PRICE_PCT = 1.00
+
+# Setup-specific confirmation/invalidation grace.
+# HOD breakouts must prove themselves quickly; VWAP reclaim/pullback and base
+# setups get more room because normal retests can dip near EMA9/VWAP before continuing.
+HOD_BREAKOUT_GRACE_MINUTES = 1.5
+VWAP_RECLAIM_GRACE_MINUTES = 3.0
+VWAP_PULLBACK_GRACE_MINUTES = 3.0
+BASE_SQUEEZE_GRACE_MINUTES = 2.0
 
 # Live participation / VWAP reclaim filters.
 # Alpaca IEX volume is non-consolidated, so thresholds are intentionally modest.
@@ -403,22 +414,60 @@ def ready_confidence_required(phase: str) -> float:
     return MIN_CONF_READY
 
 
+def volume_fade_label(metrics: "IntradayMetrics") -> str:
+    label = safe_str(getattr(metrics, "volume_reference_label", ""), "adaptive reference")
+    ref = safe_float(getattr(metrics, "volume_reference_avg_5m", 0), 0)
+    if ref > 0:
+        return f"Volume fading vs {label} ({metrics.avg_volume_5:.0f} < {VOLUME_FADE_RATIO:.0%} of {ref:.0f})"
+    return f"Volume fading vs {label}"
+
+
 def late_day_volume_confirmed(metrics: "IntradayMetrics") -> bool:
     if not is_late_day():
         return True
 
     # After 2:30 PM, stable volume is not enough for a trigger-ready signal.
-    # We require recent expansion and no severe fade vs the morning reference.
+    # We require recent expansion and no severe fade versus the adaptive reference.
     return (
         metrics.recent_volume_expanding
         and not metrics.volume_fading_vs_morning
         and (
-            metrics.morning_avg_volume_5m <= 0
-            or metrics.recent_to_morning_volume_ratio >= MIN_LATE_DAY_MORNING_VOL_RATIO
+            metrics.volume_reference_avg_5m <= 0
+            or metrics.avg_volume_5 >= MIN_LATE_DAY_MORNING_VOL_RATIO * metrics.volume_reference_avg_5m
         )
     )
 
 
+def setup_grace_minutes(setup_type: str) -> float:
+    setup = safe_str(setup_type, "").upper()
+    if "HOD" in setup:
+        return HOD_BREAKOUT_GRACE_MINUTES
+    if "RECLAIM" in setup:
+        return VWAP_RECLAIM_GRACE_MINUTES
+    if "VWAP_PULLBACK" in setup or "PULLBACK" in setup:
+        return VWAP_PULLBACK_GRACE_MINUTES
+    if "BASE" in setup or "SQUEEZE" in setup or "FLAG" in setup:
+        return BASE_SQUEEZE_GRACE_MINUTES
+    return VWAP_PULLBACK_GRACE_MINUTES
+
+
+def within_setup_grace(signal: Dict[str, Any]) -> bool:
+    """
+    Return True when a protected setup is still inside its setup-specific
+    grace window. During grace, soft failures such as EMA9/MACD/volume cooling
+    should warn but not immediately invalidate. Hard failures like VWAP/support
+    loss still invalidate.
+    """
+    start = (
+        signal.get("trigger_touched_at")
+        or signal.get("ready_since")
+        or signal.get("detected_at")
+        or signal.get("updated_at")
+    )
+    age = minutes_since(start)
+    if age is None:
+        return False
+    return age <= setup_grace_minutes(safe_str(signal.get("setup_type"), ""))
 def is_market_open_phase(phase: str) -> bool:
     return phase in {
         "OPENING_BLACKOUT",
@@ -926,6 +975,11 @@ def update_one_outcome(row: Dict[str, Any], signal: Dict[str, Any]) -> Dict[str,
         "earnings_reaction_trade": bool(signal.get("earnings_reaction_trade")),
         "lunch_caution": bool(signal.get("lunch_caution")) or safe_str(signal.get("actionability"), "").upper() == "LUNCH_CAUTION",
         "current_price": round(price, 4) if price > 0 else row.get("current_price", ""),
+        "price_source": safe_str(signal.get("price_source"), row.get("price_source", "")),
+        "price_updated_at": safe_str(signal.get("price_updated_at"), row.get("price_updated_at", "")),
+        "latest_bar_time": safe_str(signal.get("latest_bar_time"), row.get("latest_bar_time", "")),
+        "quote_time": safe_str(signal.get("quote_time"), row.get("quote_time", "")),
+        "trade_time": safe_str(signal.get("trade_time"), row.get("trade_time", "")),
         "vwap": safe_float(signal.get("vwap"), _outcome_float(row, "vwap", 0.0)),
         "ema9": safe_float(signal.get("ema9"), _outcome_float(row, "ema9", 0.0)),
         "hod": safe_float(signal.get("hod"), _outcome_float(row, "hod", 0.0)),
@@ -1177,71 +1231,163 @@ def update_signal_outcomes(new_state: Dict[str, Dict[str, Any]], prior_state: Di
 
 def summarize_signal_outcomes(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
     today = session_date_str()
+    now_dt = ny_now()
+    cutoff_7d = now_dt.date().toordinal() - 6
+
+    def row_session_ordinal(row: Dict[str, Any]) -> int:
+        session = safe_str(row.get("session_date"), "")
+        try:
+            return datetime.fromisoformat(session).date().toordinal()
+        except Exception:
+            return 0
+
     today_rows = [r for r in rows if safe_str(r.get("session_date"), "") == today]
+    last_7d_rows = [r for r in rows if row_session_ordinal(r) >= cutoff_7d]
 
-    counts = {
-        "total": len(today_rows),
-        "watch": 0,
-        "trigger_ready": 0,
-        "trigger_touched": 0,
-        "active_signal": 0,
-        "t1_hit": 0,
-        "t2_hit": 0,
-        "stop_hit": 0,
-        "invalidated_before_entry": 0,
-        "invalidated_after_entry": 0,
-        "watch_removed": 0,
-        "ready_only_success": 0,
-        "open": 0,
-        "completed": 0,
-    }
+    def build_counts(selected_rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+        counts = {
+            "total": len(selected_rows),
+            "watch": 0,
+            "trigger_ready": 0,
+            "trigger_touched": 0,
+            "active_signal": 0,
+            "t1_hit": 0,
+            "t2_hit": 0,
+            "stop_hit": 0,
+            "invalidated_before_entry": 0,
+            "invalidated_after_entry": 0,
+            "watch_removed": 0,
+            "ready_only_success": 0,
+            "open": 0,
+            "completed": 0,
+            "ready_events": 0,
+            "touched_events": 0,
+            "active_events": 0,
+            "ready_to_touched_pct": 0.0,
+            "touched_to_active_pct": 0.0,
+            "ready_to_t1_pct": 0.0,
+            "most_common_invalidation_reason": "",
+        }
 
-    setup_counts: Dict[str, Dict[str, int]] = {}
+        invalidation_reasons: Dict[str, int] = {}
 
-    for row in today_rows:
-        status = safe_str(row.get("outcome_status"), "").upper()
-        setup = safe_str(row.get("setup_type"), "UNKNOWN") or "UNKNOWN"
-        setup_counts.setdefault(setup, {"total": 0, "t1_hit": 0, "t2_hit": 0, "stop_hit": 0, "invalidated": 0, "ready_only_success": 0})
-        setup_counts[setup]["total"] += 1
-        if _csv_bool(row.get("success_without_active")):
-            counts["ready_only_success"] += 1
-            setup_counts[setup]["ready_only_success"] += 1
+        for row in selected_rows:
+            status = safe_str(row.get("outcome_status"), "").upper()
 
-        if status == "WATCH":
-            counts["watch"] += 1
-            counts["open"] += 1
-        elif status == "TRIGGER_READY":
-            counts["trigger_ready"] += 1
-            counts["open"] += 1
-        elif status == "TRIGGER_TOUCHED":
-            counts["trigger_touched"] += 1
-            counts["open"] += 1
-        elif status == "ACTIVE_SIGNAL":
-            counts["active_signal"] += 1
-            counts["open"] += 1
-        elif status == "T1_HIT":
-            counts["t1_hit"] += 1
-            counts["completed"] += 1
-            setup_counts[setup]["t1_hit"] += 1
-        elif status == "T2_HIT":
-            counts["t2_hit"] += 1
-            counts["completed"] += 1
-            setup_counts[setup]["t2_hit"] += 1
-        elif status == "STOP_HIT":
-            counts["stop_hit"] += 1
-            counts["completed"] += 1
-            setup_counts[setup]["stop_hit"] += 1
-        elif status == "INVALIDATED_BEFORE_ENTRY":
-            counts["invalidated_before_entry"] += 1
-            counts["completed"] += 1
-            setup_counts[setup]["invalidated"] += 1
-        elif status == "INVALIDATED_AFTER_ENTRY":
-            counts["invalidated_after_entry"] += 1
-            counts["completed"] += 1
-            setup_counts[setup]["invalidated"] += 1
-        elif status == "WATCH_REMOVED":
-            counts["watch_removed"] += 1
-            counts["completed"] += 1
+            ready_event = bool(safe_str(row.get("trigger_ready_time"), "")) or status in {
+                "TRIGGER_READY", "TRIGGER_TOUCHED", "ACTIVE_SIGNAL", "T1_HIT", "T2_HIT", "STOP_HIT",
+                "INVALIDATED_BEFORE_ENTRY", "INVALIDATED_AFTER_ENTRY",
+            }
+            touched_event = (
+                bool(safe_str(row.get("trigger_touched_time"), ""))
+                or _csv_bool(row.get("hit_entry"))
+                or _csv_bool(row.get("entry_touched_before_active"))
+                or status in {"TRIGGER_TOUCHED", "ACTIVE_SIGNAL", "T1_HIT", "T2_HIT", "STOP_HIT", "INVALIDATED_AFTER_ENTRY"}
+            )
+            active_event = bool(safe_str(row.get("active_time"), "")) or status in {"ACTIVE_SIGNAL", "T1_HIT", "T2_HIT", "STOP_HIT"}
+            t1_event = _csv_bool(row.get("hit_t1")) or status in {"T1_HIT", "T2_HIT"}
+            t2_event = _csv_bool(row.get("hit_t2")) or status == "T2_HIT"
+            stop_event = _csv_bool(row.get("hit_stop")) or status == "STOP_HIT"
+
+            if ready_event:
+                counts["ready_events"] += 1
+            if touched_event:
+                counts["touched_events"] += 1
+            if active_event:
+                counts["active_events"] += 1
+            if t1_event and status not in {"T1_HIT", "T2_HIT"}:
+                counts["t1_hit"] += 1
+            if t2_event and status != "T2_HIT":
+                counts["t2_hit"] += 1
+            if stop_event and status != "STOP_HIT":
+                counts["stop_hit"] += 1
+
+            if _csv_bool(row.get("success_without_active")):
+                counts["ready_only_success"] += 1
+
+            if status == "WATCH":
+                counts["watch"] += 1
+                counts["open"] += 1
+            elif status == "TRIGGER_READY":
+                counts["trigger_ready"] += 1
+                counts["open"] += 1
+            elif status == "TRIGGER_TOUCHED":
+                counts["trigger_touched"] += 1
+                counts["open"] += 1
+            elif status == "ACTIVE_SIGNAL":
+                counts["active_signal"] += 1
+                counts["open"] += 1
+            elif status == "T1_HIT":
+                counts["t1_hit"] += 1
+                counts["completed"] += 1
+            elif status == "T2_HIT":
+                counts["t2_hit"] += 1
+                counts["completed"] += 1
+            elif status == "STOP_HIT":
+                counts["stop_hit"] += 1
+                counts["completed"] += 1
+            elif status == "INVALIDATED_BEFORE_ENTRY":
+                counts["invalidated_before_entry"] += 1
+                counts["completed"] += 1
+            elif status == "INVALIDATED_AFTER_ENTRY":
+                counts["invalidated_after_entry"] += 1
+                counts["completed"] += 1
+            elif status == "WATCH_REMOVED":
+                counts["watch_removed"] += 1
+                counts["completed"] += 1
+
+            if status.startswith("INVALIDATED") or "INVALID" in status:
+                reason = safe_str(row.get("invalidation_reason") or row.get("outcome_detail"), "")
+                if reason:
+                    reason = reason[:120]
+                    invalidation_reasons[reason] = invalidation_reasons.get(reason, 0) + 1
+
+        if counts["ready_events"] > 0:
+            counts["ready_to_touched_pct"] = round(counts["touched_events"] / counts["ready_events"] * 100.0, 1)
+            counts["ready_to_t1_pct"] = round(counts["t1_hit"] / counts["ready_events"] * 100.0, 1)
+        if counts["touched_events"] > 0:
+            counts["touched_to_active_pct"] = round(counts["active_events"] / counts["touched_events"] * 100.0, 1)
+
+        if invalidation_reasons:
+            counts["most_common_invalidation_reason"] = sorted(
+                invalidation_reasons.items(),
+                key=lambda kv: kv[1],
+                reverse=True,
+            )[0][0]
+
+        return counts
+
+    def build_setup_counts(selected_rows: List[Dict[str, Any]]) -> Dict[str, Dict[str, int]]:
+        setup_counts: Dict[str, Dict[str, int]] = {}
+        for row in selected_rows:
+            status = safe_str(row.get("outcome_status"), "").upper()
+            setup = safe_str(row.get("setup_type"), "UNKNOWN") or "UNKNOWN"
+            setup_counts.setdefault(setup, {
+                "total": 0,
+                "touched": 0,
+                "active": 0,
+                "t1_hit": 0,
+                "t2_hit": 0,
+                "stop_hit": 0,
+                "invalidated": 0,
+                "ready_only_success": 0,
+            })
+            setup_counts[setup]["total"] += 1
+            if _csv_bool(row.get("hit_entry")) or _csv_bool(row.get("entry_touched_before_active")):
+                setup_counts[setup]["touched"] += 1
+            if bool(safe_str(row.get("active_time"), "")) or status in {"ACTIVE_SIGNAL", "T1_HIT", "T2_HIT", "STOP_HIT"}:
+                setup_counts[setup]["active"] += 1
+            if _csv_bool(row.get("success_without_active")):
+                setup_counts[setup]["ready_only_success"] += 1
+            if status == "T1_HIT" or _csv_bool(row.get("hit_t1")):
+                setup_counts[setup]["t1_hit"] += 1
+            if status == "T2_HIT" or _csv_bool(row.get("hit_t2")):
+                setup_counts[setup]["t2_hit"] += 1
+            if status == "STOP_HIT" or _csv_bool(row.get("hit_stop")):
+                setup_counts[setup]["stop_hit"] += 1
+            if status.startswith("INVALIDATED"):
+                setup_counts[setup]["invalidated"] += 1
+        return setup_counts
 
     recent = sorted(today_rows, key=lambda r: safe_str(r.get("last_checked"), ""), reverse=True)[:12]
 
@@ -1249,8 +1395,10 @@ def summarize_signal_outcomes(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
         "generated_at_et": iso_now_et(),
         "strategy_version": SIGNAL_ENGINE_STRATEGY_VERSION,
         "today_session": today,
-        "today": counts,
-        "by_setup_type": setup_counts,
+        "today": build_counts(today_rows),
+        "last_7_days": build_counts(last_7d_rows),
+        "by_setup_type": build_setup_counts(today_rows),
+        "by_setup_type_7d": build_setup_counts(last_7d_rows),
         "recent": recent,
         "file": SIGNAL_OUTCOMES_FILE,
     }
@@ -1479,6 +1627,9 @@ class IntradayMetrics:
     volume_stable_or_increasing: bool = False
     volume_drying: bool = False
     volume_fading_vs_morning: bool = False
+    volume_reference_avg_5m: float = 0.0
+    volume_reference_label: str = "morning reference"
+    volume_fade_reason: str = ""
     recent_volume_expanding: bool = False
 
     bearish_momentum_divergence: bool = False
@@ -1875,10 +2026,15 @@ def enrich_structure_from_5min(metrics: IntradayMetrics, bars_5m: List[Dict[str,
     recent_vols = [safe_float(b.get("v"), 0) for b in recent5]
     prev_vols = [safe_float(b.get("v"), 0) for b in prev5]
 
-    # Morning reference: avoid the first few opening bars if enough data exists,
-    # then compare the latest 25 minutes against earlier-session participation.
+    # Adaptive volume reference.
+    #
+    # Old behavior compared every setup to the opening burst, which incorrectly
+    # rejected valid 10:00 VWAP-reclaim setups as "volume fading." The new
+    # behavior uses a time-aware reference:
+    #   - Before 11:00 ET: compare recent volume to the previous 20–30 minutes.
+    #   - After 11:00 ET: compare to max(previous 20–30 minutes, 50% of morning reference).
     if len(clean) >= 30:
-        morning_ref = clean[6:30]
+        morning_ref = clean[6:30]  # avoids the most distorted first six 5m bars
     elif len(clean) >= 16:
         morning_ref = clean[3:16]
     else:
@@ -1888,6 +2044,19 @@ def enrich_structure_from_5min(metrics: IntradayMetrics, bars_5m: List[Dict[str,
     metrics.avg_volume_5 = sum(recent_vols) / len(recent_vols) if recent_vols else 0
     metrics.avg_volume_prev_5 = sum(prev_vols) / len(prev_vols) if prev_vols else 0
     metrics.morning_avg_volume_5m = sum(morning_vols) / len(morning_vols) if morning_vols else 0
+
+    now_time = ny_now().time()
+    if now_time < dtime(11, 0):
+        adaptive_ref = metrics.avg_volume_prev_5
+        adaptive_label = "previous 20–30m"
+    else:
+        half_morning = 0.50 * metrics.morning_avg_volume_5m if metrics.morning_avg_volume_5m > 0 else 0
+        adaptive_ref = max(metrics.avg_volume_prev_5, half_morning)
+        adaptive_label = "adaptive late-session reference"
+
+    metrics.volume_reference_avg_5m = adaptive_ref
+    metrics.volume_reference_label = adaptive_label
+
     metrics.recent_to_morning_volume_ratio = (
         metrics.avg_volume_5 / metrics.morning_avg_volume_5m
         if metrics.morning_avg_volume_5m > 0
@@ -1906,9 +2075,10 @@ def enrich_structure_from_5min(metrics: IntradayMetrics, bars_5m: List[Dict[str,
         metrics.avg_volume_prev_5 > 0 and metrics.avg_volume_5 <= 0.80 * metrics.avg_volume_prev_5
     )
     metrics.volume_fading_vs_morning = (
-        metrics.morning_avg_volume_5m > 0
-        and metrics.avg_volume_5 < VOLUME_FADE_RATIO * metrics.morning_avg_volume_5m
+        adaptive_ref > 0
+        and metrics.avg_volume_5 < VOLUME_FADE_RATIO * adaptive_ref
     )
+    metrics.volume_fade_reason = volume_fade_label(metrics) if metrics.volume_fading_vs_morning else ""
     metrics.base_volume_constructive = (
         metrics.avg_volume_prev_5 <= 0
         or metrics.avg_volume_5 <= 1.20 * metrics.avg_volume_prev_5
@@ -3138,7 +3308,7 @@ def setup_vwap_pullback_ready(metrics: IntradayMetrics, rr: float, confidence: f
         return False, "VWAP pullback MACD still curling down"
 
     if metrics.volume_fading_vs_morning:
-        return False, "Volume fading vs morning reference"
+        return False, volume_fade_label(metrics)
 
     if is_late_day() and not late_day_volume_confirmed(metrics):
         return False, "Late-day setup needs volume expansion"
@@ -3217,7 +3387,7 @@ def setup_base_squeeze_ready(metrics: IntradayMetrics, rr: float, confidence: fl
         return False, macd_reason
 
     if metrics.volume_fading_vs_morning:
-        return False, "Volume fading vs morning reference"
+        return False, volume_fade_label(metrics)
 
     if is_late_day() and not late_day_volume_confirmed(metrics):
         return False, "Late-day setup needs volume expansion"
@@ -3254,7 +3424,7 @@ def setup_hod_breakout_ready(metrics: IntradayMetrics, rr: float, confidence: fl
         return False, macd_reason
 
     if metrics.volume_fading_vs_morning:
-        return False, "Volume fading vs morning reference"
+        return False, volume_fade_label(metrics)
 
     if is_late_day() and not late_day_volume_confirmed(metrics):
         return False, "Late-day setup needs volume expansion"
@@ -3723,6 +3893,7 @@ def signal_base(
             if is_earnings_reaction_row(row) else ""
         ),
         "confidence": round(confidence, 1),
+        "readiness_grade": "PRIME_READY" if confidence >= 80 else ("TRIGGER_READY" if confidence >= MIN_CONF_READY else "WATCH"),
         "live_signal_score": round(live_score, 1),
         "scanner_score": safe_float(row.get("score"), 0),
         "source_bucket": safe_str(row.get("signal_source_bucket"), ""),
@@ -4035,7 +4206,7 @@ def ready_invalidated(signal: Dict[str, Any], metrics: IntradayMetrics) -> Tuple
         return True, f"{macd_reason} developed before trigger", "FAILED_SETUP"
 
     if metrics.volume_fading_vs_morning:
-        return True, "Volume faded versus morning reference before trigger", "FAILED_SETUP"
+        return True, volume_fade_label(metrics) + " before trigger", "FAILED_SETUP"
 
     if is_late_day() and not late_day_volume_confirmed(metrics):
         return True, "Late-day trigger-ready setup lacks volume expansion", "FAILED_SETUP"
@@ -4198,7 +4369,7 @@ def trigger_ready_reassessment(
             fail_reasons.append(ema_reason)
 
         if metrics.volume_fading_vs_morning:
-            fail_reasons.append("Volume fading vs morning reference")
+            fail_reasons.append(volume_fade_label(metrics))
 
         if is_late_day() and not late_day_volume_confirmed(metrics):
             fail_reasons.append("Late-day setup needs volume expansion")
@@ -4474,7 +4645,7 @@ def trigger_hold_confirmation(
             return False, "Price is below EMA9 after trigger touch"
 
         if metrics.volume_fading_vs_morning:
-            return False, "Volume faded versus morning reference on trigger confirmation"
+            return False, volume_fade_label(metrics) + " on trigger confirmation"
 
         if "HOD" in setup or "BASE" in setup:
             if not metrics.recent_volume_expanding and (
@@ -4492,6 +4663,113 @@ def trigger_hold_confirmation(
             return False, macd_reason
 
     return True, "Trigger held above entry with valid VWAP/volume confirmation"
+
+
+def trigger_reference_high(metrics: IntradayMetrics) -> float:
+    """
+    Highest recent price used to detect whether a locked trigger has already traded.
+
+    Important: use recent high/current trade, not all-day HOD. A pullback setup can
+    validly have an entry below an old morning HOD. The problem we are fixing is a
+    *recently touched* entry being shown again as fresh Trigger Ready.
+    """
+    vals = [
+        safe_float(getattr(metrics, "price_recent_high", 0), 0),
+        safe_float(getattr(metrics, "price", 0), 0),
+        safe_float(getattr(metrics, "trade_price", 0), 0),
+        safe_float(getattr(metrics, "quote_mid", 0), 0),
+    ]
+    return max([v for v in vals if v > 0] or [0.0])
+
+
+def trigger_was_touched_recently(signal: Dict[str, Any], metrics: IntradayMetrics) -> bool:
+    entry = safe_float(signal.get("entry_trigger"), 0)
+    if entry <= 0 or not metrics.has_data:
+        return False
+
+    eps_level = entry * (1.0 - TRIGGER_TOUCH_EPS_PCT / 100.0)
+    return trigger_reference_high(metrics) >= eps_level
+
+
+def trigger_is_above_current_price(signal: Dict[str, Any], metrics: IntradayMetrics) -> bool:
+    entry = safe_float(signal.get("entry_trigger"), 0)
+    return entry > 0 and metrics.price > 0 and metrics.price < entry * (1.0 - TRIGGER_TOUCH_EPS_PCT / 100.0)
+
+
+def trigger_pullback_after_touch(signal: Dict[str, Any], metrics: IntradayMetrics) -> Tuple[bool, str]:
+    """
+    True when a trigger was touched/exceeded but the stock has since pulled away
+    enough that the old entry is stale. This avoids RIG/BN behavior:
+      Trigger Ready -> entry touched -> falls back to Watch / stale Ready.
+
+    A stale touched trigger should become NEW_BASE_REQUIRED / REJECTED_TRIGGER.
+    """
+    entry = safe_float(signal.get("entry_trigger"), 0)
+    if entry <= 0 or not metrics.has_data:
+        return False, ""
+
+    if metrics.price >= entry * (1.0 - TRIGGER_TOUCH_EPS_PCT / 100.0):
+        return False, ""
+
+    pullback_pct = pct_change(entry, metrics.price)
+    bearish_confirmation = (
+        (metrics.ema9 > 0 and not metrics.price_above_ema9)
+        or metrics.macd_1m_curling_down
+        or metrics.macd_histogram_falling
+        or metrics.bearish_momentum_divergence
+    )
+
+    if pullback_pct >= TRIGGER_PULLBACK_REJECT_PCT:
+        return True, (
+            f"Trigger was touched/exceeded, then price pulled back {pullback_pct:.2f}% below entry; "
+            "old trigger is stale. New base required."
+        )
+
+    if bearish_confirmation and pullback_pct >= TRIGGER_TOUCH_EPS_PCT:
+        return True, (
+            "Trigger was touched/exceeded, then price fell back below trigger with weakening EMA/MACD; "
+            "new base required."
+        )
+
+    return False, ""
+
+
+def keep_trigger_touched_pending(
+    existing: Dict[str, Any],
+    metrics: IntradayMetrics,
+    phase: str,
+    reason: str,
+) -> Dict[str, Any]:
+    """
+    Keep a touched trigger visible as TRIGGER_TOUCHED instead of demoting it back
+    to WATCH or recycled Trigger Ready. The next clean re-break/hold can still
+    promote it; a failed pullback becomes NEW_BASE_REQUIRED.
+    """
+    now_text = iso_now_et()
+    out = dict(existing)
+    out.update({
+        "signal_status": "TRIGGER_TOUCHED",
+        "actionable": False,
+        "actionability": "TRIGGER_TOUCHED",
+        "last_checked": now_text,
+        "updated_at": now_text,
+        "market_phase": phase,
+        "price": round(metrics.price, 4) if metrics.has_data else out.get("price", 0),
+        "price_source": metrics.price_source if metrics.has_data else out.get("price_source", ""),
+        "price_updated_at": metrics.price_updated_at if metrics.has_data else out.get("price_updated_at", ""),
+        "latest_bar_time": timestamp_to_et_iso(metrics.latest_bar_time) if metrics.has_data else out.get("latest_bar_time", ""),
+        "reason": f"Trigger touched; still pending confirmation: {reason}",
+        "entry_warning": "Trigger already traded. Do not treat as fresh entry; wait for clean re-break/hold or new base.",
+    })
+    decision_log(
+        normalize_symbol(out.get("symbol")),
+        "TRIGGER_TOUCH_STILL_PENDING",
+        trigger=out.get("entry_trigger"),
+        price=metrics.price,
+        phase=phase,
+        reason=reason,
+    )
+    return out
 
 
 def make_trigger_touched(
@@ -4681,7 +4959,7 @@ def active_promotion_failure_reasons(
             reasons.append(macd_reason)
 
         if metrics.volume_fading_vs_morning:
-            reasons.append("Volume fading versus morning reference")
+            reasons.append(volume_fade_label(metrics))
 
     if row is not None:
         event_ok, event_reasons = earnings_reaction_requirements(row, metrics, plan, confidence)
@@ -4835,6 +5113,20 @@ def process_existing_signal(
 
     if status == "TRIGGER_READY":
         fired_now = trigger_fired(existing, metrics)
+        touched_recently = trigger_was_touched_recently(existing, metrics)
+
+        if touched_recently and not fired_now:
+            stale, stale_reason = trigger_pullback_after_touch(existing, metrics)
+            if stale:
+                return make_invalidated(existing, row, metrics, stale_reason, "NEW_BASE_REQUIRED", phase)
+
+            return make_trigger_touched(
+                existing,
+                row,
+                metrics,
+                phase,
+                "Entry was already touched recently; waiting for renewed hold/volume confirmation before Active Signal.",
+            )
 
         if fired_now:
             decision_log(
@@ -4895,6 +5187,10 @@ def process_existing_signal(
     if status == "TRIGGER_TOUCHED":
         if not is_valid_signal_phase(phase):
             return suppress_trigger_during_blackout(existing, row, metrics, phase, regime)
+
+        stale, stale_reason = trigger_pullback_after_touch(existing, metrics)
+        if stale:
+            return make_invalidated(existing, row, metrics, stale_reason, "NEW_BASE_REQUIRED", phase)
 
         invalid, reason, category = ready_invalidated(existing, metrics)
         if invalid:
@@ -4962,7 +5258,7 @@ def process_existing_signal(
             if is_reclaim_lifecycle_setup(existing):
                 holding, hold_reason = reclaim_lifecycle_holding(existing, metrics)
                 if holding:
-                    return reset_to_trigger_ready_after_touch(existing, metrics, phase, confirm_reason)
+                    return keep_trigger_touched_pending(existing, metrics, phase, f"{confirm_reason}; {hold_reason}")
 
             return make_invalidated(
                 existing,
@@ -5133,6 +5429,21 @@ def process_new_or_watch(
                 out["detected_at"] = now_text
                 out = apply_lunch_caution_fields(out, phase)
 
+                if trigger_was_touched_recently(out, metrics):
+                    stale, stale_reason = trigger_pullback_after_touch(out, metrics)
+                    if stale:
+                        invalid = make_invalidated(out, row, metrics, stale_reason, "NEW_BASE_REQUIRED", phase)
+                        return invalid, None
+                    touched = make_trigger_touched(
+                        out,
+                        row,
+                        metrics,
+                        phase,
+                        "Lunch-caution trigger was already touched recently; manual confirmation only.",
+                    )
+                    touched = apply_lunch_caution_fields(touched, phase)
+                    return touched, None
+
                 decision_log(
                     symbol,
                     "BECAME_TRIGGER_READY_LUNCH_CAUTION",
@@ -5230,6 +5541,20 @@ def process_new_or_watch(
                 now_text = iso_now_et()
                 out["ready_since"] = now_text
                 out["detected_at"] = now_text
+
+                if trigger_was_touched_recently(out, metrics):
+                    stale, stale_reason = trigger_pullback_after_touch(out, metrics)
+                    if stale:
+                        invalid = make_invalidated(out, row, metrics, stale_reason, "NEW_BASE_REQUIRED", phase)
+                        return invalid, None
+                    return make_trigger_touched(
+                        out,
+                        row,
+                        metrics,
+                        phase,
+                        "Entry was already touched recently; waiting for renewed hold/volume confirmation before Active Signal.",
+                    ), None
+
                 decision_log(
                     symbol,
                     "BECAME_TRIGGER_READY",
@@ -5444,7 +5769,7 @@ def run_signal_engine() -> None:
 
         # Market closed: no new signals; expire protected signals.
         if phase in {"CLOSED", "AFTERHOURS"}:
-            if existing_status in {"TRIGGER_READY", "ACTIVE_SIGNAL"}:
+            if existing_status in {"TRIGGER_READY", "TRIGGER_TOUCHED", "ACTIVE_SIGNAL"}:
                 invalid = make_invalidated(
                     existing,
                     row,
@@ -5456,7 +5781,7 @@ def run_signal_engine() -> None:
                 new_state[sym] = invalid
             continue
 
-        if existing_status in {"TRIGGER_READY", "ACTIVE_SIGNAL", "INVALIDATED"}:
+        if existing_status in {"TRIGGER_READY", "TRIGGER_TOUCHED", "ACTIVE_SIGNAL", "INVALIDATED"}:
             processed = process_existing_signal(existing, row, metrics, quote, regime, phase)
             if processed:
                 new_state[sym] = processed
