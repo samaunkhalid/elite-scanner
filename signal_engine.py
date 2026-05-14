@@ -70,7 +70,7 @@ SIGNAL_STATE_FILE = "signal_state.json"
 SUPPRESSED_SIGNALS_FILE = "suppressed_signals.csv"
 SIGNAL_OUTCOMES_FILE = "signal_outcomes.csv"
 SIGNAL_OUTCOMES_SUMMARY_FILE = "signal_outcomes_summary.json"
-SIGNAL_ENGINE_STRATEGY_VERSION = "v2.1_state_lock_volume_grace_metrics"
+SIGNAL_ENGINE_STRATEGY_VERSION = "v2.3_hod_base_breakout_lifecycle"
 
 # State retention.
 ACTIVE_STALE_MINUTES = 10
@@ -83,6 +83,15 @@ MAX_VWAP_EXTENSION_PCT = 5.0
 ACTIVE_HOD_MAX_DISTANCE = -2.5
 POTENTIAL_HOD_MAX_DISTANCE = -4.0
 HOD_BREAKOUT_READY_DISTANCE = -0.75
+
+# HOD breakout discipline.
+# A valid HOD breakout is NOT a vertical push into the high. It must first form
+# a controlled near-HOD base/flag with higher lows / tight range, then break.
+HOD_BASE_MAX_DISTANCE_FROM_HOD_PCT = -0.85
+HOD_BASE_MAX_LOW_FROM_HOD_PCT = -2.50
+HOD_BASE_MAX_RANGE_PCT = 2.00
+HOD_BASE_MIN_STRUCTURE_BARS = 3
+HOD_BASE_MAX_VWAP_EXTENSION_PCT = 4.00
 
 MIN_RR_WATCH = 0.75
 MIN_RR = 1.5
@@ -308,6 +317,188 @@ def normalize_status(status: Any) -> str:
 
 def normalize_symbol(symbol: Any) -> str:
     return re.sub(r"[^A-Z0-9._-]", "", safe_str(symbol, "").upper().strip())
+
+
+# ==============================================================
+# EXPLICIT STATE TRANSITION GUARD
+# ==============================================================
+
+PROTECTED_STATE_TRANSITIONS = {
+    "TRIGGER_READY": {
+        "TRIGGER_READY",
+        "TRIGGER_TOUCHED",
+        "ACTIVE_SIGNAL",
+        "INVALIDATED",
+        "EXPIRED",
+        "MISSED_WINDOW",
+        "REJECTED_TRIGGER",
+        "NEW_BASE_REQUIRED",
+    },
+    "TRIGGER_TOUCHED": {
+        "TRIGGER_TOUCHED",
+        "ACTIVE_SIGNAL",
+        "INVALIDATED",
+        "MISSED_WINDOW",
+        "REJECTED_TRIGGER",
+        "NEW_BASE_REQUIRED",
+    },
+    "ACTIVE_SIGNAL": {
+        "ACTIVE_SIGNAL",
+        "INVALIDATED",
+        "TARGET_1_HIT",
+        "TARGET_2_HIT",
+        "STOPPED_OUT",
+        "EXPIRED",
+        "MISSED_WINDOW",
+    },
+}
+
+
+def enforce_state_transition(
+    symbol: str,
+    old_status: Any,
+    new_status: Any,
+    reason: str = "",
+) -> Tuple[bool, str, str]:
+    """
+    Hard guard for protected Signal Desk states.
+
+    A protected setup must never silently fall back into WATCH. It must either
+    advance through the protected lifecycle or exit with an explicit terminal
+    reason. This prevents polluted outcomes like:
+
+        TRIGGER_READY -> WATCH
+        TRIGGER_TOUCHED -> WATCH
+        ACTIVE_SIGNAL -> WATCH
+
+    Returns:
+        (allowed, final_status, log_message)
+    """
+    old = normalize_status(old_status)
+    new = normalize_status(new_status)
+
+    if not old:
+        old = "WAIT"
+    if not new:
+        new = "WAIT"
+
+    # Same-state refresh is always allowed.
+    if old == new:
+        return True, new, ""
+
+    valid_next = PROTECTED_STATE_TRANSITIONS.get(old)
+    if valid_next is None:
+        return True, new, ""
+
+    if new not in valid_next:
+        msg = f"STATE_LOCK: Blocked {old} -> {new}"
+        if reason:
+            msg += f" | reason: {reason}"
+
+        decision_log(
+            normalize_symbol(symbol),
+            "STATE_TRANSITION_BLOCKED",
+            old_status=old,
+            attempted_status=new,
+            kept_status=old,
+            reason=reason,
+        )
+        return False, old, msg
+
+    return True, new, ""
+
+
+def retain_locked_signal_after_block(
+    existing: Dict[str, Any],
+    metrics: Any,
+    phase: str,
+    block_message: str,
+) -> Dict[str, Any]:
+    """
+    Keep a protected state visible when a bad transition is blocked.
+
+    This updates live price/context, but preserves the locked lifecycle status,
+    entry, stop, targets, confidence, and timestamps.
+    """
+    now_text = iso_now_et()
+    out = dict(existing)
+
+    out.update({
+        "last_checked": now_text,
+        "updated_at": now_text,
+        "market_phase": phase,
+        "state_lock_active": True,
+        "state_lock_message": block_message,
+        "entry_warning": combine_warning(
+            out.get("entry_warning", ""),
+            "Protected state retained. This setup cannot demote to WATCH; it must confirm, reject, expire, or invalidate.",
+        ),
+    })
+
+    if getattr(metrics, "has_data", False):
+        out.update({
+            "price": round(safe_float(getattr(metrics, "price", 0), 0), 4),
+            "price_source": safe_str(getattr(metrics, "price_source", ""), out.get("price_source", "")),
+            "price_updated_at": safe_str(getattr(metrics, "price_updated_at", ""), out.get("price_updated_at", "")),
+            "latest_bar_time": timestamp_to_et_iso(getattr(metrics, "latest_bar_time", None)) or out.get("latest_bar_time", ""),
+            "bid": round(safe_float(getattr(metrics, "bid", 0), 0), 4),
+            "ask": round(safe_float(getattr(metrics, "ask", 0), 0), 4),
+            "quote_mid": round(safe_float(getattr(metrics, "quote_mid", 0), 0), 4),
+            "quote_time": safe_str(getattr(metrics, "quote_time", ""), out.get("quote_time", "")),
+            "trade_price": round(safe_float(getattr(metrics, "trade_price", 0), 0), 4),
+            "trade_time": safe_str(getattr(metrics, "trade_time", ""), out.get("trade_time", "")),
+            "vwap": round(safe_float(getattr(metrics, "vwap", 0), 0), 4),
+            "hod": round(safe_float(getattr(metrics, "hod", 0), 0), 4),
+            "vwap_dist_pct": round(safe_float(getattr(metrics, "vwap_dist_pct", 0), 0), 2),
+            "hod_distance_pct": round(safe_float(getattr(metrics, "hod_distance_pct", 0), 0), 2),
+            "ema9": round(safe_float(getattr(metrics, "ema9", 0), 0), 4),
+            "price_above_ema9": bool(getattr(metrics, "price_above_ema9", False)),
+            "ema9_status": safe_str(getattr(metrics, "ema9_status", ""), out.get("ema9_status", "")),
+            "macd_value": round(safe_float(getattr(metrics, "macd_value", 0), 0), 4),
+            "macd_signal": round(safe_float(getattr(metrics, "macd_signal", 0), 0), 4),
+            "macd_histogram": round(safe_float(getattr(metrics, "macd_histogram", 0), 0), 4),
+            "macd_status": safe_str(getattr(metrics, "macd_status", ""), out.get("macd_status", "")),
+            "momentum_status": safe_str(getattr(metrics, "momentum_status", ""), out.get("momentum_status", "")),
+        })
+
+    reason = safe_str(out.get("reason"), "")
+    if "State lock retained" not in reason:
+        out["reason"] = f"State lock retained. {reason}".strip()
+
+    return out
+
+
+def apply_state_transition_guard(
+    symbol: str,
+    existing: Dict[str, Any],
+    candidate: Dict[str, Any],
+    metrics: Any,
+    phase: str,
+    reason: str = "",
+) -> Dict[str, Any]:
+    """
+    Apply hard transition rules to any candidate state before it is written.
+
+    If a protected state tries to demote to WATCH or WAIT, keep the protected
+    state and log the blocked transition.
+    """
+    if not existing or not candidate:
+        return candidate
+
+    old_status = normalize_status(existing.get("signal_status"))
+    new_status = normalize_status(candidate.get("signal_status"))
+
+    allowed, final_status, message = enforce_state_transition(
+        symbol,
+        old_status,
+        new_status,
+        reason=reason,
+    )
+
+    if allowed:
+        return candidate
+
+    return retain_locked_signal_after_block(existing, metrics, phase, message)
 
 
 def parse_iso_dt(text: Any) -> Optional[datetime]:
@@ -2832,8 +3023,8 @@ def trigger_level_for_setup(setup_type: str, metrics: IntradayMetrics) -> float:
         return metrics.pullback_high * 1.0002
     if setup_type == "BASE_SQUEEZE_BREAKOUT":
         return metrics.base_high * 1.0002
-    if setup_type == "HOD_BREAKOUT_CONTINUATION":
-        return metrics.hod * 1.0002
+    if setup_type == "HOD_BASE_BREAKOUT":
+        return max(metrics.hod, metrics.base_high) * 1.0002
     return max(metrics.pullback_high, metrics.base_high, metrics.hod, metrics.price) * 1.0002
 
 
@@ -2866,9 +3057,9 @@ def support_level_for_setup(setup_type: str, metrics: IntradayMetrics, entry: fl
         if metrics.pullback_low > 0:
             candidates.append((metrics.pullback_low, "5Min pullback low"))
 
-    elif setup_type == "HOD_BREAKOUT_CONTINUATION":
+    elif setup_type == "HOD_BASE_BREAKOUT":
         if metrics.base_low > 0:
-            candidates.append((metrics.base_low, "5Min HOD/base support"))
+            candidates.append((metrics.base_low, "5Min near-HOD base support"))
         if metrics.pullback_low > 0:
             candidates.append((metrics.pullback_low, "5Min pullback support"))
 
@@ -3000,7 +3191,7 @@ def build_trade_plan(
         risk = entry - stop
         stop_distance_pct = pct(risk, entry) if entry > 0 else 999.0
 
-        max_stop = MAX_STOP_DIST_HOD if setup_type == "HOD_BREAKOUT_CONTINUATION" else MAX_STOP_DIST_NORMAL
+        max_stop = MAX_STOP_DIST_HOD if setup_type == "HOD_BASE_BREAKOUT" else MAX_STOP_DIST_NORMAL
 
         if entry <= 0 or stop <= 0 or risk <= 0:
             valid = False
@@ -3047,8 +3238,8 @@ def choose_best_provisional_plan(
     setup_order = [
         "VWAP_RECLAIM_BREAKOUT",
         "VWAP_PULLBACK_CONTINUATION",
+        "HOD_BASE_BREAKOUT",
         "BASE_SQUEEZE_BREAKOUT",
-        "HOD_BREAKOUT_CONTINUATION",
     ]
 
     plans = []
@@ -3408,7 +3599,68 @@ def setup_base_squeeze_ready(metrics: IntradayMetrics, rr: float, confidence: fl
     return True, "5-min base/flag squeeze; waiting for break above compression high"
 
 
-def setup_hod_breakout_ready(metrics: IntradayMetrics, rr: float, confidence: float) -> Tuple[bool, str]:
+def hod_base_structure_not_ready_reason(metrics: IntradayMetrics) -> str:
+    """
+    Explain why a near-HOD idea is not a valid HOD base breakout.
+
+    Trader logic:
+      - A vertical push into HOD is not a breakout setup.
+      - A valid HOD breakout first needs a base/flag near HOD with higher lows
+        or tight compression, then a break with confirmation.
+    """
+    reasons = []
+
+    if not metrics.has_data:
+        reasons.append("No intraday bars")
+
+    if metrics.hod <= 0:
+        reasons.append("HOD unavailable")
+    elif metrics.hod_distance_pct < HOD_BASE_MAX_DISTANCE_FROM_HOD_PCT:
+        reasons.append(f"Not close enough to HOD ({metrics.hod_distance_pct:.2f}%)")
+
+    if metrics.vwap_dist_pct > HOD_BASE_MAX_VWAP_EXTENSION_PCT:
+        reasons.append(
+            f"Too extended above VWAP for HOD base ({metrics.vwap_dist_pct:.2f}% > {HOD_BASE_MAX_VWAP_EXTENSION_PCT:.1f}%)"
+        )
+
+    if not metrics.consolidating_near_high:
+        reasons.append("No controlled consolidation near HOD; likely vertical HOD tap / chase risk")
+
+    if not metrics.base_compression:
+        reasons.append("No tight base/flag under HOD")
+
+    if metrics.base_range_pct > HOD_BASE_MAX_RANGE_PCT:
+        reasons.append(f"Near-HOD base range too wide ({metrics.base_range_pct:.2f}% > {HOD_BASE_MAX_RANGE_PCT:.1f}%)")
+
+    if metrics.structure_bar_count and metrics.structure_bar_count < HOD_BASE_MIN_STRUCTURE_BARS:
+        reasons.append(f"Near-HOD base too young ({metrics.structure_bar_count} bars < {HOD_BASE_MIN_STRUCTURE_BARS})")
+
+    if not metrics.higher_low_or_flat_base:
+        reasons.append("No higher-low / flat-base structure under HOD")
+
+    if not metrics.base_volume_constructive:
+        reasons.append("Base volume not constructive")
+
+    if metrics.hod > 0 and metrics.base_low > 0 and pct_change(metrics.base_low, metrics.hod) < HOD_BASE_MAX_LOW_FROM_HOD_PCT:
+        reasons.append("Base low too far below HOD")
+
+    if not metrics.price_near_base_breakout:
+        reasons.append("Price not near base/HOD breakout level")
+
+    return "; ".join(reasons) if reasons else "HOD base breakout structure not ready"
+
+
+def setup_hod_base_breakout_ready(metrics: IntradayMetrics, rr: float, confidence: float) -> Tuple[bool, str]:
+    """
+    HOD breakout is a trigger AFTER a base forms, not a separate vertical-chase setup.
+
+    Valid lifecycle:
+      BASE_NEAR_HOD -> HOD_BASE_BREAKOUT -> TRIGGER_TOUCHED -> ACTIVE_SIGNAL
+
+    Invalid:
+      several large candles run into HOD, tap/cross it, then fade. That is
+      EXTENDED_HOD_TAP / CHASE_RISK, not a Trigger Ready HOD breakout.
+    """
     if not metrics.has_data:
         return False, "No intraday bars"
 
@@ -3429,17 +3681,9 @@ def setup_hod_breakout_ready(metrics: IntradayMetrics, rr: float, confidence: fl
     if is_late_day() and not late_day_volume_confirmed(metrics):
         return False, "Late-day setup needs volume expansion"
 
-    if metrics.hod_distance_pct < HOD_BREAKOUT_READY_DISTANCE:
-        return False, "Not close enough to HOD"
-
-    if metrics.vwap_dist_pct > MAX_VWAP_EXTENSION_PCT:
-        return False, "Too extended above VWAP"
-
-    if not metrics.consolidating_near_high:
-        return False, "Not consolidating near HOD"
-
-    if not metrics.volume_stable_or_increasing:
-        return False, "Volume not stable/increasing"
+    structure_reason = hod_base_structure_not_ready_reason(metrics)
+    if structure_reason != "HOD base breakout structure not ready":
+        return False, structure_reason
 
     if rr < MIN_RR:
         return False, "R/R below 1.5"
@@ -3448,7 +3692,15 @@ def setup_hod_breakout_ready(metrics: IntradayMetrics, rr: float, confidence: fl
     if confidence < required_conf:
         return False, f"Confidence below {required_conf:.0f}"
 
-    return True, "5-min HOD breakout setup; waiting for break above HOD"
+    return True, "Near-HOD base/flag formed; waiting for break above HOD/base high with volume"
+
+
+def setup_hod_breakout_ready(metrics: IntradayMetrics, rr: float, confidence: float) -> Tuple[bool, str]:
+    """
+    Backward-compatible wrapper. Standalone HOD taps are intentionally not valid.
+    Use HOD_BASE_BREAKOUT only.
+    """
+    return setup_hod_base_breakout_ready(metrics, rr, confidence)
 
 
 def choose_setup(metrics: IntradayMetrics, plan: Dict[str, Any], confidence: float, phase: str, row: Optional[Dict[str, Any]] = None) -> Tuple[str, str, List[str]]:
@@ -3486,21 +3738,27 @@ def choose_setup(metrics: IntradayMetrics, plan: Dict[str, Any], confidence: flo
         reasons.append(f"Earnings reaction filter: {event_reason}")
     reasons.append(f"VWAP pullback not ready: {vwap_reason}")
 
+    hod_base_ready, hod_base_reason = setup_hod_base_breakout_ready(metrics, rr, confidence)
+    if hod_base_ready:
+        event_ok, event_reason = _event_allowed("HOD_BASE_BREAKOUT")
+        if event_ok:
+            return "HOD_BASE_BREAKOUT", hod_base_reason, reasons
+        reasons.append(f"Earnings reaction filter: {event_reason}")
+    reasons.append(f"HOD base breakout not ready: {hod_base_reason}")
+
     base_ready, base_reason = setup_base_squeeze_ready(metrics, rr, confidence)
     if base_ready:
-        event_ok, event_reason = _event_allowed("BASE_SQUEEZE_BREAKOUT")
-        if event_ok:
-            return "BASE_SQUEEZE_BREAKOUT", base_reason, reasons
-        reasons.append(f"Earnings reaction filter: {event_reason}")
+        # If this is actually a near-HOD base but failed HOD_BASE_BREAKOUT,
+        # do not relabel it as a generic base squeeze. It needs a proper HOD
+        # base break or a fresh non-HOD base.
+        if metrics.hod > 0 and metrics.hod_distance_pct >= HOD_BASE_MAX_DISTANCE_FROM_HOD_PCT and metrics.consolidating_near_high:
+            reasons.append("Base/flag near HOD requires HOD_BASE_BREAKOUT confirmation; not using generic base label")
+        else:
+            event_ok, event_reason = _event_allowed("BASE_SQUEEZE_BREAKOUT")
+            if event_ok:
+                return "BASE_SQUEEZE_BREAKOUT", base_reason, reasons
+            reasons.append(f"Earnings reaction filter: {event_reason}")
     reasons.append(f"Base/flag squeeze not ready: {base_reason}")
-
-    hod_ready, hod_reason = setup_hod_breakout_ready(metrics, rr, confidence)
-    if hod_ready:
-        event_ok, event_reason = _event_allowed("HOD_BREAKOUT_CONTINUATION")
-        if event_ok:
-            return "HOD_BREAKOUT_CONTINUATION", hod_reason, reasons
-        reasons.append(f"Earnings reaction filter: {event_reason}")
-    reasons.append(f"HOD breakout not ready: {hod_reason}")
 
     return "", "No trigger-ready setup", reasons
 
@@ -5784,7 +6042,36 @@ def run_signal_engine() -> None:
         if existing_status in {"TRIGGER_READY", "TRIGGER_TOUCHED", "ACTIVE_SIGNAL", "INVALIDATED"}:
             processed = process_existing_signal(existing, row, metrics, quote, regime, phase)
             if processed:
+                processed = apply_state_transition_guard(
+                    sym,
+                    existing,
+                    processed,
+                    metrics,
+                    phase,
+                    reason="existing_signal_processing",
+                )
                 new_state[sym] = processed
+                continue
+
+            # Defensive guard: protected states must never fall through into
+            # new/watch processing. If no processed result was produced, keep
+            # the locked state visible and log the blocked implicit demotion.
+            if existing_status in {"TRIGGER_READY", "TRIGGER_TOUCHED", "ACTIVE_SIGNAL"}:
+                retained = retain_locked_signal_after_block(
+                    existing,
+                    metrics,
+                    phase,
+                    f"STATE_LOCK: Blocked {existing_status} -> WATCH | reason: process_existing_signal returned empty",
+                )
+                decision_log(
+                    sym,
+                    "STATE_TRANSITION_BLOCKED",
+                    old_status=existing_status,
+                    attempted_status="WATCH",
+                    kept_status=existing_status,
+                    reason="process_existing_signal returned empty",
+                )
+                new_state[sym] = retained
                 continue
 
         # WATCH is not protected. If it fell out of current focus, remove it.
@@ -5797,6 +6084,14 @@ def run_signal_engine() -> None:
         signal, diagnostic = process_new_or_watch(row, metrics, quote, regime, phase)
 
         if signal:
+            signal = apply_state_transition_guard(
+                sym,
+                existing,
+                signal,
+                metrics,
+                phase,
+                reason="new_or_watch_processing",
+            )
             new_state[sym] = signal
         elif diagnostic:
             if existing_status == "WATCH":
