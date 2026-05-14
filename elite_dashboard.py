@@ -2086,6 +2086,7 @@ def load_signal_outcomes_summary():
         "invalidated_before_entry": 0,
         "invalidated_after_entry": 0,
         "watch_removed": 0,
+        "ready_only_success": 0,
         "open": 0,
         "completed": 0,
     }
@@ -2095,6 +2096,8 @@ def load_signal_outcomes_summary():
         key = status.lower()
         if key in counts:
             counts[key] += 1
+        if str(row.get("success_without_active", "")).strip().lower() in ["true", "1", "yes", "y"]:
+            counts["ready_only_success"] += 1
         if status in ["WATCH", "TRIGGER_READY", "ACTIVE_SIGNAL"]:
             counts["open"] += 1
         if status not in ["", "WATCH", "TRIGGER_READY", "ACTIVE_SIGNAL"]:
@@ -2132,8 +2135,8 @@ def short_outcome_status(status):
         "T1_HIT": "T1",
         "T2_HIT": "T2",
         "STOP_HIT": "STOP",
-        "INVALIDATED_BEFORE_ENTRY": "INV-BEFORE",
-        "INVALIDATED_AFTER_ENTRY": "INV-AFTER",
+        "INVALIDATED_BEFORE_ENTRY": "INV BEFORE",
+        "INVALIDATED_AFTER_ENTRY": "INV AFTER",
         "WATCH_REMOVED": "WATCH REMOVED",
         "ACTIVE_SIGNAL": "ACTIVE",
         "TRIGGER_READY": "READY",
@@ -2165,6 +2168,7 @@ def build_signal_outcomes_panel(summary):
         ("Ready", safe_int(today.get("trigger_ready"), 0)),
         ("Active", safe_int(today.get("active_signal"), 0)),
         ("T1", safe_int(today.get("t1_hit"), 0)),
+        ("Ready Win", safe_int(today.get("ready_only_success"), 0)),
         ("T2", safe_int(today.get("t2_hit"), 0)),
         ("Stop", safe_int(today.get("stop_hit"), 0)),
         ("Invalid", safe_int(today.get("invalidated_before_entry"), 0) + safe_int(today.get("invalidated_after_entry"), 0)),
@@ -2177,7 +2181,7 @@ def build_signal_outcomes_panel(summary):
 
     if recent:
         rows_html = []
-        for row in recent[:8]:
+        for row in recent[:6]:
             symbol = safe_str(row.get("symbol"), "—").upper()
             setup = safe_str(row.get("setup_type"), "—")
             status = safe_str(row.get("outcome_status"), "—").upper()
@@ -2194,12 +2198,24 @@ def build_signal_outcomes_panel(summary):
 
             r_text = f"{best_r:.2f}R" if best_r > 0 else "—"
             final_text = f"{final_r:.2f}R" if final_r not in [0, 0.0] else "—"
+            success_without_active = str(row.get("success_without_active", "")).strip().lower() in ["true", "1", "yes", "y"]
+            entry_before_active = str(row.get("entry_touched_before_active", "")).strip().lower() in ["true", "1", "yes", "y"]
+            extra_flags = []
+            if success_without_active:
+                extra_flags.append('<span class="outcome-flag outcome-flag-good">Ready-only target hit</span>')
+            elif entry_before_active:
+                extra_flags.append('<span class="outcome-flag">Entry touched before Active</span>')
+            flags_html = "".join(extra_flags)
 
             rows_html.append(f"""
                 <div class="outcome-row">
                     <div class="outcome-main">
                         <strong>{esc(symbol)}</strong>
                         <span>{esc(setup)}</span>
+                    </div>
+                    <div class="outcome-side">
+                        <b class="outcome-pill {cls}">{esc(short_outcome_status(status))}</b>
+                        <span>{esc(checked)}</span>
                     </div>
                     <div class="outcome-plan">
                         <span>Entry <b>{entry}</b></span>
@@ -2208,10 +2224,7 @@ def build_signal_outcomes_panel(summary):
                         <span>Best <b>{esc(r_text)}</b></span>
                         <span>Final <b>{esc(final_text)}</b></span>
                     </div>
-                    <div class="outcome-side">
-                        <b class="outcome-pill {cls}">{esc(short_outcome_status(status))}</b>
-                        <span>{esc(checked)}</span>
-                    </div>
+                    {flags_html}
                     <div class="outcome-reason">{esc(reason)}</div>
                 </div>
             """)
@@ -2231,7 +2244,8 @@ def build_signal_outcomes_panel(summary):
         <div class="signal-outcomes-top">
             <div>
                 <strong>Signal Outcomes</strong>
-                <span>Signal performance tracker. This is not your manual trade journal.</span>
+                <span>Signal performance tracker. Not your manual trade journal.</span>
+                <em class="outcome-help">INV BEFORE = failed before entry/active. INV AFTER = trigger touched or active attempt failed after entry conditions.</em>
             </div>
             <div class="signal-outcomes-meta">
                 {version_html}
@@ -2419,10 +2433,10 @@ def build_dashboard(potential, active, extended, highrisk, raw, active_watchlist
         nav_tabs = """
         <div class="nav-tabs">
             <a href="#signals">Signal Desk</a>
-            <a href="#outcomes">Outcomes</a>
             <a href="#potential">Potential Movers</a>
             <a href="#active">Active Momentum</a>
             <a href="#sectors">Sector Leadership</a>
+            <a href="#outcomes">Outcomes</a>
             <a href="#desk">Table View</a>
         </div>
         """
@@ -3974,9 +3988,19 @@ td small {
     border-radius: 999px;
 }
 
+.outcome-help {
+    display: block;
+    margin-top: 3px;
+    color: #94a3b8;
+    font-size: 11px;
+    font-style: normal;
+    line-height: 1.35;
+}
+
+
 .outcome-stats {
     display: grid;
-    grid-template-columns: repeat(8, minmax(74px, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(92px, 1fr));
     gap: 8px;
     margin-bottom: 12px;
 }
@@ -4006,21 +4030,31 @@ td small {
 
 .outcome-rows {
     display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 340px));
     gap: 8px;
+    justify-content: start;
+    align-items: stretch;
 }
 
 .outcome-row {
     display: grid;
-    grid-template-columns: minmax(150px, 1.2fr) minmax(380px, 2.4fr) minmax(130px, 0.75fr);
-    gap: 10px;
-    align-items: center;
-    padding: 11px 12px;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+        "main side"
+        "plan plan"
+        "flag flag"
+        "reason reason";
+    gap: 8px 10px;
+    align-items: flex-start;
+    padding: 9px 10px;
     border-radius: 13px;
     border: 1px solid rgba(148, 163, 184, 0.14);
     background: rgba(2, 6, 23, 0.36);
+    min-width: 0;
 }
 
 .outcome-main {
+    grid-area: main;
     display: flex;
     flex-direction: column;
     gap: 3px;
@@ -4043,8 +4077,9 @@ td small {
 }
 
 .outcome-plan {
+    grid-area: plan;
     display: flex;
-    gap: 8px;
+    gap: 6px;
     flex-wrap: wrap;
     color: #94a3b8;
     font-size: 11px;
@@ -4063,9 +4098,10 @@ td small {
 }
 
 .outcome-side {
+    grid-area: side;
     display: flex;
     align-items: flex-end;
-    justify-content: center;
+    justify-content: flex-start;
     flex-direction: column;
     gap: 5px;
     color: #94a3b8;
@@ -4124,8 +4160,27 @@ td small {
     background: rgba(59, 130, 246, 0.12);
 }
 
+.outcome-flag {
+    grid-area: flag;
+    display: inline-flex;
+    width: fit-content;
+    border-radius: 999px;
+    padding: 4px 8px;
+    border: 1px solid rgba(148, 163, 184, 0.16);
+    background: rgba(15, 23, 42, 0.68);
+    color: #cbd5e1;
+    font-size: 10px;
+    font-weight: 750;
+}
+
+.outcome-flag-good {
+    color: #34d399;
+    border-color: rgba(52, 211, 153, 0.28);
+    background: rgba(16, 185, 129, 0.12);
+}
+
 .outcome-reason {
-    grid-column: 1 / -1;
+    grid-area: reason;
     color: #94a3b8;
     font-size: 11px;
     line-height: 1.35;
@@ -4153,19 +4208,23 @@ td small {
     font-size: 12px;
 }
 
-@media (max-width: 1100px) {
+@media (max-width: 760px) {
     .outcome-stats {
         grid-template-columns: repeat(4, minmax(74px, 1fr));
     }
 
-    .outcome-row {
+    .outcome-rows {
         grid-template-columns: 1fr;
+    }
+
+    .outcome-row {
+        grid-template-columns: 1fr auto;
         align-items: flex-start;
     }
 
     .outcome-side {
-        align-items: flex-start;
-        flex-direction: row;
+        align-items: flex-end;
+        flex-direction: column;
         justify-content: flex-start;
     }
 }
@@ -4177,6 +4236,26 @@ td small {
 
     .signal-outcomes-panel {
         padding: 14px;
+    }
+
+    .outcome-rows {
+        grid-template-columns: 1fr;
+    }
+
+    .outcome-row {
+        grid-template-columns: 1fr;
+        grid-template-areas:
+            "main"
+            "side"
+            "plan"
+            "flag"
+            "reason";
+    }
+
+    .outcome-side {
+        align-items: flex-start;
+        flex-direction: row;
+        justify-content: flex-start;
     }
 }
 
@@ -4203,13 +4282,13 @@ td small {
     $regime_html
     $macro_html
     $signal_desk_html
-    $signal_outcomes_html
 
     $nav_tabs
 
     <div id="potential">$potential_section</div>
     <div id="active">$active_section</div>
     <div id="sectors">$sector_snapshot</div>
+    $signal_outcomes_html
     <div id="desk">$desk_table</div>
 
     <div class="footer-note">
