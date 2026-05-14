@@ -68,6 +68,9 @@ MARKET_REGIME_FILE = "market_regime.json"
 SIGNAL_DESK_FILE = "signal_desk.json"
 SIGNAL_STATE_FILE = "signal_state.json"
 SUPPRESSED_SIGNALS_FILE = "suppressed_signals.csv"
+SIGNAL_OUTCOMES_FILE = "signal_outcomes.csv"
+SIGNAL_OUTCOMES_SUMMARY_FILE = "signal_outcomes_summary.json"
+SIGNAL_ENGINE_STRATEGY_VERSION = "v1.6_reclaim_macd_earnings_lunch_outcomes"
 
 # State retention.
 ACTIVE_STALE_MINUTES = 10
@@ -636,6 +639,555 @@ def append_suppressed_signal(row: Dict[str, Any]) -> None:
             writer.writeheader()
 
         writer.writerow({k: row.get(k, "") for k in fieldnames})
+
+
+# ==============================================================
+# SIGNAL OUTCOME TRACKING
+# ==============================================================
+
+OUTCOME_FINAL_STATUSES = {
+    "T2_HIT",
+    "T1_HIT",
+    "STOP_HIT",
+    "INVALIDATED_BEFORE_ENTRY",
+    "INVALIDATED_AFTER_ENTRY",
+    "WATCH_REMOVED",
+    "MISSED_WINDOW",
+    "EXPIRED",
+}
+
+OUTCOME_FIELDNAMES = [
+    "signal_id",
+    "session_date",
+    "symbol",
+    "company_name",
+    "setup_type",
+    "setup_label",
+    "setup_bucket",
+    "strategy_version",
+    "first_seen_time",
+    "watch_time",
+    "trigger_ready_time",
+    "active_time",
+    "invalidated_time",
+    "completed_time",
+    "last_checked",
+    "latest_signal_status",
+    "outcome_status",
+    "outcome_detail",
+    "invalidation_reason",
+    "invalidation_category",
+    "entry",
+    "stop",
+    "target_1",
+    "target_2",
+    "reward_risk",
+    "confidence",
+    "scanner_score",
+    "live_signal_score",
+    "market_phase",
+    "event_context",
+    "earnings_reaction_trade",
+    "lunch_caution",
+    "current_price",
+    "vwap",
+    "ema9",
+    "hod",
+    "highest_price_after_ready",
+    "lowest_price_after_ready",
+    "highest_price_after_active",
+    "lowest_price_after_active",
+    "hit_entry",
+    "hit_t1",
+    "hit_t2",
+    "hit_stop",
+    "max_profit_pct",
+    "max_loss_pct",
+    "best_r_multiple",
+    "final_r_multiple",
+    "notes",
+]
+
+
+def _csv_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    return safe_str(value, "").strip().lower() in {"1", "true", "yes", "y"}
+
+
+def _outcome_float(row: Dict[str, Any], key: str, default: float = 0.0) -> float:
+    return safe_float(row.get(key), default)
+
+
+def _outcome_status_is_final(status: Any) -> bool:
+    return safe_str(status, "").upper() in OUTCOME_FINAL_STATUSES
+
+
+def load_signal_outcomes() -> List[Dict[str, Any]]:
+    path = Path(SIGNAL_OUTCOMES_FILE)
+    if not path.exists():
+        return []
+
+    try:
+        with path.open("r", encoding="utf-8", newline="") as f:
+            return list(csv.DictReader(f))
+    except Exception as exc:
+        decision_log("-", "OUTCOME_LOAD_ERROR", error=str(exc))
+        return []
+
+
+def write_signal_outcomes(rows: List[Dict[str, Any]]) -> None:
+    path = Path(SIGNAL_OUTCOMES_FILE)
+    tmp = path.with_suffix(".csv.tmp")
+
+    cleaned_rows = []
+    for row in rows:
+        cleaned_rows.append({key: row.get(key, "") for key in OUTCOME_FIELDNAMES})
+
+    with tmp.open("w", encoding="utf-8", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=OUTCOME_FIELDNAMES)
+        writer.writeheader()
+        writer.writerows(cleaned_rows)
+
+    tmp.replace(path)
+
+
+def _signal_time_for_id(signal: Dict[str, Any]) -> str:
+    for key in ["ready_since", "triggered_at", "detected_at", "invalidated_at", "updated_at", "last_checked"]:
+        value = safe_str(signal.get(key), "")
+        if value:
+            dt = parse_iso_dt(value)
+            if dt is not None:
+                return dt.astimezone(ZoneInfo("America/New_York")).strftime("%H%M") if ZoneInfo else dt.strftime("%H%M")
+            return re.sub(r"[^0-9]", "", value)[-4:] or "0000"
+    return ny_now().strftime("%H%M")
+
+
+def make_signal_id(signal: Dict[str, Any], existing_rows: Optional[List[Dict[str, Any]]] = None) -> str:
+    symbol = normalize_symbol(signal.get("symbol"))
+    setup = safe_str(signal.get("setup_type"), "SETUP").upper().replace(" ", "_")
+    sess = safe_str(signal.get("session_date"), session_date_str())
+    base_time = _signal_time_for_id(signal)
+    base = f"{sess}_{symbol}_{base_time}_{setup}"
+
+    if not existing_rows:
+        return base
+
+    existing_ids = {safe_str(r.get("signal_id"), "") for r in existing_rows}
+    if base not in existing_ids:
+        return base
+
+    # If the same base exists but is still open, reuse it.
+    for row in existing_rows:
+        if safe_str(row.get("signal_id"), "") == base and not _outcome_status_is_final(row.get("outcome_status")):
+            return base
+
+    # Otherwise create a new repeat suffix.
+    n = 2
+    while f"{base}_{n}" in existing_ids:
+        n += 1
+    return f"{base}_{n}"
+
+
+def find_open_outcome_row(symbol: str, rows: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    symbol = normalize_symbol(symbol)
+    candidates = [
+        row for row in rows
+        if normalize_symbol(row.get("symbol")) == symbol
+        and not _outcome_status_is_final(row.get("outcome_status"))
+    ]
+
+    if not candidates:
+        return None
+
+    def sort_key(row: Dict[str, Any]) -> str:
+        return safe_str(row.get("last_checked") or row.get("first_seen_time"), "")
+
+    candidates.sort(key=sort_key, reverse=True)
+    return candidates[0]
+
+
+def initial_outcome_row(signal: Dict[str, Any], existing_rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+    symbol = normalize_symbol(signal.get("symbol"))
+    signal_id = safe_str(signal.get("signal_id"), "") or make_signal_id(signal, existing_rows)
+    now_text = iso_now_et()
+    first_seen = (
+        safe_str(signal.get("detected_at"), "")
+        or safe_str(signal.get("ready_since"), "")
+        or safe_str(signal.get("triggered_at"), "")
+        or safe_str(signal.get("updated_at"), "")
+        or now_text
+    )
+
+    return {
+        "signal_id": signal_id,
+        "session_date": safe_str(signal.get("session_date"), session_date_str()),
+        "symbol": symbol,
+        "company_name": safe_str(signal.get("company_name"), ""),
+        "setup_type": safe_str(signal.get("setup_type"), ""),
+        "setup_label": safe_str(signal.get("setup_label"), ""),
+        "setup_bucket": safe_str(signal.get("setup_bucket"), ""),
+        "strategy_version": SIGNAL_ENGINE_STRATEGY_VERSION,
+        "first_seen_time": first_seen,
+        "watch_time": "",
+        "trigger_ready_time": "",
+        "active_time": "",
+        "invalidated_time": "",
+        "completed_time": "",
+        "last_checked": now_text,
+        "latest_signal_status": "",
+        "outcome_status": "OPEN",
+        "outcome_detail": "",
+        "invalidation_reason": "",
+        "invalidation_category": "",
+        "entry": "",
+        "stop": "",
+        "target_1": "",
+        "target_2": "",
+        "reward_risk": "",
+        "confidence": "",
+        "scanner_score": "",
+        "live_signal_score": "",
+        "market_phase": "",
+        "event_context": "",
+        "earnings_reaction_trade": "",
+        "lunch_caution": "",
+        "current_price": "",
+        "vwap": "",
+        "ema9": "",
+        "hod": "",
+        "highest_price_after_ready": "",
+        "lowest_price_after_ready": "",
+        "highest_price_after_active": "",
+        "lowest_price_after_active": "",
+        "hit_entry": "",
+        "hit_t1": "",
+        "hit_t2": "",
+        "hit_stop": "",
+        "max_profit_pct": "",
+        "max_loss_pct": "",
+        "best_r_multiple": "",
+        "final_r_multiple": "",
+        "notes": "",
+    }
+
+
+def update_one_outcome(row: Dict[str, Any], signal: Dict[str, Any]) -> Dict[str, Any]:
+    now_text = iso_now_et()
+    status = normalize_status(signal.get("signal_status"))
+    price = safe_float(signal.get("price"), 0.0)
+    entry = safe_float(signal.get("entry_trigger"), _outcome_float(row, "entry", 0.0))
+    stop = safe_float(signal.get("stop_loss"), _outcome_float(row, "stop", 0.0))
+    target_1 = safe_float(signal.get("target_1"), _outcome_float(row, "target_1", 0.0))
+    target_2 = safe_float(signal.get("target_2"), _outcome_float(row, "target_2", 0.0))
+    risk = entry - stop if entry > 0 and stop > 0 and entry > stop else 0.0
+
+    if signal.get("signal_id"):
+        row["signal_id"] = safe_str(signal.get("signal_id"), row.get("signal_id", ""))
+
+    row.update({
+        "session_date": safe_str(signal.get("session_date"), row.get("session_date", session_date_str())),
+        "symbol": normalize_symbol(signal.get("symbol") or row.get("symbol")),
+        "company_name": safe_str(signal.get("company_name"), row.get("company_name", "")),
+        "setup_type": safe_str(signal.get("setup_type"), row.get("setup_type", "")),
+        "setup_label": safe_str(signal.get("setup_label"), row.get("setup_label", "")),
+        "setup_bucket": safe_str(signal.get("setup_bucket"), row.get("setup_bucket", "")),
+        "strategy_version": SIGNAL_ENGINE_STRATEGY_VERSION,
+        "last_checked": now_text,
+        "latest_signal_status": status,
+        "entry": round(entry, 4) if entry > 0 else row.get("entry", ""),
+        "stop": round(stop, 4) if stop > 0 else row.get("stop", ""),
+        "target_1": round(target_1, 4) if target_1 > 0 else row.get("target_1", ""),
+        "target_2": round(target_2, 4) if target_2 > 0 else row.get("target_2", ""),
+        "reward_risk": safe_float(signal.get("reward_risk"), _outcome_float(row, "reward_risk", 0.0)),
+        "confidence": safe_float(signal.get("confidence"), _outcome_float(row, "confidence", 0.0)),
+        "scanner_score": safe_float(signal.get("scanner_score"), _outcome_float(row, "scanner_score", 0.0)),
+        "live_signal_score": safe_float(signal.get("live_signal_score"), _outcome_float(row, "live_signal_score", 0.0)),
+        "market_phase": safe_str(signal.get("market_phase"), ""),
+        "event_context": safe_str(signal.get("event_context"), row.get("event_context", "")),
+        "earnings_reaction_trade": bool(signal.get("earnings_reaction_trade")),
+        "lunch_caution": bool(signal.get("lunch_caution")) or safe_str(signal.get("actionability"), "").upper() == "LUNCH_CAUTION",
+        "current_price": round(price, 4) if price > 0 else row.get("current_price", ""),
+        "vwap": safe_float(signal.get("vwap"), _outcome_float(row, "vwap", 0.0)),
+        "ema9": safe_float(signal.get("ema9"), _outcome_float(row, "ema9", 0.0)),
+        "hod": safe_float(signal.get("hod"), _outcome_float(row, "hod", 0.0)),
+        "invalidation_reason": safe_str(signal.get("invalidation_reason"), row.get("invalidation_reason", "")),
+        "invalidation_category": safe_str(signal.get("invalidation_category"), row.get("invalidation_category", "")),
+    })
+
+    if status == "WATCH" and not row.get("watch_time"):
+        row["watch_time"] = safe_str(signal.get("detected_at") or signal.get("updated_at") or now_text)
+    if status in {"TRIGGER_READY", "ACTIVE_SIGNAL", "INVALIDATED"} and not row.get("trigger_ready_time"):
+        ready_time = safe_str(signal.get("ready_since") or signal.get("detected_at") or signal.get("updated_at") or now_text)
+        row["trigger_ready_time"] = ready_time
+    if status == "ACTIVE_SIGNAL" and not row.get("active_time"):
+        row["active_time"] = safe_str(signal.get("triggered_at") or signal.get("updated_at") or now_text)
+    if status == "INVALIDATED":
+        row["invalidated_time"] = safe_str(signal.get("invalidated_at") or signal.get("updated_at") or now_text)
+
+    # Track high/low after Trigger Ready and after Active using every 60-second Signal Desk check.
+    if price > 0 and row.get("trigger_ready_time"):
+        prior_high_ready = _outcome_float(row, "highest_price_after_ready", price)
+        prior_low_ready = _outcome_float(row, "lowest_price_after_ready", price)
+        row["highest_price_after_ready"] = round(max(prior_high_ready, price), 4)
+        row["lowest_price_after_ready"] = round(min(prior_low_ready, price), 4)
+
+    if price > 0 and (row.get("active_time") or status == "ACTIVE_SIGNAL"):
+        prior_high_active = _outcome_float(row, "highest_price_after_active", price)
+        prior_low_active = _outcome_float(row, "lowest_price_after_active", price)
+        row["highest_price_after_active"] = round(max(prior_high_active, price), 4)
+        row["lowest_price_after_active"] = round(min(prior_low_active, price), 4)
+
+    highest_ready = _outcome_float(row, "highest_price_after_ready", 0.0)
+    lowest_ready = _outcome_float(row, "lowest_price_after_ready", 0.0)
+    highest_active = _outcome_float(row, "highest_price_after_active", 0.0)
+    lowest_active = _outcome_float(row, "lowest_price_after_active", 0.0)
+
+    high_ref = highest_active or highest_ready
+    low_ref = lowest_active or lowest_ready
+
+    hit_entry = _csv_bool(row.get("hit_entry")) or (entry > 0 and high_ref >= entry)
+    hit_t1 = _csv_bool(row.get("hit_t1")) or (target_1 > 0 and high_ref >= target_1)
+    hit_t2 = _csv_bool(row.get("hit_t2")) or (target_2 > 0 and high_ref >= target_2)
+    hit_stop = _csv_bool(row.get("hit_stop")) or (hit_entry and stop > 0 and low_ref > 0 and low_ref <= stop)
+
+    row["hit_entry"] = hit_entry
+    row["hit_t1"] = hit_t1
+    row["hit_t2"] = hit_t2
+    row["hit_stop"] = hit_stop
+
+    if entry > 0 and high_ref > 0:
+        row["max_profit_pct"] = round(pct_change(high_ref, entry), 2)
+    if entry > 0 and low_ref > 0:
+        row["max_loss_pct"] = round((entry - low_ref) / entry * 100.0, 2)
+
+    best_r = 0.0
+    if risk > 0 and high_ref > 0:
+        best_r = max(0.0, (high_ref - entry) / risk)
+        row["best_r_multiple"] = round(best_r, 2)
+
+    # Outcome priority.
+    outcome_status = safe_str(row.get("outcome_status"), "OPEN").upper() or "OPEN"
+    outcome_detail = safe_str(row.get("outcome_detail"), "")
+
+    if hit_t2:
+        outcome_status = "T2_HIT"
+        outcome_detail = "Target 2 hit after signal tracking began."
+        row["completed_time"] = row.get("completed_time") or now_text
+        row["final_r_multiple"] = round((target_2 - entry) / risk, 2) if risk > 0 else ""
+    elif hit_t1:
+        outcome_status = "T1_HIT"
+        outcome_detail = "Target 1 hit after signal tracking began."
+        row["completed_time"] = row.get("completed_time") or now_text
+        row["final_r_multiple"] = round((target_1 - entry) / risk, 2) if risk > 0 else ""
+    elif hit_stop:
+        outcome_status = "STOP_HIT"
+        outcome_detail = "Stop level touched after entry trigger was considered hit."
+        row["completed_time"] = row.get("completed_time") or now_text
+        row["final_r_multiple"] = -1.0
+    elif status == "INVALIDATED":
+        if hit_entry:
+            outcome_status = "INVALIDATED_AFTER_ENTRY"
+            outcome_detail = safe_str(signal.get("invalidation_reason"), "Signal invalidated after entry trigger was touched.")
+            row["final_r_multiple"] = round(best_r, 2) if best_r > 0 else 0.0
+        else:
+            outcome_status = "INVALIDATED_BEFORE_ENTRY"
+            outcome_detail = safe_str(signal.get("invalidation_reason"), "Signal invalidated before entry trigger.")
+            row["final_r_multiple"] = 0.0
+        row["completed_time"] = row.get("completed_time") or row.get("invalidated_time") or now_text
+    elif status == "ACTIVE_SIGNAL":
+        outcome_status = "ACTIVE_SIGNAL"
+        outcome_detail = "Active signal being monitored."
+    elif status == "TRIGGER_READY":
+        outcome_status = "TRIGGER_READY"
+        outcome_detail = "Trigger Ready signal being monitored."
+    elif status == "WATCH":
+        outcome_status = "WATCH"
+        outcome_detail = "Watch candidate being monitored."
+
+    row["outcome_status"] = outcome_status
+    row["outcome_detail"] = outcome_detail
+
+    # Compact notes for later review.
+    notes = []
+    if bool(signal.get("lunch_caution")) or safe_str(signal.get("actionability"), "").upper() == "LUNCH_CAUTION":
+        notes.append("Lunch caution/manual review only.")
+    if bool(signal.get("earnings_reaction_trade")):
+        notes.append("Earnings reaction only.")
+    event_warning = safe_str(signal.get("event_risk_warning"), "")
+    if event_warning:
+        notes.append(event_warning)
+    row["notes"] = " | ".join(dict.fromkeys([n for n in notes if n]))
+
+    return row
+
+
+def update_signal_outcomes(new_state: Dict[str, Dict[str, Any]], prior_state: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
+    """
+    Persistent signal performance tracker.
+
+    This tracks signal behavior, not the user's manual trades. It keeps history
+    across strategy changes and tags every row with SIGNAL_ENGINE_STRATEGY_VERSION.
+    """
+    rows = load_signal_outcomes()
+    rows_by_id = {safe_str(row.get("signal_id"), ""): row for row in rows if safe_str(row.get("signal_id"), "")}
+    changed = 0
+    current_symbols = set()
+
+    for symbol, signal in new_state.items():
+        if not signal:
+            continue
+
+        status = normalize_status(signal.get("signal_status"))
+        if status in {"", "WAIT"}:
+            continue
+
+        symbol = normalize_symbol(symbol or signal.get("symbol"))
+        current_symbols.add(symbol)
+
+        existing_row = None
+        signal_id = safe_str(signal.get("signal_id"), "")
+        if signal_id and signal_id in rows_by_id:
+            existing_row = rows_by_id[signal_id]
+
+        if existing_row is None:
+            existing_row = find_open_outcome_row(symbol, rows)
+
+        if existing_row is None:
+            existing_row = initial_outcome_row(signal, rows)
+            rows.append(existing_row)
+            rows_by_id[safe_str(existing_row.get("signal_id"), "")] = existing_row
+        else:
+            # Ensure current signal payload carries the persistent id into signal_state.json.
+            signal["signal_id"] = safe_str(existing_row.get("signal_id"), "")
+
+        signal["signal_id"] = safe_str(existing_row.get("signal_id"), "") or make_signal_id(signal, rows)
+
+        before = json.dumps(existing_row, sort_keys=True, default=str)
+        updated = update_one_outcome(existing_row, signal)
+        after = json.dumps(updated, sort_keys=True, default=str)
+        if before != after:
+            changed += 1
+
+    # Mark WATCH rows that disappeared from Signal Desk as removed. Protected Ready/Active
+    # should normally become INVALIDATED in new_state instead of silently disappearing.
+    now_text = iso_now_et()
+    prior_watch_symbols = {
+        normalize_symbol(sym)
+        for sym, signal in prior_state.items()
+        if normalize_status(signal.get("signal_status")) == "WATCH"
+    }
+    for row in rows:
+        symbol = normalize_symbol(row.get("symbol"))
+        if not symbol or symbol in current_symbols:
+            continue
+        if symbol in prior_watch_symbols and safe_str(row.get("outcome_status"), "").upper() == "WATCH":
+            row["last_checked"] = now_text
+            row["completed_time"] = row.get("completed_time") or now_text
+            row["outcome_status"] = "WATCH_REMOVED"
+            row["outcome_detail"] = "WATCH candidate removed because it no longer passed live criteria or fell out of focus."
+            changed += 1
+
+    # Keep history but stable ordering.
+    rows.sort(key=lambda r: safe_str(r.get("first_seen_time"), ""))
+
+    try:
+        write_signal_outcomes(rows)
+    except Exception as exc:
+        decision_log("-", "OUTCOME_WRITE_ERROR", error=str(exc))
+
+    summary = summarize_signal_outcomes(rows)
+    try:
+        write_json(SIGNAL_OUTCOMES_SUMMARY_FILE, summary)
+    except Exception as exc:
+        decision_log("-", "OUTCOME_SUMMARY_WRITE_ERROR", error=str(exc))
+
+    decision_log(
+        "-",
+        "OUTCOMES_UPDATED",
+        total=len(rows),
+        changed=changed,
+        today=summary.get("today", {}).get("total", 0),
+        active=summary.get("today", {}).get("active_signal", 0),
+        ready=summary.get("today", {}).get("trigger_ready", 0),
+        t1=summary.get("today", {}).get("t1_hit", 0),
+        stop=summary.get("today", {}).get("stop_hit", 0),
+    )
+
+    return summary
+
+
+def summarize_signal_outcomes(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+    today = session_date_str()
+    today_rows = [r for r in rows if safe_str(r.get("session_date"), "") == today]
+
+    counts = {
+        "total": len(today_rows),
+        "watch": 0,
+        "trigger_ready": 0,
+        "active_signal": 0,
+        "t1_hit": 0,
+        "t2_hit": 0,
+        "stop_hit": 0,
+        "invalidated_before_entry": 0,
+        "invalidated_after_entry": 0,
+        "watch_removed": 0,
+        "open": 0,
+        "completed": 0,
+    }
+
+    setup_counts: Dict[str, Dict[str, int]] = {}
+
+    for row in today_rows:
+        status = safe_str(row.get("outcome_status"), "").upper()
+        setup = safe_str(row.get("setup_type"), "UNKNOWN") or "UNKNOWN"
+        setup_counts.setdefault(setup, {"total": 0, "t1_hit": 0, "t2_hit": 0, "stop_hit": 0, "invalidated": 0})
+        setup_counts[setup]["total"] += 1
+
+        if status == "WATCH":
+            counts["watch"] += 1
+            counts["open"] += 1
+        elif status == "TRIGGER_READY":
+            counts["trigger_ready"] += 1
+            counts["open"] += 1
+        elif status == "ACTIVE_SIGNAL":
+            counts["active_signal"] += 1
+            counts["open"] += 1
+        elif status == "T1_HIT":
+            counts["t1_hit"] += 1
+            counts["completed"] += 1
+            setup_counts[setup]["t1_hit"] += 1
+        elif status == "T2_HIT":
+            counts["t2_hit"] += 1
+            counts["completed"] += 1
+            setup_counts[setup]["t2_hit"] += 1
+        elif status == "STOP_HIT":
+            counts["stop_hit"] += 1
+            counts["completed"] += 1
+            setup_counts[setup]["stop_hit"] += 1
+        elif status == "INVALIDATED_BEFORE_ENTRY":
+            counts["invalidated_before_entry"] += 1
+            counts["completed"] += 1
+            setup_counts[setup]["invalidated"] += 1
+        elif status == "INVALIDATED_AFTER_ENTRY":
+            counts["invalidated_after_entry"] += 1
+            counts["completed"] += 1
+            setup_counts[setup]["invalidated"] += 1
+        elif status == "WATCH_REMOVED":
+            counts["watch_removed"] += 1
+            counts["completed"] += 1
+
+    recent = sorted(today_rows, key=lambda r: safe_str(r.get("last_checked"), ""), reverse=True)[:12]
+
+    return {
+        "generated_at_et": iso_now_et(),
+        "strategy_version": SIGNAL_ENGINE_STRATEGY_VERSION,
+        "today_session": today,
+        "today": counts,
+        "by_setup_type": setup_counts,
+        "recent": recent,
+        "file": SIGNAL_OUTCOMES_FILE,
+    }
 
 
 # ==============================================================
@@ -3093,6 +3645,8 @@ def signal_base(
 
     return {
         "symbol": symbol,
+        "signal_id": "",
+        "strategy_version": SIGNAL_ENGINE_STRATEGY_VERSION,
         "signal_status": status,
         "setup_type": setup_type or "MONITORING",
         "setup_label": setup_display_label(row, setup_type or "MONITORING"),
@@ -4503,6 +5057,7 @@ def run_signal_engine() -> None:
                 )
             rejected_candidates.append(diagnostic)
 
+    outcome_summary = update_signal_outcomes(new_state, prior_state)
     signals = build_signal_outputs(new_state)
     counts = summarize_signals(signals)
 
@@ -4527,6 +5082,7 @@ def run_signal_engine() -> None:
             "monitor_count": len(monitor_symbols),
         },
         "counts": counts,
+        "outcomes": outcome_summary,
         "signals": signals,
         "rejected_candidates": rejected_candidates,
     }
@@ -4564,6 +5120,7 @@ def run_signal_engine() -> None:
     log(f"  {SIGNAL_DESK_FILE}")
     log(f"  {SIGNAL_STATE_FILE}")
     log(f"  {SIGNAL_DECISION_LOG_FILE}")
+    log(f"  {SIGNAL_OUTCOMES_FILE}")
     log(f"Counts: {counts}")
     log(f"Rejected diagnostics: {len(rejected_candidates)}")
 
