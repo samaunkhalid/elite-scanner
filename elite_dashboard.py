@@ -698,7 +698,7 @@ def signal_time_value(signal):
 
     if status in ["ACTIVE_SIGNAL", "ACTIVE"]:
         keys = ["triggered_at", "trigger_time", "signal_triggered_at", "activated_at", "timestamp"]
-    elif status in ["TRIGGER_READY", "READY"]:
+    elif status in ["TRIGGER_READY", "TRIGGER_TOUCHED", "READY"]:
         keys = ["ready_since", "ready_at", "detected_at", "timestamp"]
     elif status in ["INVALIDATED", "VOID"]:
         keys = ["invalidated_at", "invalid_time", "last_checked", "timestamp"]
@@ -757,7 +757,7 @@ def signal_time_label(signal):
 
     if status in ["ACTIVE_SIGNAL", "ACTIVE"]:
         return f"Triggered {time_text}"
-    if status in ["TRIGGER_READY", "READY"]:
+    if status in ["TRIGGER_READY", "TRIGGER_TOUCHED", "READY"]:
         return f"Ready since {time_text}"
     if status in ["INVALIDATED", "VOID"]:
         return f"Invalidated {time_text}"
@@ -816,8 +816,14 @@ def build_signal_detail_html(signal):
 
     status = normalize_signal_status(signal.get("signal_status"))
     lunch_caution = truthy(signal.get("lunch_caution")) or safe_str(signal.get("actionability"), "").upper() == "LUNCH_CAUTION"
-    status_text = "TRIGGER READY — LUNCH CAUTION" if lunch_caution and status in ["TRIGGER_READY", "READY"] else status.replace("_", " ")
-    status_class = "signal-lunch" if lunch_caution and status in ["TRIGGER_READY", "READY"] else get_signal_status_class(status)
+    status_text = (
+        "TRIGGER READY — LUNCH CAUTION"
+        if lunch_caution and status in ["TRIGGER_READY", "TRIGGER_TOUCHED", "READY"]
+        else "TRIGGER TOUCHED — CONFIRMING"
+        if status == "TRIGGER_TOUCHED"
+        else status.replace("_", " ")
+    )
+    status_class = "signal-lunch" if lunch_caution and status in ["TRIGGER_READY", "TRIGGER_TOUCHED", "READY"] else get_signal_status_class(status)
 
     setup_type = safe_str(signal.get("setup_label") or signal.get("setup_type"), "Setup pending")
     time_label = signal_time_label(signal)
@@ -1632,6 +1638,8 @@ def get_signal_status_class(status):
 
     if status in ["ACTIVE_SIGNAL", "ACTIVE"]:
         return "signal-active"
+    if status in ["TRIGGER_TOUCHED"]:
+        return "signal-touched"
     if status in ["TRIGGER_READY", "READY"]:
         return "signal-ready"
     if status in ["WATCH", "WATCHLIST"]:
@@ -1711,6 +1719,7 @@ def signal_sort_key(signal):
         "ACTIVE_SIGNAL": 1,
         "ACTIVE": 1,
         "TRIGGER_READY": 2,
+        "TRIGGER_TOUCHED": 2,
         "READY": 2,
         "WATCH": 3,
         "WATCHLIST": 3,
@@ -1755,7 +1764,7 @@ def signal_display_sort_key(signal):
     if status in ["ACTIVE_SIGNAL", "ACTIVE"]:
         return (-confidence, -rr, -timestamp, symbol)
 
-    if status in ["TRIGGER_READY", "READY"]:
+    if status in ["TRIGGER_READY", "TRIGGER_TOUCHED", "READY"]:
         return (-confidence, -rr, -timestamp, symbol)
 
     if status in ["WATCH", "WATCHLIST"]:
@@ -1776,7 +1785,7 @@ def signal_status_group(signal):
 
     if status in ["ACTIVE_SIGNAL", "ACTIVE"]:
         return "active"
-    if status in ["TRIGGER_READY", "READY"]:
+    if status in ["TRIGGER_READY", "TRIGGER_TOUCHED", "READY"]:
         return "ready"
     if status in ["WATCH", "WATCHLIST"]:
         return "watch"
@@ -1796,8 +1805,14 @@ def build_signal_desk_item(signal, compact=False):
     setup_type = safe_str(signal.get("setup_type"), "Setup pending")
     status = normalize_signal_status(signal.get("signal_status"))
     lunch_caution = truthy(signal.get("lunch_caution")) or safe_str(signal.get("actionability"), "").upper() == "LUNCH_CAUTION"
-    status_text = "LUNCH CAUTION" if lunch_caution and status in ["TRIGGER_READY", "READY"] else status.replace("_", " ")
-    status_class = "signal-lunch" if lunch_caution and status in ["TRIGGER_READY", "READY"] else get_signal_status_class(status)
+    status_text = (
+        "LUNCH CAUTION"
+        if lunch_caution and status in ["TRIGGER_READY", "TRIGGER_TOUCHED", "READY"]
+        else "TOUCHED"
+        if status == "TRIGGER_TOUCHED"
+        else status.replace("_", " ")
+    )
+    status_class = "signal-lunch" if lunch_caution and status in ["TRIGGER_READY", "TRIGGER_TOUCHED", "READY"] else get_signal_status_class(status)
     time_label = signal_time_label(signal)
     href = "#" + html_id_for_symbol(symbol)
 
@@ -2080,6 +2095,7 @@ def load_signal_outcomes_summary():
         "watch": 0,
         "trigger_ready": 0,
         "active_signal": 0,
+        "trigger_touched": 0,
         "t1_hit": 0,
         "t2_hit": 0,
         "stop_hit": 0,
@@ -2098,9 +2114,9 @@ def load_signal_outcomes_summary():
             counts[key] += 1
         if str(row.get("success_without_active", "")).strip().lower() in ["true", "1", "yes", "y"]:
             counts["ready_only_success"] += 1
-        if status in ["WATCH", "TRIGGER_READY", "ACTIVE_SIGNAL"]:
+        if status in ["WATCH", "TRIGGER_READY", "TRIGGER_TOUCHED", "ACTIVE_SIGNAL"]:
             counts["open"] += 1
-        if status not in ["", "WATCH", "TRIGGER_READY", "ACTIVE_SIGNAL"]:
+        if status not in ["", "WATCH", "TRIGGER_READY", "TRIGGER_TOUCHED", "ACTIVE_SIGNAL"]:
             counts["completed"] += 1
 
     recent = sorted(today_rows, key=lambda r: safe_str(r.get("last_checked")), reverse=True)[:12]
@@ -2124,7 +2140,7 @@ def outcome_status_class(status):
         return "outcome-neutral"
     if status in ["ACTIVE_SIGNAL"]:
         return "outcome-active"
-    if status in ["TRIGGER_READY"]:
+    if status in ["TRIGGER_READY", "TRIGGER_TOUCHED"]:
         return "outcome-ready"
     return "outcome-watch"
 
@@ -2140,6 +2156,7 @@ def short_outcome_status(status):
         "WATCH_REMOVED": "WATCH REMOVED",
         "ACTIVE_SIGNAL": "ACTIVE",
         "TRIGGER_READY": "READY",
+        "TRIGGER_TOUCHED": "TOUCHED",
         "WATCH": "WATCH",
     }
     return mapping.get(status, status.replace("_", " "))
@@ -2166,6 +2183,7 @@ def build_signal_outcomes_panel(summary):
         ("Total", safe_int(today.get("total"), 0)),
         ("Open", safe_int(today.get("open"), 0)),
         ("Ready", safe_int(today.get("trigger_ready"), 0)),
+        ("Touched", safe_int(today.get("trigger_touched"), 0)),
         ("Active", safe_int(today.get("active_signal"), 0)),
         ("T1", safe_int(today.get("t1_hit"), 0)),
         ("Ready Win", safe_int(today.get("ready_only_success"), 0)),
@@ -2319,7 +2337,7 @@ def build_signal_desk_panel(signals, rejected_candidates=None):
 
     ready_column = build_signal_desk_column(
         "Trigger Ready",
-        "Near-entry setups waiting for confirmation. Lunch caution items are manual-review only.",
+        "Near-entry setups and touched triggers waiting for confirmation. Lunch caution items are manual-review only.",
         ready_signals,
         "signal-col-ready",
         max_items=8,
@@ -3774,6 +3792,12 @@ body {
     color: #fbbf24;
     background: rgba(245, 158, 11, 0.12);
     border-color: rgba(245, 158, 11, 0.30);
+}
+
+.signal-touched {
+    color: #fde68a;
+    background: rgba(245, 158, 11, 0.18);
+    border-color: rgba(245, 158, 11, 0.48);
 }
 
 .signal-lunch {
