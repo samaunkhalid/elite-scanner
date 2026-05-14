@@ -815,10 +815,11 @@ def build_signal_detail_html(signal):
         return ""
 
     status = normalize_signal_status(signal.get("signal_status"))
-    status_text = status.replace("_", " ")
-    status_class = get_signal_status_class(status)
+    lunch_caution = truthy(signal.get("lunch_caution")) or safe_str(signal.get("actionability"), "").upper() == "LUNCH_CAUTION"
+    status_text = "TRIGGER READY — LUNCH CAUTION" if lunch_caution and status in ["TRIGGER_READY", "READY"] else status.replace("_", " ")
+    status_class = "signal-lunch" if lunch_caution and status in ["TRIGGER_READY", "READY"] else get_signal_status_class(status)
 
-    setup_type = safe_str(signal.get("setup_type"), "Setup pending")
+    setup_type = safe_str(signal.get("setup_label") or signal.get("setup_type"), "Setup pending")
     time_label = signal_time_label(signal)
     confidence = safe_float(signal.get("confidence"), 0)
 
@@ -834,6 +835,15 @@ def build_signal_detail_html(signal):
     confidence_html = f'<span>Confidence {esc(confidence_text)}</span>'
 
     reason_html = f'<div class="signal-reason"><strong>Reason:</strong> {esc(reason)}</div>' if reason else ""
+    event_warning = safe_str(signal.get("event_risk_warning"), "")
+    lunch_warning = safe_str(signal.get("entry_warning"), "") if lunch_caution else ""
+    warning_text = event_warning or lunch_warning
+    warning_label = "Lunch Caution" if lunch_caution else "Event Risk"
+    warning_class = "signal-reason event-warning lunch-warning" if lunch_caution else "signal-reason event-warning"
+    event_warning_html = (
+        f'<div class="{warning_class}"><strong>{esc(warning_label)}:</strong> {esc(warning_text)}</div>'
+        if warning_text else ""
+    )
 
     # WATCH is not a trade setup yet. Keep it intentionally minimal so it does
     # not look actionable.
@@ -854,6 +864,7 @@ def build_signal_detail_html(signal):
                 {confidence_html}
             </div>
 
+            {event_warning_html}
             {reason_html}
         </div>
         """
@@ -882,6 +893,7 @@ def build_signal_detail_html(signal):
                 {confidence_html}
             </div>
 
+            {event_warning_html}
             {failed_html}
         </div>
         """
@@ -921,6 +933,7 @@ def build_signal_detail_html(signal):
                 <div><span>Conf.</span><b>{confidence_text}</b></div>
             </div>
 
+            {event_warning_html}
             {reason_html}
             {invalidation_html}
         </div>
@@ -1782,14 +1795,19 @@ def build_signal_desk_item(signal, compact=False):
     symbol = safe_str(signal.get("symbol"), "—").upper()
     setup_type = safe_str(signal.get("setup_type"), "Setup pending")
     status = normalize_signal_status(signal.get("signal_status"))
-    status_text = status.replace("_", " ")
-    status_class = get_signal_status_class(status)
+    lunch_caution = truthy(signal.get("lunch_caution")) or safe_str(signal.get("actionability"), "").upper() == "LUNCH_CAUTION"
+    status_text = "LUNCH CAUTION" if lunch_caution and status in ["TRIGGER_READY", "READY"] else status.replace("_", " ")
+    status_class = "signal-lunch" if lunch_caution and status in ["TRIGGER_READY", "READY"] else get_signal_status_class(status)
     time_label = signal_time_label(signal)
     href = "#" + html_id_for_symbol(symbol)
 
     confidence = safe_float(signal.get("confidence"), 0)
     confidence_text = f"{confidence:.0f}%" if confidence > 0 else "—"
     time_html = f'<span class="signal-desk-time">{esc(time_label)}</span>' if time_label else ""
+    lunch_note_html = (
+        '<div class="signal-desk-lunch-warning">Lunch caution: manual chart confirmation only; no automatic Active Signal.</div>'
+        if lunch_caution else ""
+    )
 
     if compact or status in ["WATCH", "WATCHLIST"]:
         return f"""
@@ -1803,6 +1821,7 @@ def build_signal_desk_item(signal, compact=False):
                 <b>{confidence_text}</b>
             </div>
             {time_html}
+            {lunch_note_html}
         </div>
         """
 
@@ -1821,6 +1840,7 @@ def build_signal_desk_item(signal, compact=False):
             </div>
             <div class="signal-desk-setup">{esc(setup_type)}</div>
             {time_html}
+            {lunch_note_html}
             <div class="signal-desk-plan">
                 <span>Entry <b>{entry}</b></span>
                 <span>Stop <b>{stop}</b></span>
@@ -2106,7 +2126,7 @@ def build_signal_desk_panel(signals, rejected_candidates=None):
 
     ready_column = build_signal_desk_column(
         "Trigger Ready",
-        "Near-entry setups waiting for confirmation.",
+        "Near-entry setups waiting for confirmation. Lunch caution items are manual-review only.",
         ready_signals,
         "signal-col-ready",
         max_items=8,
@@ -3394,6 +3414,29 @@ body {
     color: #e5e7eb;
 }
 
+.event-warning {
+    border-left: 3px solid #f59e0b;
+    padding-left: 8px;
+    color: #fde68a;
+}
+
+.lunch-warning {
+    border-left-color: #ef4444;
+    color: #fecaca;
+    background: rgba(239, 68, 68, 0.06);
+    border-radius: 8px;
+    padding: 7px 8px;
+}
+
+.signal-desk-lunch-warning {
+    margin-top: 5px;
+    color: #fecaca;
+    font-size: 10px;
+    line-height: 1.35;
+    border-left: 3px solid #ef4444;
+    padding-left: 7px;
+}
+
 .compact-empty {
     padding: 14px 16px;
     max-width: 420px;
@@ -3534,6 +3577,12 @@ body {
     color: #fbbf24;
     background: rgba(245, 158, 11, 0.12);
     border-color: rgba(245, 158, 11, 0.30);
+}
+
+.signal-lunch {
+    color: #fecaca;
+    background: rgba(239, 68, 68, 0.16);
+    border-color: rgba(239, 68, 68, 0.45);
 }
 
 .signal-watch {
