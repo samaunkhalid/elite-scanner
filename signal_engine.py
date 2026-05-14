@@ -70,7 +70,7 @@ SIGNAL_STATE_FILE = "signal_state.json"
 SUPPRESSED_SIGNALS_FILE = "suppressed_signals.csv"
 SIGNAL_OUTCOMES_FILE = "signal_outcomes.csv"
 SIGNAL_OUTCOMES_SUMMARY_FILE = "signal_outcomes_summary.json"
-SIGNAL_ENGINE_STRATEGY_VERSION = "v1.8_locked_ready_compact_outcomes"
+SIGNAL_ENGINE_STRATEGY_VERSION = "v1.9_trigger_touch_confirmation"
 
 # State retention.
 ACTIVE_STALE_MINUTES = 10
@@ -90,6 +90,14 @@ MIN_CONF_WATCH = 60.0
 MIN_CONF_READY = 75.0
 MIN_CONF_READY_LATE_DAY = 80.0
 MIN_CONF_ACTIVE = 80.0
+
+# Trigger-touch confirmation prevents noisy same-candle Active -> Invalidated events.
+# A Trigger Ready setup first becomes TRIGGER_TOUCHED when price reaches entry.
+# It must then hold/confirm on a later refresh before it becomes ACTIVE_SIGNAL.
+TRIGGER_TOUCH_CONFIRM_MIN_SECONDS = 45
+TRIGGER_TOUCH_MAX_MINUTES = 4
+TRIGGER_REJECT_BUFFER_PCT = 0.25
+TRIGGER_WICK_REJECTION_PCT = 0.75
 MAX_QUOTE_SPREAD_FOR_PRICE_PCT = 1.00
 
 # Live participation / VWAP reclaim filters.
@@ -668,6 +676,7 @@ OUTCOME_FIELDNAMES = [
     "first_seen_time",
     "watch_time",
     "trigger_ready_time",
+    "trigger_touched_time",
     "active_time",
     "invalidated_time",
     "completed_time",
@@ -835,6 +844,7 @@ def initial_outcome_row(signal: Dict[str, Any], existing_rows: List[Dict[str, An
         "first_seen_time": first_seen,
         "watch_time": "",
         "trigger_ready_time": "",
+        "trigger_touched_time": "",
         "active_time": "",
         "invalidated_time": "",
         "completed_time": "",
@@ -925,9 +935,11 @@ def update_one_outcome(row: Dict[str, Any], signal: Dict[str, Any]) -> Dict[str,
 
     if status == "WATCH" and not row.get("watch_time"):
         row["watch_time"] = safe_str(signal.get("detected_at") or signal.get("updated_at") or now_text)
-    if status in {"TRIGGER_READY", "ACTIVE_SIGNAL", "INVALIDATED"} and not row.get("trigger_ready_time"):
+    if status in {"TRIGGER_READY", "TRIGGER_TOUCHED", "ACTIVE_SIGNAL", "INVALIDATED"} and not row.get("trigger_ready_time"):
         ready_time = safe_str(signal.get("ready_since") or signal.get("detected_at") or signal.get("updated_at") or now_text)
         row["trigger_ready_time"] = ready_time
+    if status == "TRIGGER_TOUCHED" and not row.get("trigger_touched_time"):
+        row["trigger_touched_time"] = safe_str(signal.get("trigger_touched_at") or signal.get("updated_at") or now_text)
     if status == "ACTIVE_SIGNAL" and not row.get("active_time"):
         row["active_time"] = safe_str(signal.get("triggered_at") or signal.get("updated_at") or now_text)
     if status == "INVALIDATED":
@@ -1037,6 +1049,9 @@ def update_one_outcome(row: Dict[str, Any], signal: Dict[str, Any]) -> Dict[str,
     elif status == "ACTIVE_SIGNAL":
         outcome_status = "ACTIVE_SIGNAL"
         outcome_detail = "Active signal being monitored."
+    elif status == "TRIGGER_TOUCHED":
+        outcome_status = "TRIGGER_TOUCHED"
+        outcome_detail = "Trigger touched; waiting for hold/volume confirmation before Active Signal."
     elif status == "TRIGGER_READY":
         outcome_status = "TRIGGER_READY"
         outcome_detail = "Trigger Ready signal being monitored."
@@ -1168,6 +1183,7 @@ def summarize_signal_outcomes(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
         "total": len(today_rows),
         "watch": 0,
         "trigger_ready": 0,
+        "trigger_touched": 0,
         "active_signal": 0,
         "t1_hit": 0,
         "t2_hit": 0,
@@ -1196,6 +1212,9 @@ def summarize_signal_outcomes(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
             counts["open"] += 1
         elif status == "TRIGGER_READY":
             counts["trigger_ready"] += 1
+            counts["open"] += 1
+        elif status == "TRIGGER_TOUCHED":
+            counts["trigger_touched"] += 1
             counts["open"] += 1
         elif status == "ACTIVE_SIGNAL":
             counts["active_signal"] += 1
@@ -4384,6 +4403,238 @@ def active_confidence_grade(confidence: float) -> str:
     return "MODERATE"
 
 
+def latest_execution_bar(metrics: IntradayMetrics) -> Dict[str, Any]:
+    bars = clean_bars(metrics.execution_bars or [])
+    return bars[-1] if bars else {}
+
+
+def trigger_touch_age_seconds(signal: Dict[str, Any]) -> Optional[float]:
+    touched_at = signal.get("trigger_touched_at")
+    dt = parse_iso_dt(touched_at)
+    if not dt:
+        return None
+    now = ny_now()
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=now.tzinfo)
+    if now.tzinfo and dt.tzinfo:
+        dt = dt.astimezone(now.tzinfo)
+    return max(0.0, (now - dt).total_seconds())
+
+
+def trigger_hold_confirmation(
+    existing: Dict[str, Any],
+    metrics: IntradayMetrics,
+    setup_type: str = "",
+) -> Tuple[bool, str]:
+    """
+    Confirmation layer between TRIGGER_READY and ACTIVE_SIGNAL.
+
+    A trigger touch alone is not enough. This prevents one-candle HOD taps from
+    being marked ACTIVE and then invalidated immediately.
+    """
+    if not metrics.has_data:
+        return False, "No intraday data available for trigger confirmation"
+
+    trigger = safe_float(existing.get("entry_trigger"), 0)
+    if trigger <= 0:
+        return False, "No locked trigger price available"
+
+    if metrics.price < trigger:
+        return False, f"Current price {metrics.price:.2f} is back below trigger {trigger:.2f}"
+
+    if not metrics.above_vwap:
+        return False, "Price is not above VWAP after trigger touch"
+
+    setup = safe_str(setup_type or existing.get("setup_type"), "").upper()
+    reclaim_family = is_reclaim_lifecycle_setup_type(setup)
+
+    # A trigger must survive at least one follow-up refresh before Active.
+    age_seconds = trigger_touch_age_seconds(existing)
+    if age_seconds is not None and age_seconds < TRIGGER_TOUCH_CONFIRM_MIN_SECONDS:
+        return False, (
+            f"Trigger touched {age_seconds:.0f}s ago; waiting for next 1-minute confirmation "
+            f"before Active Signal"
+        )
+
+    last_bar = latest_execution_bar(metrics)
+    close = safe_float(last_bar.get("c"), metrics.price)
+    high = safe_float(last_bar.get("h"), metrics.price)
+    low = safe_float(last_bar.get("l"), metrics.price)
+
+    if close > 0 and close < trigger:
+        return False, f"Latest 1-minute close {close:.2f} did not hold above trigger {trigger:.2f}"
+
+    if high > trigger and close > 0:
+        wick_reject_pct = pct_change(high, max(close, trigger))
+        if wick_reject_pct >= TRIGGER_WICK_REJECTION_PCT and close <= trigger * 1.002:
+            return False, f"Breakout wick rejected near trigger ({wick_reject_pct:.2f}% upper rejection)"
+
+    if not reclaim_family:
+        if metrics.ema9 > 0 and not metrics.price_above_ema9:
+            return False, "Price is below EMA9 after trigger touch"
+
+        if metrics.volume_fading_vs_morning:
+            return False, "Volume faded versus morning reference on trigger confirmation"
+
+        if "HOD" in setup or "BASE" in setup:
+            if not metrics.recent_volume_expanding and (
+                metrics.avg_volume_1m_20 > 0 and metrics.avg_volume_1m_5 < metrics.avg_volume_1m_20 * 0.85
+            ):
+                return False, "Breakout trigger lacks fresh 1-minute volume expansion"
+
+    else:
+        holding, hold_reason = reclaim_lifecycle_holding(existing, metrics)
+        if not holding:
+            return False, hold_reason
+
+        macd_ok, macd_reason = vwap_lifecycle_macd_confirmation(metrics, setup)
+        if not macd_ok:
+            return False, macd_reason
+
+    return True, "Trigger held above entry with valid VWAP/volume confirmation"
+
+
+def make_trigger_touched(
+    existing: Dict[str, Any],
+    row: Dict[str, Any],
+    metrics: IntradayMetrics,
+    phase: str,
+    reason: str = "",
+) -> Dict[str, Any]:
+    """
+    First step after a Trigger Ready entry price is touched.
+
+    This is a protected, non-actionable confirmation state. It stays visible in
+    the Trigger Ready column but is not an Active Signal until a later refresh
+    confirms hold/volume quality.
+    """
+    now_text = iso_now_et()
+    out = dict(existing)
+    symbol = normalize_symbol(existing.get("symbol") or row.get("symbol"))
+
+    setup_type = safe_str(out.get("setup_type"), "")
+    message = reason or "Entry trigger touched; waiting for 1-minute hold/volume confirmation before Active Signal."
+
+    out.update({
+        "symbol": symbol,
+        "signal_status": "TRIGGER_TOUCHED",
+        "actionable": False,
+        "actionability": "TRIGGER_TOUCHED",
+        "trigger_touched_at": out.get("trigger_touched_at") or now_text,
+        "trigger_touched_price": round(metrics.price, 4) if metrics.has_data else out.get("trigger_touched_price", 0),
+        "reason": message,
+        "entry_warning": "Trigger touched; not Active yet. Waiting for confirmation to avoid one-candle fakeout.",
+        "last_checked": now_text,
+        "updated_at": now_text,
+        "market_phase": phase,
+        "price": round(metrics.price, 4) if metrics.has_data else out.get("price", 0),
+        "price_source": metrics.price_source if metrics.has_data else out.get("price_source", ""),
+        "price_updated_at": metrics.price_updated_at if metrics.has_data else out.get("price_updated_at", ""),
+        "latest_bar_time": timestamp_to_et_iso(metrics.latest_bar_time) if metrics.has_data else out.get("latest_bar_time", ""),
+        "bid": round(metrics.bid, 4) if metrics.has_data else out.get("bid", 0),
+        "ask": round(metrics.ask, 4) if metrics.has_data else out.get("ask", 0),
+        "quote_mid": round(metrics.quote_mid, 4) if metrics.has_data else out.get("quote_mid", 0),
+        "quote_time": metrics.quote_time if metrics.has_data else out.get("quote_time", ""),
+        "trade_price": round(metrics.trade_price, 4) if metrics.has_data else out.get("trade_price", 0),
+        "trade_time": metrics.trade_time if metrics.has_data else out.get("trade_time", ""),
+        "vwap": round(metrics.vwap, 4) if metrics.has_data else out.get("vwap", 0),
+        "hod": round(metrics.hod, 4) if metrics.has_data else out.get("hod", 0),
+        "vwap_dist_pct": round(metrics.vwap_dist_pct, 2) if metrics.has_data else out.get("vwap_dist_pct", 0),
+        "hod_distance_pct": round(metrics.hod_distance_pct, 2) if metrics.has_data else out.get("hod_distance_pct", 0),
+        "ema9": round(metrics.ema9, 4) if metrics.has_data else out.get("ema9", 0),
+        "price_above_ema9": metrics.price_above_ema9 if metrics.has_data else out.get("price_above_ema9", False),
+        "macd_value": round(metrics.macd_value, 4) if metrics.has_data else out.get("macd_value", 0),
+        "macd_signal": round(metrics.macd_signal, 4) if metrics.has_data else out.get("macd_signal", 0),
+        "macd_histogram": round(metrics.macd_histogram, 4) if metrics.has_data else out.get("macd_histogram", 0),
+    })
+
+    decision_log(
+        symbol,
+        "TRIGGER_TOUCHED_CONFIRMING",
+        setup=setup_type,
+        trigger=out.get("entry_trigger"),
+        price=metrics.price,
+        phase=phase,
+        reason=message,
+    )
+    return out
+
+
+def reset_to_trigger_ready_after_touch(
+    existing: Dict[str, Any],
+    metrics: IntradayMetrics,
+    phase: str,
+    reason: str,
+) -> Dict[str, Any]:
+    """
+    If a touched trigger does not confirm but structure is still alive, return
+    it to protected Trigger Ready instead of invalidating immediately.
+    """
+    now_text = iso_now_et()
+    out = dict(existing)
+    out.update({
+        "signal_status": "TRIGGER_READY",
+        "actionable": False,
+        "actionability": "TRIGGER_READY",
+        "trigger_touched_failed_at": now_text,
+        "trigger_touched_failed_reason": reason,
+        "reason": f"Trigger touched but did not confirm yet: {reason}. Setup remains protected while structure holds.",
+        "entry_warning": "Prior trigger touch did not confirm. Wait for a fresh clean break/hold.",
+        "last_checked": now_text,
+        "updated_at": now_text,
+        "market_phase": phase,
+        "price": round(metrics.price, 4) if metrics.has_data else out.get("price", 0),
+        "price_source": metrics.price_source if metrics.has_data else out.get("price_source", ""),
+        "price_updated_at": metrics.price_updated_at if metrics.has_data else out.get("price_updated_at", ""),
+        "latest_bar_time": timestamp_to_et_iso(metrics.latest_bar_time) if metrics.has_data else out.get("latest_bar_time", ""),
+    })
+    # Clear active confirmation wait so a new touch can be evaluated fresh.
+    out.pop("trigger_touched_at", None)
+    out.pop("trigger_touched_price", None)
+
+    decision_log(
+        normalize_symbol(out.get("symbol")),
+        "TRIGGER_TOUCH_RESET_TO_READY",
+        trigger=out.get("entry_trigger"),
+        price=metrics.price,
+        phase=phase,
+        reason=reason,
+    )
+    return out
+
+
+def touched_trigger_rejected(existing: Dict[str, Any], metrics: IntradayMetrics) -> Tuple[bool, str]:
+    """
+    Decide whether a TRIGGER_TOUCHED state failed badly enough to invalidate.
+    Mild pullbacks simply reset to Trigger Ready.
+    """
+    trigger = safe_float(existing.get("entry_trigger"), 0)
+    if trigger <= 0 or not metrics.has_data:
+        return False, ""
+
+    if not metrics.above_vwap:
+        return True, "Trigger touched but price lost VWAP before active confirmation"
+
+    stop = safe_float(existing.get("stop_loss"), 0)
+    if stop > 0 and metrics.price <= stop:
+        return True, "Trigger touched but stop level was hit before active confirmation"
+
+    if is_reclaim_lifecycle_setup(existing):
+        holding, hold_reason = reclaim_lifecycle_holding(existing, metrics)
+        if not holding:
+            return True, f"Trigger touched but reclaim structure failed: {hold_reason}"
+        return False, ""
+
+    reject_level = trigger * (1.0 - TRIGGER_REJECT_BUFFER_PCT / 100.0)
+    if metrics.price < reject_level and metrics.ema9 > 0 and not metrics.price_above_ema9:
+        return True, (
+            f"Trigger touched but rejected: price {metrics.price:.2f} fell below "
+            f"trigger {trigger:.2f} and EMA9 confirmation failed"
+        )
+
+    return False, ""
+
+
 def active_promotion_failure_reasons(
     plan: Dict[str, Any],
     confidence: float,
@@ -4600,28 +4851,16 @@ def process_existing_signal(
         if fired_now and not is_valid_signal_phase(phase):
             return suppress_trigger_during_blackout(existing, row, metrics, phase, regime)
 
-        # Correct order:
-        # 1) If trigger fired during a valid signal window, attempt ACTIVE promotion first.
-        # 2) Only if it did not fire do we apply stale/missed-window invalidation.
+        # New confirmation layer:
+        # Price touching the entry does NOT become ACTIVE immediately. It first
+        # becomes TRIGGER_TOUCHED, then the next refresh must confirm hold/volume.
         if fired_now and is_valid_signal_phase(phase):
-            promoted, active_signal, fail_reason = promote_trigger_ready_to_active(
+            return make_trigger_touched(
                 existing,
                 row,
                 metrics,
-                regime,
                 phase,
-            )
-
-            if promoted:
-                return active_signal
-
-            return make_invalidated(
-                existing,
-                row,
-                metrics,
-                f"Trigger fired but active-signal quality failed: {fail_reason}",
-                "FAILED_SETUP",
-                phase,
+                "Entry trigger touched; waiting for the next refresh to confirm hold/volume before Active Signal.",
             )
 
         invalid, reason, category = ready_invalidated(existing, metrics)
@@ -4652,6 +4891,101 @@ def process_existing_signal(
 
         # Not triggered yet; return refreshed Trigger Ready payload.
         return reassessed_signal
+
+    if status == "TRIGGER_TOUCHED":
+        if not is_valid_signal_phase(phase):
+            return suppress_trigger_during_blackout(existing, row, metrics, phase, regime)
+
+        invalid, reason, category = ready_invalidated(existing, metrics)
+        if invalid:
+            return make_invalidated(existing, row, metrics, reason, category, phase)
+
+        rejected, reject_reason = touched_trigger_rejected(existing, metrics)
+        if rejected:
+            return make_invalidated(existing, row, metrics, reject_reason, "FAILED_TRIGGER_CONFIRMATION", phase)
+
+        confirmed, confirm_reason = trigger_hold_confirmation(
+            existing,
+            metrics,
+            safe_str(existing.get("setup_type"), ""),
+        )
+
+        if confirmed:
+            promoted, active_signal, fail_reason = promote_trigger_ready_to_active(
+                existing,
+                row,
+                metrics,
+                regime,
+                phase,
+            )
+
+            if promoted:
+                active_signal["trigger_touched_at"] = existing.get("trigger_touched_at")
+                active_signal["trigger_confirmation_reason"] = confirm_reason
+                return active_signal
+
+            age_seconds = trigger_touch_age_seconds(existing)
+            if age_seconds is not None and age_seconds / 60.0 >= TRIGGER_TOUCH_MAX_MINUTES:
+                return make_invalidated(
+                    existing,
+                    row,
+                    metrics,
+                    f"Trigger touched but failed Active confirmation within {TRIGGER_TOUCH_MAX_MINUTES} minutes: {fail_reason}",
+                    "FAILED_TRIGGER_CONFIRMATION",
+                    phase,
+                )
+
+            out = dict(existing)
+            out.update({
+                "last_checked": now_text,
+                "updated_at": now_text,
+                "market_phase": phase,
+                "price": round(metrics.price, 4),
+                "price_source": metrics.price_source,
+                "price_updated_at": metrics.price_updated_at,
+                "latest_bar_time": timestamp_to_et_iso(metrics.latest_bar_time),
+                "reason": f"Trigger touched; Active confirmation still pending: {fail_reason}",
+                "entry_warning": "Trigger touched but active quality is not confirmed yet. Manual review only.",
+            })
+            decision_log(
+                normalize_symbol(row.get("symbol")),
+                "TRIGGER_TOUCH_CONFIRMATION_PENDING",
+                trigger=existing.get("entry_trigger"),
+                price=metrics.price,
+                phase=phase,
+                reason=fail_reason,
+            )
+            return out
+
+        age_seconds = trigger_touch_age_seconds(existing)
+        if age_seconds is not None and age_seconds / 60.0 >= TRIGGER_TOUCH_MAX_MINUTES:
+            if is_reclaim_lifecycle_setup(existing):
+                holding, hold_reason = reclaim_lifecycle_holding(existing, metrics)
+                if holding:
+                    return reset_to_trigger_ready_after_touch(existing, metrics, phase, confirm_reason)
+
+            return make_invalidated(
+                existing,
+                row,
+                metrics,
+                f"Trigger touched but failed hold/volume confirmation within {TRIGGER_TOUCH_MAX_MINUTES} minutes: {confirm_reason}",
+                "FAILED_TRIGGER_CONFIRMATION",
+                phase,
+            )
+
+        out = dict(existing)
+        out.update({
+            "last_checked": now_text,
+            "updated_at": now_text,
+            "market_phase": phase,
+            "price": round(metrics.price, 4) if metrics.has_data else out.get("price", 0),
+            "price_source": metrics.price_source if metrics.has_data else out.get("price_source", ""),
+            "price_updated_at": metrics.price_updated_at if metrics.has_data else out.get("price_updated_at", ""),
+            "latest_bar_time": timestamp_to_et_iso(metrics.latest_bar_time) if metrics.has_data else out.get("latest_bar_time", ""),
+            "reason": f"Trigger touched; waiting for confirmation: {confirm_reason}",
+            "entry_warning": "Touched trigger but not confirmed Active yet. Avoid same-candle fakeout.",
+        })
+        return out
 
     if status == "INVALIDATED":
         age = minutes_since(existing.get("invalidated_at") or existing.get("updated_at"))
@@ -4959,7 +5293,7 @@ def build_row_lookup(focus: Dict[str, Dict[str, Any]], prior_state: Dict[str, Di
 
     for sym, signal in prior_state.items():
         status = normalize_status(signal.get("signal_status"))
-        if status not in {"TRIGGER_READY", "ACTIVE_SIGNAL"}:
+        if status not in {"TRIGGER_READY", "TRIGGER_TOUCHED", "ACTIVE_SIGNAL"}:
             continue
 
         if sym in rows:
@@ -4984,7 +5318,7 @@ def prepare_monitor_symbols(focus: Dict[str, Dict[str, Any]], prior_state: Dict[
 
     for sym, signal in prior_state.items():
         status = normalize_status(signal.get("signal_status"))
-        if status in {"TRIGGER_READY", "ACTIVE_SIGNAL"}:
+        if status in {"TRIGGER_READY", "TRIGGER_TOUCHED", "ACTIVE_SIGNAL"}:
             symbols.add(sym)
 
     return sorted(symbols)
@@ -4995,6 +5329,7 @@ def build_signal_outputs(new_state: Dict[str, Dict[str, Any]]) -> List[Dict[str,
         "ACTIVE_SIGNAL": 1,
         "ACTIVE": 1,
         "TRIGGER_READY": 2,
+        "TRIGGER_TOUCHED": 2,
         "READY": 2,
         "WATCH": 3,
         "INVALIDATED": 4,
@@ -5029,7 +5364,7 @@ def summarize_signals(signals: List[Dict[str, Any]]) -> Dict[str, int]:
 
         if status == "ACTIVE_SIGNAL":
             counts["active"] += 1
-        elif status == "TRIGGER_READY":
+        elif status in {"TRIGGER_READY", "TRIGGER_TOUCHED"}:
             counts["trigger_ready"] += 1
         elif status == "WATCH":
             counts["watch"] += 1
