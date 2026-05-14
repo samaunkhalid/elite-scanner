@@ -2088,48 +2088,99 @@ def load_signal_outcomes_summary():
 
     now_utc, now_ny = get_times()
     today = now_ny.strftime("%Y-%m-%d")
+
+    def row_date_value(row):
+        try:
+            return datetime.fromisoformat(safe_str(row.get("session_date"))).date()
+        except Exception:
+            return None
+
+    cutoff = now_ny.date().toordinal() - 6
     today_rows = [r for r in rows if safe_str(r.get("session_date")) == today]
+    last_7d_rows = [r for r in rows if row_date_value(r) and row_date_value(r).toordinal() >= cutoff]
 
-    counts = {
-        "total": len(today_rows),
-        "watch": 0,
-        "trigger_ready": 0,
-        "active_signal": 0,
-        "trigger_touched": 0,
-        "t1_hit": 0,
-        "t2_hit": 0,
-        "stop_hit": 0,
-        "invalidated_before_entry": 0,
-        "invalidated_after_entry": 0,
-        "watch_removed": 0,
-        "ready_only_success": 0,
-        "open": 0,
-        "completed": 0,
-    }
+    def counts_for(selected_rows):
+        counts = {
+            "total": len(selected_rows),
+            "watch": 0,
+            "trigger_ready": 0,
+            "trigger_touched": 0,
+            "active_signal": 0,
+            "t1_hit": 0,
+            "t2_hit": 0,
+            "stop_hit": 0,
+            "invalidated_before_entry": 0,
+            "invalidated_after_entry": 0,
+            "watch_removed": 0,
+            "ready_only_success": 0,
+            "open": 0,
+            "completed": 0,
+            "ready_events": 0,
+            "touched_events": 0,
+            "active_events": 0,
+            "ready_to_touched_pct": 0.0,
+            "touched_to_active_pct": 0.0,
+            "ready_to_t1_pct": 0.0,
+            "most_common_invalidation_reason": "",
+        }
 
-    for row in today_rows:
-        status = safe_str(row.get("outcome_status")).upper()
-        key = status.lower()
-        if key in counts:
-            counts[key] += 1
-        if str(row.get("success_without_active", "")).strip().lower() in ["true", "1", "yes", "y"]:
-            counts["ready_only_success"] += 1
-        if status in ["WATCH", "TRIGGER_READY", "TRIGGER_TOUCHED", "ACTIVE_SIGNAL"]:
-            counts["open"] += 1
-        if status not in ["", "WATCH", "TRIGGER_READY", "TRIGGER_TOUCHED", "ACTIVE_SIGNAL"]:
-            counts["completed"] += 1
+        invalid_reasons = {}
+
+        for row in selected_rows:
+            status = safe_str(row.get("outcome_status")).upper()
+            ready_event = bool(safe_str(row.get("trigger_ready_time")))
+            touched_event = (
+                bool(safe_str(row.get("trigger_touched_time")))
+                or str(row.get("hit_entry", "")).strip().lower() in ["true", "1", "yes", "y"]
+                or str(row.get("entry_touched_before_active", "")).strip().lower() in ["true", "1", "yes", "y"]
+                or status in ["TRIGGER_TOUCHED", "ACTIVE_SIGNAL", "T1_HIT", "T2_HIT", "STOP_HIT", "INVALIDATED_AFTER_ENTRY"]
+            )
+            active_event = bool(safe_str(row.get("active_time"))) or status in ["ACTIVE_SIGNAL", "T1_HIT", "T2_HIT", "STOP_HIT"]
+
+            if ready_event:
+                counts["ready_events"] += 1
+            if touched_event:
+                counts["touched_events"] += 1
+            if active_event:
+                counts["active_events"] += 1
+
+            key = status.lower()
+            if key in counts:
+                counts[key] += 1
+            if str(row.get("success_without_active", "")).strip().lower() in ["true", "1", "yes", "y"]:
+                counts["ready_only_success"] += 1
+            if status in ["WATCH", "TRIGGER_READY", "TRIGGER_TOUCHED", "ACTIVE_SIGNAL"]:
+                counts["open"] += 1
+            if status not in ["", "WATCH", "TRIGGER_READY", "TRIGGER_TOUCHED", "ACTIVE_SIGNAL"]:
+                counts["completed"] += 1
+
+            if status.startswith("INVALIDATED"):
+                reason = safe_str(row.get("invalidation_reason") or row.get("outcome_detail"), "")
+                if reason:
+                    reason = reason[:120]
+                    invalid_reasons[reason] = invalid_reasons.get(reason, 0) + 1
+
+        if counts["ready_events"]:
+            counts["ready_to_touched_pct"] = round(counts["touched_events"] / counts["ready_events"] * 100, 1)
+            counts["ready_to_t1_pct"] = round(counts["t1_hit"] / counts["ready_events"] * 100, 1)
+        if counts["touched_events"]:
+            counts["touched_to_active_pct"] = round(counts["active_events"] / counts["touched_events"] * 100, 1)
+
+        if invalid_reasons:
+            counts["most_common_invalidation_reason"] = sorted(invalid_reasons.items(), key=lambda kv: kv[1], reverse=True)[0][0]
+
+        return counts
 
     recent = sorted(today_rows, key=lambda r: safe_str(r.get("last_checked")), reverse=True)[:12]
     return {
         "generated_at_et": "",
         "strategy_version": "",
         "today_session": today,
-        "today": counts,
+        "today": counts_for(today_rows),
+        "last_7_days": counts_for(last_7d_rows),
         "recent": recent,
         "file": "signal_outcomes.csv",
     }
-
-
 def outcome_status_class(status):
     status = safe_str(status).upper()
     if status in ["T1_HIT", "T2_HIT"]:
@@ -2176,26 +2227,38 @@ def build_signal_outcomes_panel(summary):
         """
 
     today = summary.get("today", {}) if isinstance(summary.get("today"), dict) else {}
+    last7 = summary.get("last_7_days", {}) if isinstance(summary.get("last_7_days"), dict) else {}
     recent = summary.get("recent", []) if isinstance(summary.get("recent"), list) else []
-    strategy_version = safe_str(summary.get("strategy_version"), "")
 
     stat_items = [
         ("Total", safe_int(today.get("total"), 0)),
-        ("Open", safe_int(today.get("open"), 0)),
-        ("Ready", safe_int(today.get("trigger_ready"), 0)),
-        ("Touched", safe_int(today.get("trigger_touched"), 0)),
-        ("Active", safe_int(today.get("active_signal"), 0)),
+        ("Ready", safe_int(today.get("ready_events"), safe_int(today.get("trigger_ready"), 0))),
+        ("Touched", safe_int(today.get("touched_events"), safe_int(today.get("trigger_touched"), 0))),
+        ("Active", safe_int(today.get("active_events"), safe_int(today.get("active_signal"), 0))),
+        ("R→Tch", f"{safe_float(today.get('ready_to_touched_pct'), 0):.0f}%"),
+        ("Tch→Act", f"{safe_float(today.get('touched_to_active_pct'), 0):.0f}%"),
         ("T1", safe_int(today.get("t1_hit"), 0)),
         ("Ready Win", safe_int(today.get("ready_only_success"), 0)),
-        ("T2", safe_int(today.get("t2_hit"), 0)),
-        ("Stop", safe_int(today.get("stop_hit"), 0)),
         ("Invalid", safe_int(today.get("invalidated_before_entry"), 0) + safe_int(today.get("invalidated_after_entry"), 0)),
     ]
 
     stats_html = "".join(
-        f'<span class="outcome-stat"><b>{value}</b>{esc(label)}</span>'
+        f'<span class="outcome-stat"><b>{esc(value)}</b>{esc(label)}</span>'
         for label, value in stat_items
     )
+
+    last7_line = (
+        f"Last 7D: Ready {safe_int(last7.get('ready_events'), 0)} · "
+        f"Touched {safe_int(last7.get('touched_events'), 0)} · "
+        f"Active {safe_int(last7.get('active_events'), 0)} · "
+        f"T1 {safe_int(last7.get('t1_hit'), 0)}"
+    )
+    common_invalid = safe_str(today.get("most_common_invalidation_reason"), "")
+    common_invalid_html = ""
+    if common_invalid:
+        if len(common_invalid) > 110:
+            common_invalid = common_invalid[:107] + "..."
+        common_invalid_html = f'<em class="outcome-help">Most common invalidation today: {esc(common_invalid)}</em>'
 
     if recent:
         rows_html = []
@@ -2210,6 +2273,7 @@ def build_signal_outcomes_panel(summary):
             best_r = safe_float(row.get("best_r_multiple"), 0)
             final_r = safe_float(row.get("final_r_multiple"), 0)
             checked = compact_time_et(row.get("last_checked"))
+            price_time = compact_time_et(row.get("price_updated_at") or row.get("latest_bar_time") or row.get("quote_time"))
             reason = safe_str(row.get("invalidation_reason") or row.get("outcome_detail"), "")
             if len(reason) > 78:
                 reason = reason[:75] + "..."
@@ -2223,6 +2287,8 @@ def build_signal_outcomes_panel(summary):
                 extra_flags.append('<span class="outcome-flag outcome-flag-good">Ready-only target hit</span>')
             elif entry_before_active:
                 extra_flags.append('<span class="outcome-flag">Entry touched before Active</span>')
+            if price_time:
+                extra_flags.append(f'<span class="outcome-flag">Px {esc(price_time)}</span>')
             flags_html = "".join(extra_flags)
 
             rows_html.append(f"""
@@ -2260,8 +2326,9 @@ def build_signal_outcomes_panel(summary):
         <div class="signal-outcomes-top">
             <div>
                 <strong>Signal Outcomes</strong>
-                <span>Signal performance tracker. Not your manual trade journal.</span>
-                <em class="outcome-help">INV BEFORE = failed before entry/active. INV AFTER = trigger touched or active attempt failed after entry conditions.</em>
+                <span>Today’s conversion tracker. Not your manual trade journal.</span>
+                <em class="outcome-help">{esc(last7_line)}</em>
+                {common_invalid_html}
             </div>
         </div>
         <div class="outcome-stats">
@@ -2270,8 +2337,6 @@ def build_signal_outcomes_panel(summary):
         {body_html}
     </section>
     """
-
-
 def build_signal_desk_panel(signals, rejected_candidates=None):
     """
     Full-width Signal Desk.
@@ -2444,6 +2509,7 @@ def build_dashboard(potential, active, extended, highrisk, raw, active_watchlist
 
         nav_tabs = """
         <div class="nav-tabs">
+            <a href="#top">Top ↑</a>
             <a href="#signals">Signal Desk</a>
             <a href="#potential">Potential Movers</a>
             <a href="#active">Active Momentum</a>
@@ -2463,6 +2529,7 @@ def build_dashboard(potential, active, extended, highrisk, raw, active_watchlist
         desk_table = ""
         nav_tabs = """
         <div class="nav-tabs">
+            <a href="#top">Top ↑</a>
             <a href="#signals">Signal Desk</a>
         </div>
         """
@@ -2520,6 +2587,16 @@ body {
     font-size: 20px;
     font-weight: 700;
     letter-spacing: -0.02em;
+}
+
+.title-refresh {
+    color: #e5e7eb;
+    text-decoration: none;
+    cursor: pointer;
+}
+
+.title-refresh:hover {
+    color: #38bdf8;
 }
 
 .title p {
@@ -4297,10 +4374,10 @@ td small {
 </head>
 <body>
 
-<header class="header">
+<header class="header" id="top">
     <div class="header-inner">
         <div class="title">
-            <h1>Elite Scanner — Pro Desk</h1>
+            <h1><a class="title-refresh" href="" title="Refresh dashboard">Elite Scanner — Pro Desk</a></h1>
             <p>Technical Potential Movers + Catalyst Confirmation + Sector Context</p>
         </div>
         <div class="header-meta">
