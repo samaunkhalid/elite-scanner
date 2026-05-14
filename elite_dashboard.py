@@ -2237,7 +2237,7 @@ def build_dashboard(potential, active, extended, highrisk, raw, active_watchlist
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<meta http-equiv="refresh" content="300">
+<meta http-equiv="refresh" content="60">
 <title>Elite Scanner — Pro Desk</title>
 <style>
 * {
@@ -3711,7 +3711,7 @@ td small {
     <div id="desk">$desk_table</div>
 
     <div class="footer-note">
-        Static dashboard. Data updates only when GitHub Actions runs and rebuilds dashboard.html. Extended/high-risk names are saved in CSV but hidden from this decision view. Alpaca IEX volume is non-consolidated; confirm spread, liquidity, VWAP, and news manually before execution.
+        VPS live dashboard. Data updates from Elite Runner during market hours; this page auto-refreshes every 60 seconds. Extended/high-risk names are saved in CSV but hidden from this decision view. Alpaca IEX volume is non-consolidated; confirm spread, liquidity, VWAP, and news manually before execution.
     </div>
 </main>
 
