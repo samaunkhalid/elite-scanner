@@ -2509,7 +2509,6 @@ def build_dashboard(potential, active, extended, highrisk, raw, active_watchlist
 
         nav_tabs = """
         <div class="nav-tabs">
-            <a href="#top">Top ↑</a>
             <a href="#signals">Signal Desk</a>
             <a href="#potential">Potential Movers</a>
             <a href="#active">Active Momentum</a>
@@ -2529,7 +2528,6 @@ def build_dashboard(potential, active, extended, highrisk, raw, active_watchlist
         desk_table = ""
         nav_tabs = """
         <div class="nav-tabs">
-            <a href="#top">Top ↑</a>
             <a href="#signals">Signal Desk</a>
         </div>
         """
@@ -3218,6 +3216,35 @@ body {
     border-radius: 999px;
     border: 1px solid rgba(148, 163, 184, 0.12);
     background: rgba(15, 23, 42, 0.62);
+}
+
+.floating-top {
+    position: fixed;
+    right: 18px;
+    bottom: 18px;
+    z-index: 9999;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 52px;
+    height: 42px;
+    padding: 0 14px;
+    border-radius: 999px;
+    border: 1px solid rgba(56, 189, 248, 0.35);
+    background: rgba(15, 23, 42, 0.92);
+    color: #e0f2fe;
+    text-decoration: none;
+    font-size: 12px;
+    font-weight: 800;
+    letter-spacing: 0.01em;
+    box-shadow: 0 16px 38px rgba(0, 0, 0, 0.34);
+    backdrop-filter: blur(12px);
+}
+
+.floating-top:hover {
+    border-color: rgba(56, 189, 248, 0.72);
+    background: rgba(14, 116, 144, 0.72);
+    color: #ffffff;
 }
 
 .desk-section,
@@ -4373,6 +4400,8 @@ td small {
 </style>
 </head>
 <body>
+
+<a class="floating-top" href="#top" title="Back to top">Top ↑</a>
 
 <header class="header" id="top">
     <div class="header-inner">
