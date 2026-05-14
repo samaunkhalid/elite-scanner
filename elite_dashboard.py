@@ -45,6 +45,99 @@ except Exception:
     ZoneInfo = None
 
 
+
+ETF_SECTOR_LABELS = {
+    "SPY": "S&P 500",
+    "QQQ": "Nasdaq 100",
+    "IWM": "Small Caps",
+    "XLK": "Technology",
+    "SMH": "Semiconductors",
+    "XLF": "Financials",
+    "XLE": "Energy",
+    "XLI": "Industrials",
+    "XLV": "Healthcare",
+    "XLY": "Consumer Discretionary",
+    "XLP": "Consumer Staples",
+    "XLC": "Communication Services",
+    "XLU": "Utilities",
+    "XLRE": "Real Estate",
+    "XLB": "Materials",
+    "IBB": "Biotech",
+    "KBE": "Banks",
+    "KRE": "Regional Banks",
+    "ITA": "Aerospace & Defense",
+    "ARKK": "Innovation/Growth",
+}
+
+def etf_sector_label(etf):
+    code = safe_str(etf, "").upper()
+    return ETF_SECTOR_LABELS.get(code, code or "Unknown Sector")
+
+# Backward-compatible name used by older rendering code.
+# It now returns the sector/industry label, not the long ETF fund name.
+def etf_full_name(etf):
+    return etf_sector_label(etf)
+
+def etf_label(etf):
+    code = safe_str(etf, "").upper()
+    name = etf_sector_label(code)
+    return f"{code} ({name})" if code else name
+
+def sector_rotation_context(row, regime=None):
+    regime = regime or {}
+    etf = safe_str(row.get("sector_etf"), "SPY").upper()
+    sector_change = safe_float(row.get("sector_change_pct"), 0)
+    sector_vs_spy = safe_float(row.get("sector_vs_spy_pct"), None)
+    if sector_vs_spy is None:
+        sector_vs_spy = sector_change - safe_float(regime.get("spy_change"), 0)
+
+    sector_vs_qqq = safe_float(row.get("sector_vs_qqq_pct"), None)
+    if sector_vs_qqq is None:
+        sector_vs_qqq = sector_change - safe_float(regime.get("qqq_change"), 0)
+
+    stock_vs_sector = safe_float(row.get("stock_vs_sector_pct"), 0)
+    status = safe_str(row.get("sector_status"), "UNKNOWN").upper()
+
+    score = (
+        0.60 * sector_change
+        + 0.95 * sector_vs_spy
+        + 0.45 * sector_vs_qqq
+        + 0.18 * stock_vs_sector
+    )
+    if status in {"LEADING", "IMPROVING"}:
+        score += 0.35
+    elif status in {"WEAK", "ROTATION_OUT"}:
+        score -= 0.55
+
+    if score >= 1.25 and sector_change > 0:
+        label = "Strong"
+        class_name = "rotation-strong"
+    elif score >= 0.45 and sector_change >= 0:
+        label = "Supportive"
+        class_name = "rotation-supportive"
+    elif score <= -0.85 or (sector_change < -0.35 and sector_vs_spy < -0.25):
+        label = "Weak"
+        class_name = "rotation-weak"
+    elif score <= -0.25:
+        label = "Soft"
+        class_name = "rotation-soft"
+    else:
+        label = "Neutral"
+        class_name = "rotation-neutral"
+
+    return {
+        "etf": etf,
+        "etf_name": etf_full_name(etf),
+        "sector_change": sector_change,
+        "sector_vs_spy": sector_vs_spy,
+        "sector_vs_qqq": sector_vs_qqq,
+        "stock_vs_sector": stock_vs_sector,
+        "score": score,
+        "label": label,
+        "class": class_name,
+    }
+
+
 # ==============================================================
 # SAFE HELPERS
 # ==============================================================
@@ -969,10 +1062,12 @@ def build_card(stock, signal=None):
     company_name = safe_str(stock.get("company_name"), symbol)
     sector = safe_str(stock.get("sector"), "Unknown")
     sector_etf = safe_str(stock.get("sector_etf"), "SPY")
+    sector_etf_full = etf_full_name(sector_etf)
     sector_status = safe_str(stock.get("sector_status"), "UNKNOWN").upper()
     sector_status_class = get_sector_status_class(sector_status)
     sector_change = safe_float(stock.get("sector_change_pct"), 0)
     stock_vs_sector = safe_float(stock.get("stock_vs_sector_pct"), 0)
+    rotation_ctx = sector_rotation_context(stock)
 
     tier_color = get_tier_color(tier)
     change_class = "positive" if change_pct >= 0 else "negative"
@@ -1055,8 +1150,9 @@ def build_card(stock, signal=None):
 
         <div class="sector-strip">
             <span>Sector <strong>{esc(sector)}</strong></span>
-            <span>ETF <strong>{esc(sector_etf)}</strong> <b class="{'positive' if sector_change >= 0 else 'negative'}">{sector_change:+.2f}%</b></span>
+            <span>ETF <strong title="{esc(sector_etf_full)}">{esc(sector_etf)} ({esc(sector_etf_full)})</strong> <b class="{'positive' if sector_change >= 0 else 'negative'}">{sector_change:+.2f}%</b></span>
             <span>Vs Sector <b class="{'positive' if stock_vs_sector >= 0 else 'negative'}">{stock_vs_sector:+.2f}%</b></span>
+            <span>Rotation <b class="{rotation_ctx['class']}">{esc(rotation_ctx['label'])}</b></span>
         </div>
 
         <div class="catalyst-strip {catalyst['class']}">
@@ -1355,23 +1451,29 @@ def build_sector_snapshot(raw, focus_rows, regime):
         if not sector or sector == "Unknown":
             continue
 
-        etf = safe_str(stock.get("sector_etf"), "SPY")
-        sector_change = safe_float(stock.get("sector_change_pct"), 0)
-        sector_vs_spy = safe_float(stock.get("sector_vs_spy_pct"), 0)
+        etf = safe_str(stock.get("sector_etf"), "SPY").upper()
+        ctx = sector_rotation_context(stock, regime)
         sector_status = safe_str(stock.get("sector_status"), "UNKNOWN").upper()
 
         if sector not in rows_by_sector:
             rows_by_sector[sector] = {
                 "sector": sector,
                 "etf": etf,
-                "sector_change": sector_change,
-                "sector_vs_spy": sector_vs_spy,
+                "etf_name": etf_full_name(etf),
+                "sector_change_values": [],
+                "sector_vs_spy_values": [],
+                "sector_vs_qqq_values": [],
+                "rotation_scores": [],
                 "sector_status": sector_status,
                 "count": 0,
                 "focus": [],
             }
 
         rows_by_sector[sector]["count"] += 1
+        rows_by_sector[sector]["sector_change_values"].append(ctx["sector_change"])
+        rows_by_sector[sector]["sector_vs_spy_values"].append(ctx["sector_vs_spy"])
+        rows_by_sector[sector]["sector_vs_qqq_values"].append(ctx["sector_vs_qqq"])
+        rows_by_sector[sector]["rotation_scores"].append(ctx["score"])
 
     focus_symbols = set()
     for stock in focus_rows:
@@ -1384,47 +1486,96 @@ def build_sector_snapshot(raw, focus_rows, regime):
         if sector in rows_by_sector and sym not in rows_by_sector[sector]["focus"]:
             rows_by_sector[sector]["focus"].append(sym)
 
-    rows = list(rows_by_sector.values())
-    rows.sort(key=lambda x: (x["sector_vs_spy"], x["sector_change"], x["count"]), reverse=True)
-    rows = rows[:8]
+    rows = []
+    for r in rows_by_sector.values():
+        sector_change = sum(r["sector_change_values"]) / max(1, len(r["sector_change_values"]))
+        sector_vs_spy = sum(r["sector_vs_spy_values"]) / max(1, len(r["sector_vs_spy_values"]))
+        sector_vs_qqq = sum(r["sector_vs_qqq_values"]) / max(1, len(r["sector_vs_qqq_values"]))
+        rotation_score = sum(r["rotation_scores"]) / max(1, len(r["rotation_scores"]))
+
+        if rotation_score >= 1.25 and sector_change > 0:
+            rotation_label = "Strong"
+            rotation_class = "rotation-strong"
+        elif rotation_score >= 0.45 and sector_change >= 0:
+            rotation_label = "Supportive"
+            rotation_class = "rotation-supportive"
+        elif rotation_score <= -0.85 or (sector_change < -0.35 and sector_vs_spy < -0.25):
+            rotation_label = "Weak"
+            rotation_class = "rotation-weak"
+        elif rotation_score <= -0.25:
+            rotation_label = "Soft"
+            rotation_class = "rotation-soft"
+        else:
+            rotation_label = "Neutral"
+            rotation_class = "rotation-neutral"
+
+        rows.append({
+            **r,
+            "sector_change": sector_change,
+            "sector_vs_spy": sector_vs_spy,
+            "sector_vs_qqq": sector_vs_qqq,
+            "rotation_score": rotation_score,
+            "rotation_label": rotation_label,
+            "rotation_class": rotation_class,
+        })
+
+    rows.sort(key=lambda x: (x["rotation_score"], x["sector_vs_spy"], x["sector_change"], x["count"]), reverse=True)
+    rows = rows[:10]
 
     if not rows:
         return ""
 
     html_rows = ""
 
-    for r in rows:
+    for rank, r in enumerate(rows, start=1):
         status_class = get_sector_status_class(r["sector_status"])
         focus_text = ", ".join(r["focus"][:4]) if r["focus"] else "—"
 
         html_rows += f"""
         <tr>
+            <td><strong>#{rank}</strong></td>
             <td><strong>{esc(r['sector'])}</strong></td>
-            <td>{esc(r['etf'])}</td>
+            <td><span title="{esc(r['sector'])}">{esc(r['etf'])} ({esc(r['etf_name'])})</span></td>
             <td class="{'positive' if r['sector_change'] >= 0 else 'negative'}">{r['sector_change']:+.2f}%</td>
             <td class="{'positive' if r['sector_vs_spy'] >= 0 else 'negative'}">{r['sector_vs_spy']:+.2f}%</td>
+            <td class="{'positive' if r['sector_vs_qqq'] >= 0 else 'negative'}">{r['sector_vs_qqq']:+.2f}%</td>
+            <td><span class="rotation-pill {r['rotation_class']}">{esc(r['rotation_label'])}</span></td>
             <td><span class="sector-status-pill {status_class}">{esc(r['sector_status'])}</span></td>
             <td>{r['count']}</td>
             <td>{esc(focus_text)}</td>
         </tr>
         """
 
+    strong = [r for r in rows if r["rotation_label"] in {"Strong", "Supportive"}][:3]
+    weak = [r for r in rows if r["rotation_label"] in {"Weak", "Soft"}][-3:]
+    strong_text = ", ".join(f"{r['etf']} ({r['etf_name']})" for r in strong) if strong else "None"
+    weak_text = ", ".join(f"{r['etf']} ({r['etf_name']})" for r in weak) if weak else "None"
+
     return f"""
-    <section class="sector-snapshot">
+    <section class="sector-snapshot sector-rotation-panel">
         <div class="section-header">
             <div>
-                <h2>Sector Leadership Snapshot</h2>
-                <p>Ranks sectors by same-day ETF strength versus SPY. This is leadership context, not a full rotation model yet.</p>
+                <h2>Sector Rotation</h2>
+                <p>Ranks sector ETFs by intraday relative strength versus SPY/QQQ. Sector labels are shown in brackets.</p>
             </div>
         </div>
+
+        <div class="rotation-summary">
+            <div><span>Strong / Supportive</span><strong>{esc(strong_text)}</strong></div>
+            <div><span>Weak / Soft</span><strong>{esc(weak_text)}</strong></div>
+        </div>
+
         <div class="table-wrap compact-table">
             <table>
                 <thead>
                     <tr>
+                        <th>Rank</th>
                         <th>Sector</th>
                         <th>ETF</th>
                         <th>ETF %</th>
                         <th>Vs SPY</th>
+                        <th>Vs QQQ</th>
+                        <th>Rotation</th>
                         <th>Status</th>
                         <th>Names</th>
                         <th>Active Focus</th>
@@ -1434,8 +1585,8 @@ def build_sector_snapshot(raw, focus_rows, regime):
             </table>
         </div>
     </section>
+    
     """
-
 
 def build_desk_table(rows):
     if not rows:
@@ -2512,7 +2663,7 @@ def build_dashboard(potential, active, extended, highrisk, raw, active_watchlist
             <a href="#signals">Signal Desk</a>
             <a href="#potential">Potential Movers</a>
             <a href="#active">Active Momentum</a>
-            <a href="#sectors">Sector Leadership</a>
+            <a href="#sectors">Sector Rotation</a>
             <a href="#outcomes">Outcomes</a>
             <a href="#desk">Table View</a>
         </div>
@@ -3422,6 +3573,82 @@ body {
     border-color: rgba(239, 68, 68, 0.25);
     background: rgba(239, 68, 68, 0.08);
 }
+
+
+.rotation-pill,
+.rotation-strong,
+.rotation-supportive,
+.rotation-neutral,
+.rotation-soft,
+.rotation-weak {
+    font-weight: 750;
+}
+
+.rotation-pill {
+    display: inline-flex;
+    align-items: center;
+    border-radius: 999px;
+    padding: 4px 9px;
+    font-size: 10px;
+    border: 1px solid rgba(148, 163, 184, 0.16);
+    background: rgba(148, 163, 184, 0.07);
+}
+
+.rotation-strong {
+    color: #34d399;
+    border-color: rgba(16, 185, 129, 0.30);
+    background: rgba(16, 185, 129, 0.10);
+}
+
+.rotation-supportive {
+    color: #86efac;
+    border-color: rgba(34, 197, 94, 0.24);
+    background: rgba(34, 197, 94, 0.08);
+}
+
+.rotation-neutral {
+    color: #cbd5e1;
+}
+
+.rotation-soft {
+    color: #fbbf24;
+    border-color: rgba(251, 191, 36, 0.24);
+    background: rgba(245, 158, 11, 0.08);
+}
+
+.rotation-weak {
+    color: #fca5a5;
+    border-color: rgba(239, 68, 68, 0.28);
+    background: rgba(239, 68, 68, 0.10);
+}
+
+.rotation-summary {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+    margin-bottom: 12px;
+}
+
+.rotation-summary > div {
+    border: 1px solid rgba(148, 163, 184, 0.12);
+    background: rgba(15, 23, 42, 0.68);
+    border-radius: 12px;
+    padding: 10px 12px;
+}
+
+.rotation-summary span {
+    display: block;
+    color: #94a3b8;
+    font-size: 11px;
+    margin-bottom: 4px;
+}
+
+.rotation-summary strong {
+    color: #e5e7eb;
+    font-size: 12px;
+    line-height: 1.35;
+}
+
 
 .sector-strip {
     margin-top: 11px;
@@ -4347,6 +4574,8 @@ td small {
 }
 
 @media (max-width: 860px) {
+    .rotation-summary { grid-template-columns: 1fr; }
+
     .outcome-stats {
         grid-template-columns: repeat(4, minmax(74px, 1fr));
     }
