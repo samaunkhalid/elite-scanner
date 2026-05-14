@@ -89,6 +89,17 @@ MIN_CONF_READY_LATE_DAY = 80.0
 MIN_CONF_ACTIVE = 80.0
 MAX_QUOTE_SPREAD_FOR_PRICE_PCT = 1.00
 
+# Live participation / VWAP reclaim filters.
+# Alpaca IEX volume is non-consolidated, so thresholds are intentionally modest.
+MIN_LIVE_1M_AVG_VOL_WATCH = 500.0
+MIN_LIVE_5M_DOLLAR_VOL_WATCH = 25_000.0
+MIN_LIVE_1M_AVG_VOL_READY = 1_000.0
+MIN_LIVE_5M_DOLLAR_VOL_READY = 50_000.0
+MIN_CONF_RECLAIM_READY = 68.0
+VWAP_RECLAIM_LOOKBACK_MINUTES = 6
+VWAP_RECLAIM_MIN_VOLUME_RATIO = 1.35
+VWAP_RECLAIM_MAX_EXTENSION_PCT = 2.0
+
 
 # Late-day / quality filters.
 LATE_DAY_READY_START = dtime(14, 30)
@@ -733,6 +744,24 @@ class IntradayMetrics:
     trade_time: str = ""
     execution_bars: List[Dict[str, Any]] = field(default_factory=list)
 
+    recent_1m_volume: float = 0.0
+    avg_volume_1m_5: float = 0.0
+    avg_volume_1m_20: float = 0.0
+    recent_5m_dollar_volume: float = 0.0
+    live_participation_ok: bool = True
+    live_participation_ready_ok: bool = True
+    live_participation_reason: str = "OK"
+
+    vwap_reclaim_recent: bool = False
+    vwap_reclaim_ready: bool = False
+    vwap_reclaim_bar_high: float = 0.0
+    vwap_reclaim_bar_low: float = 0.0
+    vwap_reclaim_bar_close: float = 0.0
+    vwap_reclaim_bar_time: str = ""
+    vwap_reclaim_age_minutes: float = 999.0
+    vwap_reclaim_volume_ratio: float = 0.0
+    vwap_reclaim_reason: str = "No recent VWAP reclaim"
+
     avg_volume_5: float = 0.0
     avg_volume_prev_5: float = 0.0
     morning_avg_volume_5m: float = 0.0
@@ -836,6 +865,22 @@ def is_opening_noise_bar(bar: Dict[str, Any]) -> bool:
     return dt.time() < dtime(9, 45)
 
 
+def bar_age_minutes_from_now(bar: Dict[str, Any], now: Optional[datetime] = None) -> float:
+    dt = bar_time_et(bar)
+    if not dt:
+        return 999.0
+    now = now or ny_now()
+    try:
+        return max(0.0, (now - dt).total_seconds() / 60.0)
+    except Exception:
+        return 999.0
+
+
+def rolling_average(values: List[float]) -> float:
+    vals = [safe_float(v, 0) for v in values if safe_float(v, 0) > 0]
+    return sum(vals) / len(vals) if vals else 0.0
+
+
 def ema_at_index(values: List[float], idx: int) -> float:
     if not values:
         return 0.0
@@ -915,6 +960,106 @@ def analyze_execution_bars(symbol: str, bars: List[Dict[str, Any]]) -> IntradayM
     if first15:
         lows = [safe_float(b.get("l"), 0) for b in first15 if safe_float(b.get("l"), 0) > 0]
         metrics.opening_range_low = min(lows) if lows else metrics.lod
+
+    # Live participation from recent 1-minute bars.
+    recent5_1m = clean[-5:] if len(clean) >= 5 else clean
+    recent20_1m = clean[-20:] if len(clean) >= 20 else clean
+    metrics.recent_1m_volume = safe_float(clean[-1].get("v"), 0)
+    metrics.avg_volume_1m_5 = rolling_average([safe_float(b.get("v"), 0) for b in recent5_1m])
+    metrics.avg_volume_1m_20 = rolling_average([safe_float(b.get("v"), 0) for b in recent20_1m])
+    recent5_dollars = 0.0
+    for b in recent5_1m:
+        recent5_dollars += safe_float(b.get("v"), 0) * typical_price(b)
+    metrics.recent_5m_dollar_volume = recent5_dollars
+
+    if metrics.avg_volume_1m_5 < MIN_LIVE_1M_AVG_VOL_WATCH and metrics.recent_5m_dollar_volume < MIN_LIVE_5M_DOLLAR_VOL_WATCH:
+        metrics.live_participation_ok = False
+        metrics.live_participation_reason = (
+            f"Low live participation: 5m avg vol {metrics.avg_volume_1m_5:.0f}, "
+            f"5m $vol ${metrics.recent_5m_dollar_volume:,.0f}"
+        )
+    else:
+        metrics.live_participation_ok = True
+        metrics.live_participation_reason = "OK"
+
+    metrics.live_participation_ready_ok = (
+        metrics.avg_volume_1m_5 >= MIN_LIVE_1M_AVG_VOL_READY
+        or metrics.recent_5m_dollar_volume >= MIN_LIVE_5M_DOLLAR_VOL_READY
+    )
+
+    # VWAP reclaim breakout detection from 1-minute bars.
+    #
+    # This catches setups like:
+    #   below VWAP -> high-volume reclaim -> hold/continue above VWAP
+    # before they turn into chased/extended moves. Opening noise is ignored.
+    if metrics.vwap > 0 and len(clean) >= 6:
+        search = clean[-max(8, VWAP_RECLAIM_LOOKBACK_MINUTES + 3):]
+        reclaim_candidates: List[Tuple[int, Dict[str, Any], float]] = []
+
+        for local_idx, bar in enumerate(search):
+            global_idx = len(clean) - len(search) + local_idx
+            dt = bar_time_et(bar)
+            if dt and dt.time() < dtime(9, 45):
+                continue
+
+            close = safe_float(bar.get("c"), 0)
+            open_ = safe_float(bar.get("o"), close)
+            low = safe_float(bar.get("l"), 0)
+            high = safe_float(bar.get("h"), 0)
+            vol_bar = safe_float(bar.get("v"), 0)
+
+            prior_window = clean[max(0, global_idx - 20):global_idx]
+            prior_avg_vol = rolling_average([safe_float(x.get("v"), 0) for x in prior_window])
+            vol_ratio = vol_bar / prior_avg_vol if prior_avg_vol > 0 else 0.0
+
+            prev_close = safe_float(clean[global_idx - 1].get("c"), 0) if global_idx > 0 else 0
+            was_below = (
+                prev_close > 0 and prev_close < metrics.vwap * 0.998
+            ) or low <= metrics.vwap * 0.998 or open_ < metrics.vwap * 0.998
+            reclaimed = close >= metrics.vwap * 1.001 and high >= metrics.vwap
+            green_or_strong = close >= open_ or close >= ((high + low) / 2.0 if high > low else close)
+
+            if was_below and reclaimed and green_or_strong:
+                reclaim_candidates.append((global_idx, bar, vol_ratio))
+
+        if reclaim_candidates:
+            _, reclaim_bar, vol_ratio = reclaim_candidates[-1]
+            age_min = bar_age_minutes_from_now(reclaim_bar)
+            bar_high = safe_float(reclaim_bar.get("h"), 0)
+            bar_low = safe_float(reclaim_bar.get("l"), 0)
+            bar_close = safe_float(reclaim_bar.get("c"), 0)
+            metrics.vwap_reclaim_recent = age_min <= VWAP_RECLAIM_LOOKBACK_MINUTES
+            metrics.vwap_reclaim_bar_high = bar_high
+            metrics.vwap_reclaim_bar_low = bar_low
+            metrics.vwap_reclaim_bar_close = bar_close
+            metrics.vwap_reclaim_bar_time = timestamp_to_et_iso(reclaim_bar.get("t"))
+            metrics.vwap_reclaim_age_minutes = round(age_min, 2)
+            metrics.vwap_reclaim_volume_ratio = round(vol_ratio, 2)
+
+            extension_ok = metrics.vwap_dist_pct <= VWAP_RECLAIM_MAX_EXTENSION_PCT
+            volume_ok = vol_ratio >= VWAP_RECLAIM_MIN_VOLUME_RATIO or metrics.recent_5m_dollar_volume >= MIN_LIVE_5M_DOLLAR_VOL_READY
+            hold_ok = metrics.price >= metrics.vwap and bar_close >= metrics.vwap
+            participation_ok = metrics.live_participation_ready_ok
+
+            if metrics.vwap_reclaim_recent and extension_ok and volume_ok and hold_ok and participation_ok:
+                metrics.vwap_reclaim_ready = True
+                metrics.vwap_reclaim_reason = (
+                    f"Recent high-volume VWAP reclaim; age {age_min:.1f}m, "
+                    f"vol ratio {vol_ratio:.2f}x, extension {metrics.vwap_dist_pct:.2f}%"
+                )
+            else:
+                fails = []
+                if not metrics.vwap_reclaim_recent:
+                    fails.append(f"reclaim age {age_min:.1f}m > {VWAP_RECLAIM_LOOKBACK_MINUTES}m")
+                if not extension_ok:
+                    fails.append(f"VWAP extension {metrics.vwap_dist_pct:.2f}% > {VWAP_RECLAIM_MAX_EXTENSION_PCT:.1f}%")
+                if not volume_ok:
+                    fails.append(f"reclaim volume ratio {vol_ratio:.2f}x < {VWAP_RECLAIM_MIN_VOLUME_RATIO:.2f}x")
+                if not hold_ok:
+                    fails.append("price did not hold above VWAP")
+                if not participation_ok:
+                    fails.append(metrics.live_participation_reason)
+                metrics.vwap_reclaim_reason = "; ".join(fails) if fails else "VWAP reclaim not ready"
 
     return metrics
 
@@ -1543,6 +1688,8 @@ def watch_criteria_pass(
         reasons.append("Market severe risk-off")
     if sector_weak(row):
         reasons.append("Sector weak")
+    if not metrics.live_participation_ok:
+        reasons.append(metrics.live_participation_reason)
     if not vwap_condition_pass(metrics, safe_float(row.get("atr_pct"), 0)):
         reasons.append("VWAP condition failed")
     if not rs_long and not hod_condition_pass(metrics, safe_str(row.get("signal_source_bucket"), "")):
@@ -1558,6 +1705,9 @@ def watch_criteria_pass(
 # ==============================================================
 
 def trigger_level_for_setup(setup_type: str, metrics: IntradayMetrics) -> float:
+    if setup_type == "VWAP_RECLAIM_BREAKOUT":
+        level = max(metrics.vwap_reclaim_bar_high, metrics.pullback_high, metrics.price)
+        return level * 1.0002 if level > 0 else 0.0
     if setup_type == "VWAP_PULLBACK_CONTINUATION":
         return metrics.pullback_high * 1.0002
     if setup_type == "BASE_SQUEEZE_BREAKOUT":
@@ -1574,7 +1724,15 @@ def support_level_for_setup(setup_type: str, metrics: IntradayMetrics, entry: fl
     """
     candidates: List[Tuple[float, str]] = []
 
-    if setup_type == "VWAP_PULLBACK_CONTINUATION":
+    if setup_type == "VWAP_RECLAIM_BREAKOUT":
+        if metrics.vwap > 0:
+            candidates.append((metrics.vwap, "VWAP reclaim support"))
+        if metrics.vwap_reclaim_bar_low > 0:
+            candidates.append((metrics.vwap_reclaim_bar_low, "1Min VWAP reclaim candle low"))
+        if metrics.pullback_low > 0:
+            candidates.append((metrics.pullback_low, "5Min pullback low"))
+
+    elif setup_type == "VWAP_PULLBACK_CONTINUATION":
         if metrics.pullback_low > 0:
             candidates.append((metrics.pullback_low, "5Min pullback high/low"))
         if metrics.base_low > 0:
@@ -1765,6 +1923,7 @@ def choose_best_provisional_plan(
     Invalid plans are kept only if no valid plan exists, for diagnostics.
     """
     setup_order = [
+        "VWAP_RECLAIM_BREAKOUT",
         "VWAP_PULLBACK_CONTINUATION",
         "BASE_SQUEEZE_BREAKOUT",
         "HOD_BREAKOUT_CONTINUATION",
@@ -1884,6 +2043,65 @@ def ema9_ready_confirmation(metrics: IntradayMetrics, late_day: Optional[bool] =
             return False, "Late-day setup needs EMA9 above VWAP or recent EMA9/VWAP bullish cross"
 
     return True, "EMA9 confirmation valid"
+
+
+def setup_ready_conf_required(setup_type: str, phase: str) -> float:
+    """
+    VWAP reclaim breakouts are allowed to become Trigger Ready at a lower
+    confidence threshold because the edge is the fresh reclaim candle itself.
+    Other setup types keep the normal strict ready threshold.
+    """
+    if setup_type == "VWAP_RECLAIM_BREAKOUT":
+        return MIN_CONF_RECLAIM_READY
+    return ready_confidence_required(phase)
+
+
+def setup_vwap_reclaim_ready(metrics: IntradayMetrics, rr: float, confidence: float) -> Tuple[bool, str]:
+    """
+    Detect high-volume VWAP reclaim from below.
+
+    This is the missing setup type exposed by SMCI:
+      below VWAP -> strong reclaim candle -> holds above VWAP -> continuation.
+
+    It is intentionally time-sensitive. If the reclaim is old or already
+    extended, it should remain WATCH / MISSED_WINDOW, not Trigger Ready.
+    """
+    if not metrics.has_data:
+        return False, "No intraday bars"
+
+    if not metrics.above_vwap:
+        return False, "Below VWAP"
+
+    if not metrics.vwap_reclaim_recent:
+        return False, metrics.vwap_reclaim_reason or "No recent VWAP reclaim"
+
+    if not metrics.vwap_reclaim_ready:
+        return False, metrics.vwap_reclaim_reason or "VWAP reclaim not ready"
+
+    if metrics.vwap_dist_pct > VWAP_RECLAIM_MAX_EXTENSION_PCT:
+        return False, f"VWAP reclaim already extended {metrics.vwap_dist_pct:.2f}% > {VWAP_RECLAIM_MAX_EXTENSION_PCT:.1f}%"
+
+    if not metrics.live_participation_ready_ok:
+        return False, metrics.live_participation_reason
+
+    if metrics.ema9 > 0:
+        if not metrics.price_above_ema9:
+            return False, "Price below EMA9 after VWAP reclaim"
+        if metrics.ema9_falling:
+            return False, "EMA9 falling after VWAP reclaim"
+
+    macd_ok, macd_reason = macd_ready_confirmation(metrics)
+    if not macd_ok:
+        return False, macd_reason
+
+    if rr < MIN_RR:
+        return False, "R/R below 1.5"
+
+    required_conf = MIN_CONF_RECLAIM_READY
+    if confidence < required_conf:
+        return False, f"Confidence below reclaim minimum {required_conf:.0f}"
+
+    return True, metrics.vwap_reclaim_reason or "High-volume VWAP reclaim breakout"
 
 
 def setup_vwap_pullback_ready(metrics: IntradayMetrics, rr: float, confidence: float) -> Tuple[bool, str]:
@@ -2049,6 +2267,11 @@ def choose_setup(metrics: IntradayMetrics, plan: Dict[str, Any], confidence: flo
     rr = safe_float(plan.get("reward_risk"), 0)
     reasons = []
 
+    reclaim_ready, reclaim_reason = setup_vwap_reclaim_ready(metrics, rr, confidence)
+    if reclaim_ready:
+        return "VWAP_RECLAIM_BREAKOUT", reclaim_reason, reasons
+    reasons.append(f"VWAP reclaim not ready: {reclaim_reason}")
+
     vwap_ready, vwap_reason = setup_vwap_pullback_ready(metrics, rr, confidence)
     if vwap_ready:
         return "VWAP_PULLBACK_CONTINUATION", vwap_reason, reasons
@@ -2084,7 +2307,9 @@ def live_signal_score(
     # 1. VWAP structure: 20
     vwap_score = 0.0
     if metrics.above_vwap:
-        if 0 <= metrics.vwap_dist_pct <= 2.0:
+        if metrics.vwap_reclaim_ready:
+            vwap_score = 22
+        elif 0 <= metrics.vwap_dist_pct <= 2.0:
             vwap_score = 20
         elif 2.0 < metrics.vwap_dist_pct <= 3.0:
             vwap_score = 16
@@ -2113,7 +2338,9 @@ def live_signal_score(
         hod_score = 0
 
     # 3. Volume/structure: 15
-    if metrics.recent_volume_expanding and not metrics.volume_fading_vs_morning:
+    if metrics.vwap_reclaim_ready:
+        volume_score = 17
+    elif metrics.recent_volume_expanding and not metrics.volume_fading_vs_morning:
         volume_score = 15
     elif metrics.base_compression and not metrics.volume_fading_vs_morning:
         volume_score = 13
@@ -2186,8 +2413,11 @@ def live_signal_score(
     if metrics.hod_distance_pct < -4.0:
         penalty += 3
 
-    if metrics.volume_fading_vs_morning:
+    if metrics.volume_fading_vs_morning and not metrics.vwap_reclaim_ready:
         penalty += VOLUME_FADE_PENALTY
+
+    if not metrics.live_participation_ok:
+        penalty += 8
 
     if metrics.bearish_momentum_divergence:
         penalty += BEARISH_DIVERGENCE_PENALTY
@@ -2238,6 +2468,9 @@ def not_ready_reasons(metrics: IntradayMetrics, plan: Dict[str, Any], confidence
     rr = safe_float(plan.get("reward_risk"), 0)
     if rr < MIN_RR:
         reasons.append(f"R/R {rr:.2f} < minimum 1.5")
+
+    _, reclaim_reason = setup_vwap_reclaim_ready(metrics, rr, confidence)
+    reasons.append(f"VWAP reclaim not ready: {reclaim_reason}")
 
     _, vwap_reason = setup_vwap_pullback_ready(metrics, rr, confidence)
     reasons.append(f"VWAP pullback not ready: {vwap_reason}")
@@ -2332,6 +2565,22 @@ def diagnostic_candidate(
         "execution_timeframe": EXECUTION_TIMEFRAME,
         "structure_timeframe": STRUCTURE_TIMEFRAME,
         "structure_bar_count": metrics.structure_bar_count,
+        "recent_1m_volume": round(metrics.recent_1m_volume, 2),
+        "avg_volume_1m_5": round(metrics.avg_volume_1m_5, 2),
+        "avg_volume_1m_20": round(metrics.avg_volume_1m_20, 2),
+        "recent_5m_dollar_volume": round(metrics.recent_5m_dollar_volume, 2),
+        "live_participation_ok": metrics.live_participation_ok,
+        "live_participation_ready_ok": metrics.live_participation_ready_ok,
+        "live_participation_reason": metrics.live_participation_reason,
+        "vwap_reclaim_recent": metrics.vwap_reclaim_recent,
+        "vwap_reclaim_ready": metrics.vwap_reclaim_ready,
+        "vwap_reclaim_bar_high": round(metrics.vwap_reclaim_bar_high, 4),
+        "vwap_reclaim_bar_low": round(metrics.vwap_reclaim_bar_low, 4),
+        "vwap_reclaim_bar_close": round(metrics.vwap_reclaim_bar_close, 4),
+        "vwap_reclaim_bar_time": metrics.vwap_reclaim_bar_time,
+        "vwap_reclaim_age_minutes": round(metrics.vwap_reclaim_age_minutes, 2),
+        "vwap_reclaim_volume_ratio": round(metrics.vwap_reclaim_volume_ratio, 2),
+        "vwap_reclaim_reason": metrics.vwap_reclaim_reason,
         "avg_volume_5": round(metrics.avg_volume_5, 2),
         "avg_volume_prev_5": round(metrics.avg_volume_prev_5, 2),
         "morning_avg_volume_5m": round(metrics.morning_avg_volume_5m, 2),
@@ -2453,6 +2702,22 @@ def signal_base(
         "execution_timeframe": EXECUTION_TIMEFRAME,
         "structure_timeframe": STRUCTURE_TIMEFRAME,
         "structure_bar_count": metrics.structure_bar_count,
+        "recent_1m_volume": round(metrics.recent_1m_volume, 2),
+        "avg_volume_1m_5": round(metrics.avg_volume_1m_5, 2),
+        "avg_volume_1m_20": round(metrics.avg_volume_1m_20, 2),
+        "recent_5m_dollar_volume": round(metrics.recent_5m_dollar_volume, 2),
+        "live_participation_ok": metrics.live_participation_ok,
+        "live_participation_ready_ok": metrics.live_participation_ready_ok,
+        "live_participation_reason": metrics.live_participation_reason,
+        "vwap_reclaim_recent": metrics.vwap_reclaim_recent,
+        "vwap_reclaim_ready": metrics.vwap_reclaim_ready,
+        "vwap_reclaim_bar_high": round(metrics.vwap_reclaim_bar_high, 4),
+        "vwap_reclaim_bar_low": round(metrics.vwap_reclaim_bar_low, 4),
+        "vwap_reclaim_bar_close": round(metrics.vwap_reclaim_bar_close, 4),
+        "vwap_reclaim_bar_time": metrics.vwap_reclaim_bar_time,
+        "vwap_reclaim_age_minutes": round(metrics.vwap_reclaim_age_minutes, 2),
+        "vwap_reclaim_volume_ratio": round(metrics.vwap_reclaim_volume_ratio, 2),
+        "vwap_reclaim_reason": metrics.vwap_reclaim_reason,
         "avg_volume_5": round(metrics.avg_volume_5, 2),
         "avg_volume_prev_5": round(metrics.avg_volume_prev_5, 2),
         "morning_avg_volume_5m": round(metrics.morning_avg_volume_5m, 2),
@@ -2709,7 +2974,7 @@ def trigger_ready_reassessment(
     )
 
     setup_ready_type, setup_reason, setup_fail_reasons = choose_setup(metrics, plan, conf, phase)
-    ready_min = ready_confidence_required(phase)
+    ready_min = setup_ready_conf_required(setup_ready_type, phase) if setup_ready_type else ready_confidence_required(phase)
 
     fail_reasons: List[str] = []
 
@@ -2777,7 +3042,7 @@ def trigger_ready_reassessment(
         exact_live,
     )
 
-    exact_ready_min = ready_confidence_required(phase)
+    exact_ready_min = setup_ready_conf_required(setup_ready_type, phase)
     if (
         not exact_plan.get("valid")
         or safe_float(exact_plan.get("reward_risk"), 0) < MIN_RR
@@ -3146,6 +3411,34 @@ def process_existing_signal(
     return {}
 
 
+def log_watch_evaluated(symbol: str, signal: Dict[str, Any], metrics: IntradayMetrics, phase: str) -> None:
+    decision_log(
+        symbol,
+        "WATCH_EVALUATED",
+        setup=signal.get("setup_type"),
+        confidence=safe_float(signal.get("confidence"), 0),
+        rr=signal.get("reward_risk"),
+        price=metrics.price,
+        vwap_dist_pct=metrics.vwap_dist_pct,
+        hod_distance_pct=metrics.hod_distance_pct,
+        reason=signal.get("reason"),
+        not_ready="; ".join(signal.get("not_ready_reasons", [])[:4]) if isinstance(signal.get("not_ready_reasons"), list) else "",
+        phase=phase,
+    )
+
+
+def log_watch_rejected(symbol: str, reasons: List[str], confidence: float, metrics: IntradayMetrics, phase: str) -> None:
+    decision_log(
+        symbol,
+        "WATCH_REJECTED",
+        reason="; ".join(dict.fromkeys([safe_str(x) for x in reasons if x])),
+        confidence=confidence,
+        price=metrics.price if metrics and metrics.has_data else 0,
+        vwap_dist_pct=metrics.vwap_dist_pct if metrics and metrics.has_data else 0,
+        phase=phase,
+    )
+
+
 def process_new_or_watch(
     row: Dict[str, Any],
     metrics: IntradayMetrics,
@@ -3161,6 +3454,7 @@ def process_new_or_watch(
     symbol = normalize_symbol(row.get("symbol"))
 
     if not metrics.has_data:
+        decision_log(symbol, "WATCH_REJECTED", reason="No intraday bars", phase=phase)
         return {}, None
 
     watch_ok, watch_reasons, rs_long = watch_criteria_pass(row, metrics, regime)
@@ -3196,13 +3490,17 @@ def process_new_or_watch(
                 regime,
             )
             out["detected_at"] = iso_now_et()
+            log_watch_evaluated(symbol, out, metrics, phase)
             return out, None
 
+        log_watch_rejected(symbol, rejected_reasons, conf, metrics, phase)
         return {}, diagnostic_candidate(row, metrics, plan, live, conf, rejected_reasons, phase, regime)
 
     # Outside regular market open phases: no new signals.
     if not is_market_open_phase(phase):
-        return {}, diagnostic_candidate(row, metrics, plan, live, conf, rejected_reasons or [f"Market phase {phase}"], phase, regime)
+        final_reasons = rejected_reasons or [f"Market phase {phase}"]
+        log_watch_rejected(symbol, final_reasons, conf, metrics, phase)
+        return {}, diagnostic_candidate(row, metrics, plan, live, conf, final_reasons, phase, regime)
 
     # Blackout phases: WATCH only if usable; no READY.
     if not is_valid_signal_phase(phase):
@@ -3220,19 +3518,23 @@ def process_new_or_watch(
                 regime,
             )
             out["detected_at"] = iso_now_et()
+            log_watch_evaluated(symbol, out, metrics, phase)
             return out, None
 
+        log_watch_rejected(symbol, rejected_reasons, conf, metrics, phase)
         return {}, diagnostic_candidate(row, metrics, plan, live, conf, rejected_reasons, phase, regime)
 
     # Valid signal phase:
     # If the plan is invalid, it must NOT show as WATCH.
     if not watch_ok or not plan.get("valid") or safe_float(plan.get("reward_risk"), 0) < MIN_RR_WATCH or conf < MIN_CONF_WATCH:
         debug(f"  {symbol}: rejected: {rejected_reasons}")
+        log_watch_rejected(symbol, rejected_reasons, conf, metrics, phase)
         return {}, diagnostic_candidate(row, metrics, plan, live, conf, rejected_reasons, phase, regime)
 
     # Decide whether it is trigger-ready.
     ready_min_conf = ready_confidence_required(phase)
-    if plan.get("valid") and safe_float(plan.get("reward_risk"), 0) >= MIN_RR and conf >= ready_min_conf:
+    early_ready_min_conf = min(ready_min_conf, MIN_CONF_RECLAIM_READY if metrics.vwap_reclaim_recent else ready_min_conf)
+    if plan.get("valid") and safe_float(plan.get("reward_risk"), 0) >= MIN_RR and conf >= early_ready_min_conf:
         setup_ready_type, setup_reason, setup_fail_reasons = choose_setup(metrics, plan, conf, phase)
 
         if setup_ready_type:
@@ -3241,7 +3543,7 @@ def process_new_or_watch(
             exact_live = live_signal_score(row, metrics, exact_plan, regime, phase)
             exact_conf = final_confidence(safe_float(row.get("score"), 0), exact_live)
 
-            exact_ready_min_conf = ready_confidence_required(phase)
+            exact_ready_min_conf = setup_ready_conf_required(setup_ready_type, phase)
             if exact_plan.get("valid") and safe_float(exact_plan.get("reward_risk"), 0) >= MIN_RR and exact_conf >= exact_ready_min_conf:
                 out = signal_base(
                     row,
@@ -3288,6 +3590,7 @@ def process_new_or_watch(
         )
         out["detected_at"] = iso_now_et()
         out["not_ready_reasons"] = setup_fail_reasons or not_ready_reasons(metrics, plan, conf)
+        log_watch_evaluated(symbol, out, metrics, phase)
         return out, None
 
     # WATCH only if plan is valid and at least minimally usable.
@@ -3304,6 +3607,7 @@ def process_new_or_watch(
         regime,
     )
     out["detected_at"] = iso_now_et()
+    log_watch_evaluated(symbol, out, metrics, phase)
     return out, None
 
 
@@ -3487,6 +3791,8 @@ def run_signal_engine() -> None:
         # WATCH is not protected. If it fell out of current focus, remove it.
         in_current_focus = sym in focus
         if not in_current_focus:
+            if existing_status == "WATCH":
+                decision_log(sym, "WATCH_REMOVED", reason="Ticker fell out of current scanner focus", phase=phase)
             continue
 
         signal, diagnostic = process_new_or_watch(row, metrics, quote, regime, phase)
@@ -3494,6 +3800,14 @@ def run_signal_engine() -> None:
         if signal:
             new_state[sym] = signal
         elif diagnostic:
+            if existing_status == "WATCH":
+                decision_log(
+                    sym,
+                    "WATCH_REMOVED",
+                    reason="No longer passes WATCH criteria",
+                    rejected_reasons="; ".join(diagnostic.get("rejected_reasons", [])[:5]) if isinstance(diagnostic.get("rejected_reasons"), list) else "",
+                    phase=phase,
+                )
             rejected_candidates.append(diagnostic)
 
     signals = build_signal_outputs(new_state)
