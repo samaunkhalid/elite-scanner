@@ -70,7 +70,7 @@ SIGNAL_STATE_FILE = "signal_state.json"
 SUPPRESSED_SIGNALS_FILE = "suppressed_signals.csv"
 SIGNAL_OUTCOMES_FILE = "signal_outcomes.csv"
 SIGNAL_OUTCOMES_SUMMARY_FILE = "signal_outcomes_summary.json"
-SIGNAL_ENGINE_STRATEGY_VERSION = "v2.3_hod_base_breakout_lifecycle"
+SIGNAL_ENGINE_STRATEGY_VERSION = "v2.4_sector_rotation_support"
 
 # State retention.
 ACTIVE_STALE_MINUTES = 10
@@ -2811,10 +2811,130 @@ def severe_risk_off(regime: Dict[str, Any]) -> bool:
     )
 
 
+
+ETF_SECTOR_LABELS: Dict[str, str] = {
+    "SPY": "S&P 500",
+    "QQQ": "Nasdaq 100",
+    "IWM": "Small Caps",
+    "XLK": "Technology",
+    "SMH": "Semiconductors",
+    "XLF": "Financials",
+    "XLE": "Energy",
+    "XLI": "Industrials",
+    "XLV": "Healthcare",
+    "XLY": "Consumer Discretionary",
+    "XLP": "Consumer Staples",
+    "XLC": "Communication Services",
+    "XLU": "Utilities",
+    "XLRE": "Real Estate",
+    "XLB": "Materials",
+    "IBB": "Biotech",
+    "KBE": "Banks",
+    "KRE": "Regional Banks",
+    "ITA": "Aerospace & Defense",
+    "ARKK": "Innovation/Growth",
+}
+
+def etf_sector_label(etf: Any) -> str:
+    code = safe_str(etf, "").upper()
+    return ETF_SECTOR_LABELS.get(code, code or "Unknown Sector")
+
+
+# Backward-compatible name used by existing JSON/dashboard fields.
+# It now returns the sector/industry label, not the long ETF fund name.
+def etf_full_name(etf: Any) -> str:
+    return etf_sector_label(etf)
+
+
+def sector_rotation_context(row: Dict[str, Any], regime: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """
+    Current intraday sector-rotation proxy.
+
+    This is not institutional order-flow. It ranks sector support using:
+      - sector ETF same-day % change,
+      - sector ETF relative strength versus SPY,
+      - sector ETF relative strength versus QQQ,
+      - stock performance versus its sector,
+      - scanner-provided sector_status when available.
+
+    The output is intentionally a small confidence adjustment, not a hard trade trigger.
+    """
+    regime = regime or {}
+
+    etf = safe_str(row.get("sector_etf"), "SPY").upper()
+    sector = safe_str(row.get("sector"), "Unknown")
+
+    sector_change = safe_float(row.get("sector_change_pct"), 0.0)
+    sector_vs_spy = safe_float(row.get("sector_vs_spy_pct"), None)
+    if sector_vs_spy is None:
+        sector_vs_spy = sector_change - safe_float(regime.get("spy_change"), 0.0)
+
+    sector_vs_qqq_raw = row.get("sector_vs_qqq_pct")
+    sector_vs_qqq = safe_float(sector_vs_qqq_raw, None)
+    if sector_vs_qqq is None:
+        sector_vs_qqq = sector_change - safe_float(regime.get("qqq_change"), 0.0)
+
+    stock_vs_sector = safe_float(row.get("stock_vs_sector_pct"), 0.0)
+    scanner_status = safe_str(row.get("sector_status"), "UNKNOWN").upper()
+
+    # Weight ETF rotation more than single-stock outperformance.
+    score = (
+        0.60 * sector_change
+        + 0.95 * sector_vs_spy
+        + 0.45 * sector_vs_qqq
+        + 0.18 * stock_vs_sector
+    )
+
+    if scanner_status in {"LEADING", "IMPROVING"}:
+        score += 0.35
+    elif scanner_status in {"WEAK", "ROTATION_OUT"}:
+        score -= 0.55
+
+    if score >= 1.25 and sector_change > 0:
+        label = "STRONG_ROTATION"
+        confidence_adjustment = 5.0
+        dashboard_label = "Strong"
+    elif score >= 0.45 and sector_change >= 0:
+        label = "SUPPORTIVE_ROTATION"
+        confidence_adjustment = 3.0
+        dashboard_label = "Supportive"
+    elif score <= -0.85 or (sector_change < -0.35 and sector_vs_spy < -0.25):
+        label = "WEAK_ROTATION"
+        confidence_adjustment = -5.0
+        dashboard_label = "Weak"
+    elif score <= -0.25:
+        label = "SOFT_ROTATION"
+        confidence_adjustment = -2.0
+        dashboard_label = "Soft"
+    else:
+        label = "NEUTRAL_ROTATION"
+        confidence_adjustment = 0.0
+        dashboard_label = "Neutral"
+
+    return {
+        "sector": sector,
+        "sector_etf": etf,
+        "sector_etf_name": etf_full_name(etf),
+        "sector_change_pct": round(sector_change, 2),
+        "sector_vs_spy_pct": round(sector_vs_spy, 2),
+        "sector_vs_qqq_pct": round(sector_vs_qqq, 2),
+        "stock_vs_sector_pct": round(stock_vs_sector, 2),
+        "sector_rotation_score": round(score, 2),
+        "sector_rotation_label": label,
+        "sector_rotation_display": dashboard_label,
+        "sector_confidence_adjustment": confidence_adjustment,
+    }
+
+
 def sector_weak(row: Dict[str, Any]) -> bool:
     status = safe_str(row.get("sector_status"), "").upper()
     sector_score = safe_float(row.get("sector_score"), 0)
-    return status in {"WEAK", "ROTATION_OUT"} or sector_score <= -3
+    rotation = sector_rotation_context(row, {})
+    return (
+        status in {"WEAK", "ROTATION_OUT"}
+        or sector_score <= -3
+        or safe_str(rotation.get("sector_rotation_label"), "") == "WEAK_ROTATION"
+    )
 
 
 def high_risk_extreme(row: Dict[str, Any]) -> bool:
@@ -3846,14 +3966,26 @@ def live_signal_score(
 
     # 5. Sector + market alignment: 15
     sector_status = safe_str(row.get("sector_status"), "").upper()
+    rotation = sector_rotation_context(row, regime)
+
     if sector_status == "LEADING":
-        sector_score = 10
-    elif sector_status in {"IMPROVING", "NEUTRAL", "UNKNOWN", ""}:
-        sector_score = 6
+        sector_score = 8
+    elif sector_status == "IMPROVING":
+        sector_score = 7
+    elif sector_status in {"NEUTRAL", "UNKNOWN", ""}:
+        sector_score = 5
     elif sector_status == "WEAK":
-        sector_score = 0
+        sector_score = 1
     else:
         sector_score = 4
+
+    # Sector rotation is a small confirmation/penalty only. It should not
+    # overpower VWAP, trigger behavior, R/R, or live participation.
+    sector_score = clamp(
+        sector_score + safe_float(rotation.get("sector_confidence_adjustment"), 0.0),
+        0,
+        12,
+    )
 
     rs_long = is_relative_strength_long(row, metrics, regime)
     if severe_risk_off(regime):
@@ -3997,6 +4129,7 @@ def diagnostic_candidate(
         "signal_rank": safe_int(row.get("signal_rank"), 0),
         "market_phase": phase,
         "sector_status": safe_str(row.get("sector_status"), ""),
+        **sector_rotation_context(row, regime),
         "risk_category": safe_str(row.get("risk_category"), "NORMAL"),
         "setup_bucket": safe_str(row.get("setup_bucket"), ""),
         "event_context": event_context_for_row(row),
@@ -4263,6 +4396,7 @@ def signal_base(
         "bearish_momentum_divergence": metrics.bearish_momentum_divergence,
         "momentum_status": metrics.momentum_status,
         "sector_status": safe_str(row.get("sector_status"), ""),
+        **sector_rotation_context(row, regime or {}),
         "market_phase": phase,
         "reason": reason,
         "invalidation": "For VWAP reclaim: invalidate only on VWAP/reclaim-base loss, stale setup, stop hit, or invalid R/R. For other setups: lose VWAP/trigger/base support or stale signal.",
