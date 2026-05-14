@@ -1842,8 +1842,8 @@ def build_signal_desk_item(signal, compact=False):
             {time_html}
             {lunch_note_html}
             <div class="signal-desk-plan">
-                <span>Entry <b>{entry}</b></span>
-                <span>Stop <b>{stop}</b></span>
+                <span>E <b>{entry}</b></span>
+                <span>S <b>{stop}</b></span>
                 <span>T1 <b>{target_1}</b></span>
                 <span>R/R <b>{rr_text}</b></span>
                 <span>Conf <b>{confidence_text}</b></span>
@@ -2181,7 +2181,7 @@ def build_signal_outcomes_panel(summary):
 
     if recent:
         rows_html = []
-        for row in recent[:6]:
+        for row in recent[:10]:
             symbol = safe_str(row.get("symbol"), "—").upper()
             setup = safe_str(row.get("setup_type"), "—")
             status = safe_str(row.get("outcome_status"), "—").upper()
@@ -2193,8 +2193,8 @@ def build_signal_outcomes_panel(summary):
             final_r = safe_float(row.get("final_r_multiple"), 0)
             checked = compact_time_et(row.get("last_checked"))
             reason = safe_str(row.get("invalidation_reason") or row.get("outcome_detail"), "")
-            if len(reason) > 105:
-                reason = reason[:102] + "..."
+            if len(reason) > 78:
+                reason = reason[:75] + "..."
 
             r_text = f"{best_r:.2f}R" if best_r > 0 else "—"
             final_text = f"{final_r:.2f}R" if final_r not in [0, 0.0] else "—"
@@ -2218,9 +2218,9 @@ def build_signal_outcomes_panel(summary):
                         <span>{esc(checked)}</span>
                     </div>
                     <div class="outcome-plan">
-                        <span>Entry <b>{entry}</b></span>
+                        <span>E <b>{entry}</b></span>
                         <span>T1 <b>{t1}</b></span>
-                        <span>Stop <b>{stop}</b></span>
+                        <span>S <b>{stop}</b></span>
                         <span>Best <b>{esc(r_text)}</b></span>
                         <span>Final <b>{esc(final_text)}</b></span>
                     </div>
@@ -2237,8 +2237,6 @@ def build_signal_outcomes_panel(summary):
             </div>
         """
 
-    version_html = f'<span>Strategy: {esc(strategy_version)}</span>' if strategy_version else ""
-
     return f"""
     <section class="signal-outcomes-panel" id="outcomes">
         <div class="signal-outcomes-top">
@@ -2246,10 +2244,6 @@ def build_signal_outcomes_panel(summary):
                 <strong>Signal Outcomes</strong>
                 <span>Signal performance tracker. Not your manual trade journal.</span>
                 <em class="outcome-help">INV BEFORE = failed before entry/active. INV AFTER = trigger touched or active attempt failed after entry conditions.</em>
-            </div>
-            <div class="signal-outcomes-meta">
-                {version_html}
-                <span>File: signal_outcomes.csv</span>
             </div>
         </div>
         <div class="outcome-stats">
@@ -3937,7 +3931,7 @@ td small {
    ========================= */
 .signal-outcomes-panel {
     margin: 18px 0 16px;
-    padding: 16px 18px;
+    padding: 14px 16px;
     border-radius: 16px;
     border: 1px solid rgba(148, 163, 184, 0.16);
     background:
@@ -3950,9 +3944,9 @@ td small {
     display: flex;
     align-items: flex-start;
     justify-content: space-between;
-    gap: 14px;
+    gap: 10px;
     flex-wrap: wrap;
-    margin-bottom: 12px;
+    margin-bottom: 10px;
 }
 
 .signal-outcomes-top > div:first-child {
@@ -4000,25 +3994,25 @@ td small {
 
 .outcome-stats {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(92px, 1fr));
-    gap: 8px;
-    margin-bottom: 12px;
+    grid-template-columns: repeat(9, minmax(72px, 1fr));
+    gap: 7px;
+    margin-bottom: 10px;
 }
 
 .outcome-stat {
     border: 1px solid rgba(148, 163, 184, 0.14);
     background: rgba(2, 6, 23, 0.46);
-    border-radius: 12px;
-    padding: 9px 10px;
+    border-radius: 11px;
+    padding: 7px 8px;
     display: flex;
     flex-direction: column;
-    gap: 2px;
-    min-height: 54px;
+    gap: 1px;
+    min-height: 44px;
 }
 
 .outcome-stat b {
     color: #f8fafc;
-    font-size: 17px;
+    font-size: 15px;
     line-height: 1;
 }
 
@@ -4030,9 +4024,9 @@ td small {
 
 .outcome-rows {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(260px, 340px));
+    grid-template-columns: repeat(5, minmax(0, 1fr));
     gap: 8px;
-    justify-content: start;
+    justify-content: stretch;
     align-items: stretch;
 }
 
@@ -4044,10 +4038,10 @@ td small {
         "plan plan"
         "flag flag"
         "reason reason";
-    gap: 8px 10px;
+    gap: 6px 8px;
     align-items: flex-start;
-    padding: 9px 10px;
-    border-radius: 13px;
+    padding: 8px 9px;
+    border-radius: 12px;
     border: 1px solid rgba(148, 163, 184, 0.14);
     background: rgba(2, 6, 23, 0.36);
     min-width: 0;
@@ -4057,19 +4051,19 @@ td small {
     grid-area: main;
     display: flex;
     flex-direction: column;
-    gap: 3px;
+    gap: 2px;
     min-width: 0;
 }
 
 .outcome-main strong {
     color: #38bdf8;
-    font-size: 15px;
+    font-size: 14px;
     letter-spacing: 0.01em;
 }
 
 .outcome-main span {
     color: #cbd5e1;
-    font-size: 11px;
+    font-size: 10px;
     text-transform: uppercase;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -4079,17 +4073,17 @@ td small {
 .outcome-plan {
     grid-area: plan;
     display: flex;
-    gap: 6px;
+    gap: 4px;
     flex-wrap: wrap;
     color: #94a3b8;
-    font-size: 11px;
+    font-size: 10px;
 }
 
 .outcome-plan span {
     border: 1px solid rgba(148, 163, 184, 0.12);
     background: rgba(15, 23, 42, 0.72);
     border-radius: 999px;
-    padding: 4px 8px;
+    padding: 3px 6px;
     white-space: nowrap;
 }
 
@@ -4103,9 +4097,9 @@ td small {
     align-items: flex-end;
     justify-content: flex-start;
     flex-direction: column;
-    gap: 5px;
+    gap: 4px;
     color: #94a3b8;
-    font-size: 11px;
+    font-size: 10px;
 }
 
 .outcome-pill {
@@ -4208,13 +4202,29 @@ td small {
     font-size: 12px;
 }
 
-@media (max-width: 760px) {
+@media (max-width: 1600px) {
+    .outcome-rows {
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+    }
+}
+
+@media (max-width: 1180px) {
+    .outcome-stats {
+        grid-template-columns: repeat(5, minmax(72px, 1fr));
+    }
+
+    .outcome-rows {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+}
+
+@media (max-width: 860px) {
     .outcome-stats {
         grid-template-columns: repeat(4, minmax(74px, 1fr));
     }
 
     .outcome-rows {
-        grid-template-columns: 1fr;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
     }
 
     .outcome-row {
