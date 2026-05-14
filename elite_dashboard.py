@@ -2061,6 +2061,191 @@ def build_signal_diagnostics_panel(rejected_candidates, max_preview=3):
     """
 
 
+def load_signal_outcomes_summary():
+    summary = load_json_object("signal_outcomes_summary.json", default={})
+    if isinstance(summary, dict) and summary:
+        return summary
+
+    # Fallback: build a small summary directly from CSV if JSON has not been created yet.
+    rows = load_csv_records("signal_outcomes.csv")
+    if not rows:
+        return {}
+
+    now_utc, now_ny = get_times()
+    today = now_ny.strftime("%Y-%m-%d")
+    today_rows = [r for r in rows if safe_str(r.get("session_date")) == today]
+
+    counts = {
+        "total": len(today_rows),
+        "watch": 0,
+        "trigger_ready": 0,
+        "active_signal": 0,
+        "t1_hit": 0,
+        "t2_hit": 0,
+        "stop_hit": 0,
+        "invalidated_before_entry": 0,
+        "invalidated_after_entry": 0,
+        "watch_removed": 0,
+        "open": 0,
+        "completed": 0,
+    }
+
+    for row in today_rows:
+        status = safe_str(row.get("outcome_status")).upper()
+        key = status.lower()
+        if key in counts:
+            counts[key] += 1
+        if status in ["WATCH", "TRIGGER_READY", "ACTIVE_SIGNAL"]:
+            counts["open"] += 1
+        if status not in ["", "WATCH", "TRIGGER_READY", "ACTIVE_SIGNAL"]:
+            counts["completed"] += 1
+
+    recent = sorted(today_rows, key=lambda r: safe_str(r.get("last_checked")), reverse=True)[:12]
+    return {
+        "generated_at_et": "",
+        "strategy_version": "",
+        "today_session": today,
+        "today": counts,
+        "recent": recent,
+        "file": "signal_outcomes.csv",
+    }
+
+
+def outcome_status_class(status):
+    status = safe_str(status).upper()
+    if status in ["T1_HIT", "T2_HIT"]:
+        return "outcome-good"
+    if status in ["STOP_HIT"]:
+        return "outcome-bad"
+    if status in ["INVALIDATED_BEFORE_ENTRY", "INVALIDATED_AFTER_ENTRY", "WATCH_REMOVED", "MISSED_WINDOW", "EXPIRED"]:
+        return "outcome-neutral"
+    if status in ["ACTIVE_SIGNAL"]:
+        return "outcome-active"
+    if status in ["TRIGGER_READY"]:
+        return "outcome-ready"
+    return "outcome-watch"
+
+
+def short_outcome_status(status):
+    status = safe_str(status, "—").upper()
+    mapping = {
+        "T1_HIT": "T1",
+        "T2_HIT": "T2",
+        "STOP_HIT": "STOP",
+        "INVALIDATED_BEFORE_ENTRY": "INV-BEFORE",
+        "INVALIDATED_AFTER_ENTRY": "INV-AFTER",
+        "WATCH_REMOVED": "WATCH REMOVED",
+        "ACTIVE_SIGNAL": "ACTIVE",
+        "TRIGGER_READY": "READY",
+        "WATCH": "WATCH",
+    }
+    return mapping.get(status, status.replace("_", " "))
+
+
+def build_signal_outcomes_panel(summary):
+    if not isinstance(summary, dict) or not summary:
+        return """
+        <section class="signal-outcomes-panel" id="outcomes">
+            <div class="signal-outcomes-top">
+                <div>
+                    <strong>Signal Outcomes</strong>
+                    <span>Tracking starts after signal_outcomes.csv is created.</span>
+                </div>
+            </div>
+        </section>
+        """
+
+    today = summary.get("today", {}) if isinstance(summary.get("today"), dict) else {}
+    recent = summary.get("recent", []) if isinstance(summary.get("recent"), list) else []
+    strategy_version = safe_str(summary.get("strategy_version"), "")
+
+    stat_items = [
+        ("Total", safe_int(today.get("total"), 0)),
+        ("Open", safe_int(today.get("open"), 0)),
+        ("Ready", safe_int(today.get("trigger_ready"), 0)),
+        ("Active", safe_int(today.get("active_signal"), 0)),
+        ("T1", safe_int(today.get("t1_hit"), 0)),
+        ("T2", safe_int(today.get("t2_hit"), 0)),
+        ("Stop", safe_int(today.get("stop_hit"), 0)),
+        ("Invalid", safe_int(today.get("invalidated_before_entry"), 0) + safe_int(today.get("invalidated_after_entry"), 0)),
+    ]
+
+    stats_html = "".join(
+        f'<span class="outcome-stat"><b>{value}</b>{esc(label)}</span>'
+        for label, value in stat_items
+    )
+
+    if recent:
+        rows_html = []
+        for row in recent[:8]:
+            symbol = safe_str(row.get("symbol"), "—").upper()
+            setup = safe_str(row.get("setup_type"), "—")
+            status = safe_str(row.get("outcome_status"), "—").upper()
+            cls = outcome_status_class(status)
+            entry = format_signal_price(row.get("entry"))
+            t1 = format_signal_price(row.get("target_1"))
+            stop = format_signal_price(row.get("stop"))
+            best_r = safe_float(row.get("best_r_multiple"), 0)
+            final_r = safe_float(row.get("final_r_multiple"), 0)
+            checked = compact_time_et(row.get("last_checked"))
+            reason = safe_str(row.get("invalidation_reason") or row.get("outcome_detail"), "")
+            if len(reason) > 105:
+                reason = reason[:102] + "..."
+
+            r_text = f"{best_r:.2f}R" if best_r > 0 else "—"
+            final_text = f"{final_r:.2f}R" if final_r not in [0, 0.0] else "—"
+
+            rows_html.append(f"""
+                <div class="outcome-row">
+                    <div class="outcome-main">
+                        <strong>{esc(symbol)}</strong>
+                        <span>{esc(setup)}</span>
+                    </div>
+                    <div class="outcome-plan">
+                        <span>Entry <b>{entry}</b></span>
+                        <span>T1 <b>{t1}</b></span>
+                        <span>Stop <b>{stop}</b></span>
+                        <span>Best <b>{esc(r_text)}</b></span>
+                        <span>Final <b>{esc(final_text)}</b></span>
+                    </div>
+                    <div class="outcome-side">
+                        <b class="outcome-pill {cls}">{esc(short_outcome_status(status))}</b>
+                        <span>{esc(checked)}</span>
+                    </div>
+                    <div class="outcome-reason">{esc(reason)}</div>
+                </div>
+            """)
+        body_html = f'<div class="outcome-rows">{"".join(rows_html)}</div>'
+    else:
+        body_html = """
+            <div class="outcome-empty">
+                <strong>No signal outcome rows yet today.</strong>
+                <span>Rows appear after Watch, Trigger Ready, Active, Invalidated, T1/T2, or Stop events are recorded.</span>
+            </div>
+        """
+
+    version_html = f'<span>Strategy: {esc(strategy_version)}</span>' if strategy_version else ""
+
+    return f"""
+    <section class="signal-outcomes-panel" id="outcomes">
+        <div class="signal-outcomes-top">
+            <div>
+                <strong>Signal Outcomes</strong>
+                <span>Signal performance tracker. This is not your manual trade journal.</span>
+            </div>
+            <div class="signal-outcomes-meta">
+                {version_html}
+                <span>File: signal_outcomes.csv</span>
+            </div>
+        </div>
+        <div class="outcome-stats">
+            {stats_html}
+        </div>
+        {body_html}
+    </section>
+    """
+
+
 def build_signal_desk_panel(signals, rejected_candidates=None):
     """
     Full-width Signal Desk.
@@ -2196,6 +2381,8 @@ def build_dashboard(potential, active, extended, highrisk, raw, active_watchlist
         raw = apply_live_market_overlay(raw, live_market_map)
 
         signal_desk_html = build_signal_desk_panel(signals, rejected_candidates)
+        outcome_summary = load_signal_outcomes_summary()
+        signal_outcomes_html = build_signal_outcomes_panel(outcome_summary)
 
         # Main decision screen intentionally excludes Extended / High Risk names.
         # They are still generated and saved by the scanner for diagnostics,
@@ -2232,6 +2419,7 @@ def build_dashboard(potential, active, extended, highrisk, raw, active_watchlist
         nav_tabs = """
         <div class="nav-tabs">
             <a href="#signals">Signal Desk</a>
+            <a href="#outcomes">Outcomes</a>
             <a href="#potential">Potential Movers</a>
             <a href="#active">Active Momentum</a>
             <a href="#sectors">Sector Leadership</a>
@@ -2242,6 +2430,7 @@ def build_dashboard(potential, active, extended, highrisk, raw, active_watchlist
         # Hard display gate outside regular market hours.
         # No ticker symbols should appear in Signal Desk, cards, table, or sector context.
         signal_desk_html = build_market_inactive_signal_panel(status)
+        signal_outcomes_html = ""
         potential_section = ""
         active_section = ""
         sector_snapshot = ""
@@ -3751,6 +3940,7 @@ td small {
     $regime_html
     $macro_html
     $signal_desk_html
+    $signal_outcomes_html
 
     $nav_tabs
 
@@ -3777,6 +3967,7 @@ td small {
         macro_html=macro_html,
         sector_snapshot=sector_snapshot,
         signal_desk_html=signal_desk_html,
+        signal_outcomes_html=signal_outcomes_html,
         nav_tabs=nav_tabs,
         potential_section=potential_section,
         active_section=active_section,
