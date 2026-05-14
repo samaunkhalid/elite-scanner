@@ -267,26 +267,70 @@ def load_scanner_meta():
     return load_json_object("scanner_meta.json", {})
 
 
-def header_time_label(value, fallback="—"):
-    """Convert stored ISO timestamps into a header-friendly ET label."""
+def parse_et_datetime(value):
+    """
+    Parse a timestamp-like value and normalize it to America/New_York when possible.
+    Supports ISO strings with timezone, Zulu timestamps, and common dashboard strings.
+    """
     text = safe_str(value, "").strip()
     if not text:
-        return fallback
+        return None
 
-    cleaned = text.replace("Z", "+00:00").replace(" ET", "")
+    cleaned = (
+        text.replace("Z", "+00:00")
+            .replace(" ET", "")
+            .replace(" EDT", "")
+            .replace(" EST", "")
+            .strip()
+    )
 
+    # ISO first: 2026-05-14T13:31:00-04:00 or 2026-05-14 13:31:00
     try:
         dt = datetime.fromisoformat(cleaned)
         if dt.tzinfo and ZoneInfo:
             dt = dt.astimezone(ZoneInfo("America/New_York"))
-        return dt.strftime("%Y-%m-%d %H:%M ET")
+        return dt
     except Exception:
         pass
 
-    if "ET" in text:
-        return text[:22]
+    # Common fallback: 2026-05-14 13:31
+    m = re.search(r"(\d{4})-(\d{2})-(\d{2})[ T]+(\d{1,2}):(\d{2})", text)
+    if m:
+        try:
+            return datetime(
+                int(m.group(1)), int(m.group(2)), int(m.group(3)),
+                int(m.group(4)), int(m.group(5))
+            )
+        except Exception:
+            return None
 
-    return text[:16]
+    return None
+
+
+def full_datetime_et_label(value, fallback="—"):
+    """
+    Display dashboard dates as:
+      dd-mm-yyyy at hh:mm ET
+    """
+    dt = parse_et_datetime(value)
+    if dt:
+        return dt.strftime("%d-%m-%Y at %H:%M ET")
+
+    text = safe_str(value, "").strip()
+    if not text:
+        return fallback
+
+    # Convert plain YYYY-MM-DD HH:MM strings if parsing failed.
+    m = re.search(r"(\d{4})-(\d{2})-(\d{2}).*?(\d{1,2}):(\d{2})", text)
+    if m:
+        return f"{m.group(3)}-{m.group(2)}-{m.group(1)} at {int(m.group(4)):02d}:{m.group(5)} ET"
+
+    return text
+
+
+def header_time_label(value, fallback="—"):
+    """Convert stored ISO timestamps into the standard header ET label."""
+    return full_datetime_et_label(value, fallback)
 
 
 def build_live_market_map(signal_payload):
@@ -1254,46 +1298,58 @@ def macro_display_name(name):
     return aliases.get(raw, raw)
 
 
-def macro_weekday(event):
+def macro_event_datetime_label(event):
     """
-    Return weekday name from event date/datetime.
+    Return macro event date/time as:
+      dd-mm-yyyy at hh:mm ET
     """
+    dt_text = safe_str(event.get("datetime_et"), "")
+    if dt_text:
+        label = full_datetime_et_label(dt_text, "")
+        if label:
+            return label
+
     date_text = safe_str(event.get("date"), "")
+    time_text = safe_str(event.get("time_et"), "TBD").replace(" ET", "").strip()
 
-    if not date_text:
-        dt_text = safe_str(event.get("datetime_et"), "")
-        date_text = dt_text[:10] if len(dt_text) >= 10 else ""
+    if date_text:
+        try:
+            date_dt = datetime.fromisoformat(date_text[:10])
+            if time_text and time_text.upper() != "TBD":
+                m = re.match(r"^(\d{1,2}):(\d{2})", time_text)
+                if m:
+                    return f"{date_dt.strftime('%d-%m-%Y')} at {int(m.group(1)):02d}:{m.group(2)} ET"
+            return date_dt.strftime("%d-%m-%Y")
+        except Exception:
+            pass
 
-    try:
-        return datetime.fromisoformat(date_text).strftime("%A")
-    except Exception:
-        return ""
+    if time_text:
+        return f"{time_text} ET" if time_text.upper() != "TBD" else "TBD"
+
+    return "TBD"
 
 
 def format_macro_event_label(event):
     """
     Example:
-    Consumer Price Index (CPI): Tuesday at 08:30 ET
+    Consumer Price Index (CPI): 15-05-2026 at 08:30 ET
     """
     name = macro_display_name(event.get("name") or event.get("event") or "Macro Event")
-    weekday = macro_weekday(event)
-    time_et = safe_str(event.get("time_et"), "TBD")
-
-    if weekday:
-        return f"{name}: {weekday} at {time_et} ET"
-
-    return f"{name}: {time_et} ET"
+    when = macro_event_datetime_label(event)
+    return f"{name}: {when}"
 
 
 def build_macro_html(macro):
     if not macro:
         return """
-        <div class="macro-banner macro-unknown">
-            <div>
-                <strong>Macro Risk: Not checked</strong>
-                <span>No macro_calendar.json found. Run macro_calendar.py before building the dashboard.</span>
+        <section class="macro-banner macro-unknown macro-compact">
+            <div class="macro-main compact">
+                <div>
+                    <strong>Macro Risk: Not checked</strong>
+                    <span>No macro_calendar.json found. Run macro_calendar.py before building the dashboard.</span>
+                </div>
             </div>
-        </div>
+        </section>
         """
 
     risk_level = safe_str(macro.get("risk_level"), "UNKNOWN").upper()
@@ -1306,99 +1362,100 @@ def build_macro_html(macro):
             "UNKNOWN": "macro-unknown",
         }.get(risk_level, "macro-unknown")
 
-    headline = safe_str(macro.get("headline"), "Macro Risk: Unknown")
     action = safe_str(macro.get("action"), "Check the economic calendar manually before trading.")
     source = safe_str(macro.get("source"), "Unknown source")
-    generated = safe_str(macro.get("generated_at_et"), "")
-    events = macro.get("events", [])
-
-    def render_event_chip(event):
-        impact = safe_str(event.get("impact"), "MEDIUM").upper()
-        impact_class = "impact-high" if impact == "HIGH" else "impact-medium" if impact == "MEDIUM" else "impact-low"
-        label = format_macro_event_label(event)
-
-        return f"""
-        <div class="macro-event">
-            <span class="impact-pill {impact_class}">{esc(impact)}</span>
-            <strong>{esc(label)}</strong>
-        </div>
-        """
-
-    def render_more_chip(count, impact):
-        if count <= 0:
-            return ""
-        impact = impact.upper()
-        impact_class = "impact-high" if impact == "HIGH" else "impact-medium"
-        return f"""
-        <div class="macro-event macro-more">
-            <span class="impact-pill {impact_class}">+{count}</span>
-            <strong>more {esc(impact.lower())} events</strong>
-        </div>
-        """
+    generated = full_datetime_et_label(macro.get("generated_at_et"), "")
+    events = macro.get("events", []) or []
 
     high_events = [e for e in events if safe_str(e.get("impact"), "").upper() == "HIGH"]
     medium_events = [e for e in events if safe_str(e.get("impact"), "").upper() == "MEDIUM"]
 
-    def is_headline_event(event):
+    primary_event = None
+    if high_events:
+        primary_event = high_events[0]
+    elif medium_events:
+        primary_event = medium_events[0]
+    elif events:
+        primary_event = events[0]
+
+    primary_name = "No high/medium macro event"
+    primary_when = ""
+    primary_impact = risk_level
+
+    if isinstance(primary_event, dict):
+        primary_name = macro_display_name(primary_event.get("name") or primary_event.get("event") or "Macro Event")
+        primary_when = macro_event_datetime_label(primary_event)
+        primary_impact = safe_str(primary_event.get("impact"), risk_level).upper()
+
+    def render_event_chip(event):
+        impact = safe_str(event.get("impact"), "MEDIUM").upper()
+        impact_class = "impact-high" if impact == "HIGH" else "impact-medium" if impact == "MEDIUM" else "impact-low"
+        name = macro_display_name(event.get("name") or event.get("event") or "Macro Event")
+        when = macro_event_datetime_label(event)
+
+        return f"""
+        <div class="macro-event">
+            <span class="impact-pill {impact_class}">{esc(impact)}</span>
+            <strong>{esc(name)}</strong>
+            <span class="macro-event-time">{esc(when)}</span>
+        </div>
         """
-        Avoid repeating the same macro event twice:
-          - once in the banner headline
-          - again as the first event chip
-        """
-        event_name = macro_display_name(event.get("name") or event.get("event") or "")
-        if not event_name:
+
+    def same_event(a, b):
+        if not isinstance(a, dict) or not isinstance(b, dict):
             return False
+        return (
+            safe_str(a.get("name") or a.get("event"), "").lower() == safe_str(b.get("name") or b.get("event"), "").lower()
+            and safe_str(a.get("date"), "")[:10] == safe_str(b.get("date"), "")[:10]
+            and safe_str(a.get("time_et"), "") == safe_str(b.get("time_et"), "")
+        )
 
-        return event_name.lower() in headline.lower()
+    visible_events = []
+    for e in high_events + medium_events:
+        if primary_event and same_event(e, primary_event):
+            continue
+        visible_events.append(e)
 
-    # Compact display:
-    # Row 1 = HIGH events, Row 2 = MEDIUM events.
-    # Do not repeat the event already named in the banner headline.
-    # The full 7-day list remains stored in macro_calendar.json.
-    high_limit = 3
-    medium_limit = 3
+    visible_limit = 3
+    visible_chips = "".join(render_event_chip(e) for e in visible_events[:visible_limit])
+    more_count = max(0, len(visible_events) - visible_limit)
 
-    high_events_visible = [e for e in high_events if not is_headline_event(e)]
-    medium_events_visible = [e for e in medium_events if not is_headline_event(e)]
-
-    high_rows = "".join(render_event_chip(e) for e in high_events_visible[:high_limit])
-    high_rows += render_more_chip(len(high_events_visible) - high_limit, "HIGH")
-
-    medium_rows = "".join(render_event_chip(e) for e in medium_events_visible[:medium_limit])
-    medium_rows += render_more_chip(len(medium_events_visible) - medium_limit, "MEDIUM")
-
-    event_rows = ""
-
-    if high_rows:
-        event_rows += f"""
-        <div class="macro-event-row macro-high-row">
-            {high_rows}
+    more_chip = ""
+    if more_count:
+        more_chip = f"""
+        <div class="macro-event macro-more">
+            <span class="impact-pill impact-medium">+{more_count}</span>
+            <strong>more events</strong>
         </div>
         """
 
-    if medium_rows:
-        event_rows += f"""
-        <div class="macro-event-row macro-medium-row">
-            {medium_rows}
-        </div>
-        """
+    event_row = visible_chips + more_chip
+    if not event_row:
+        event_row = '<div class="macro-event muted">No additional high/medium events in lookahead window.</div>'
 
-    if not event_rows:
-        event_rows = '<div class="macro-event muted">No high/medium macro events flagged in lookahead window.</div>'
+    primary_impact_class = "impact-high" if primary_impact == "HIGH" else "impact-medium" if primary_impact == "MEDIUM" else "impact-low"
 
     return f"""
-    <section class="macro-banner {esc(risk_class)}">
-        <div class="macro-main">
-            <div>
-                <strong>{esc(headline)}</strong>
-                <span>{esc(action)}</span>
+    <section class="macro-banner {esc(risk_class)} macro-compact">
+        <div class="macro-main compact">
+            <div class="macro-primary">
+                <div class="macro-title-line">
+                    <strong>Macro Risk: {esc(risk_level)}</strong>
+                    <span class="impact-pill {primary_impact_class}">{esc(primary_impact)}</span>
+                </div>
+                <div class="macro-next">
+                    <span class="macro-label">Next:</span>
+                    <strong>{esc(primary_name)}</strong>
+                    {f'<span class="macro-time">{esc(primary_when)}</span>' if primary_when else ''}
+                </div>
+                <span class="macro-action">{esc(action)}</span>
             </div>
             <div class="macro-source">
                 Source: {esc(source)}{(" · " + esc(generated)) if generated else ""}
             </div>
         </div>
-        <div class="macro-events grouped">
-            {event_rows}
+        <div class="macro-events compact">
+            {event_row}
         </div>
     </section>
     """
@@ -2818,31 +2875,73 @@ body {
 .macro-banner {
     border-radius: 14px;
     border: 1px solid rgba(148, 163, 184, 0.14);
-    padding: 12px 16px;
-    margin-bottom: 14px;
+    padding: 10px 14px;
+    margin-bottom: 12px;
     background: rgba(15, 23, 42, 0.82);
+}
+
+.macro-compact {
+    min-height: unset;
 }
 
 .macro-main {
     display: flex;
     justify-content: space-between;
-    gap: 16px;
+    gap: 14px;
     flex-wrap: wrap;
     align-items: flex-start;
 }
 
-.macro-main strong {
-    display: block;
-    font-size: 14px;
-    font-weight: 750;
-    margin-bottom: 3px;
+.macro-main.compact {
+    align-items: center;
 }
 
-.macro-main span,
-.macro-source {
-    color: #94a3b8;
+.macro-primary {
+    min-width: 280px;
+    flex: 1 1 auto;
+}
+
+.macro-title-line,
+.macro-next {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.macro-title-line strong {
+    font-size: 13.5px;
+    font-weight: 800;
+}
+
+.macro-next {
+    margin-top: 4px;
+    color: #cbd5e1;
     font-size: 12px;
+}
+
+.macro-next strong {
+    font-weight: 750;
+}
+
+.macro-label,
+.macro-action,
+.macro-source,
+.macro-event-time,
+.macro-time {
+    color: #94a3b8;
+    font-size: 11.5px;
     line-height: 1.35;
+}
+
+.macro-action {
+    display: block;
+    margin-top: 4px;
+}
+
+.macro-source {
+    text-align: right;
+    max-width: 520px;
 }
 
 .macro-events {
@@ -2853,35 +2952,15 @@ body {
     align-items: center;
 }
 
-.macro-events.grouped {
-    flex-direction: column;
-    align-items: stretch;
-    gap: 6px;
-}
-
-.macro-event-row {
-    display: flex;
-    gap: 7px;
-    flex-wrap: nowrap;
-    align-items: center;
-    overflow-x: auto;
-    padding-bottom: 1px;
-}
-
-.macro-event-row::-webkit-scrollbar {
-    height: 4px;
-}
-
-.macro-event-row::-webkit-scrollbar-thumb {
-    background: rgba(148, 163, 184, 0.18);
-    border-radius: 999px;
+.macro-events.compact {
+    margin-top: 7px;
 }
 
 .macro-event {
     display: inline-flex;
     align-items: center;
     gap: 7px;
-    padding: 5px 9px;
+    padding: 4px 8px;
     border-radius: 999px;
     background: rgba(2, 6, 23, 0.38);
     border: 1px solid rgba(148, 163, 184, 0.12);
@@ -2947,6 +3026,16 @@ body {
     border-left: 4px solid #94a3b8;
 }
 
+@media (max-width: 760px) {
+    .macro-source {
+        text-align: left;
+    }
+
+    .macro-event {
+        white-space: normal;
+        border-radius: 12px;
+    }
+}
 
 .regime-metrics {
     display: flex;
