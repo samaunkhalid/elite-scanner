@@ -70,7 +70,7 @@ SIGNAL_STATE_FILE = "signal_state.json"
 SUPPRESSED_SIGNALS_FILE = "suppressed_signals.csv"
 SIGNAL_OUTCOMES_FILE = "signal_outcomes.csv"
 SIGNAL_OUTCOMES_SUMMARY_FILE = "signal_outcomes_summary.json"
-SIGNAL_ENGINE_STRATEGY_VERSION = "v1.7_ready_only_success_outcomes"
+SIGNAL_ENGINE_STRATEGY_VERSION = "v1.8_locked_ready_compact_outcomes"
 
 # State retention.
 ACTIVE_STALE_MINUTES = 10
@@ -4188,35 +4188,61 @@ def trigger_ready_reassessment(
         fail_reasons.extend(setup_fail_reasons)
 
     if fail_reasons:
-        watch_plan = plan
-        if not watch_plan.get("valid") or safe_float(watch_plan.get("reward_risk"), 0) < MIN_RR_WATCH:
-            return False, {}, "; ".join(dict.fromkeys(fail_reasons))
+        # Protected Trigger Ready rule:
+        # Once a setup reaches TRIGGER_READY, do not quietly demote it back to
+        # WATCH. It must remain visible until it is promoted, invalidated by
+        # hard structure failure, target/stop is hit, or it expires. This avoids
+        # confusing cases where the Signal Desk shows a ticker as Ready and then
+        # later lists it as a normal Watch candidate without a clear invalidation.
+        warning_text = "; ".join(dict.fromkeys(fail_reasons))
+        out = dict(existing)
+        out.update({
+            "signal_status": "TRIGGER_READY",
+            "actionable": bool(existing.get("actionable", False)),
+            "actionability": safe_str(existing.get("actionability"), "TRIGGER_READY") or "TRIGGER_READY",
+            "last_checked": iso_now_et(),
+            "updated_at": iso_now_et(),
+            "market_phase": phase,
+            "price": round(metrics.price, 4) if metrics.has_data else out.get("price", 0),
+            "price_source": metrics.price_source if metrics.has_data else out.get("price_source", ""),
+            "price_updated_at": metrics.price_updated_at if metrics.has_data else out.get("price_updated_at", ""),
+            "latest_bar_time": timestamp_to_et_iso(metrics.latest_bar_time) if metrics.has_data else out.get("latest_bar_time", ""),
+            "bid": round(metrics.bid, 4) if metrics.has_data else out.get("bid", 0),
+            "ask": round(metrics.ask, 4) if metrics.has_data else out.get("ask", 0),
+            "quote_mid": round(metrics.quote_mid, 4) if metrics.has_data else out.get("quote_mid", 0),
+            "quote_time": metrics.quote_time if metrics.has_data else out.get("quote_time", ""),
+            "trade_price": round(metrics.trade_price, 4) if metrics.has_data else out.get("trade_price", 0),
+            "trade_time": metrics.trade_time if metrics.has_data else out.get("trade_time", ""),
+            "vwap": round(metrics.vwap, 4) if metrics.has_data else out.get("vwap", 0),
+            "hod": round(metrics.hod, 4) if metrics.has_data else out.get("hod", 0),
+            "vwap_dist_pct": round(metrics.vwap_dist_pct, 2) if metrics.has_data else out.get("vwap_dist_pct", 0),
+            "hod_distance_pct": round(metrics.hod_distance_pct, 2) if metrics.has_data else out.get("hod_distance_pct", 0),
+            "ema9": round(metrics.ema9, 4) if metrics.has_data else out.get("ema9", 0),
+            "price_above_ema9": metrics.price_above_ema9 if metrics.has_data else out.get("price_above_ema9", False),
+            "ema9_status": metrics.ema9_status if metrics.has_data else out.get("ema9_status", ""),
+            "macd_value": round(metrics.macd_value, 4) if metrics.has_data else out.get("macd_value", 0),
+            "macd_signal": round(metrics.macd_signal, 4) if metrics.has_data else out.get("macd_signal", 0),
+            "macd_histogram": round(metrics.macd_histogram, 4) if metrics.has_data else out.get("macd_histogram", 0),
+            "macd_status": metrics.macd_status if metrics.has_data else out.get("macd_status", ""),
+            "momentum_status": metrics.momentum_status if metrics.has_data else out.get("momentum_status", ""),
+            "confidence": round(conf, 1),
+            "live_signal_score": round(live, 1),
+            "not_ready_reasons": list(dict.fromkeys(fail_reasons)),
+            "protected_ready_warning": warning_text,
+            "reason": f"Protected Trigger Ready. Still locked; warning: {warning_text}",
+        })
+        out["ready_since"] = existing.get("ready_since") or existing.get("detected_at") or iso_now_et()
+        out["detected_at"] = existing.get("detected_at") or out["ready_since"]
 
-        out = signal_base(
-            row,
-            metrics,
-            watch_plan,
-            "WATCH",
-            "MONITORING",
-            conf,
-            live,
-            "Demoted from Trigger Ready after live reassessment. Waiting for setup quality to improve.",
-            phase,
-            regime,
-        )
-        out["detected_at"] = existing.get("detected_at") or existing.get("ready_since") or iso_now_et()
-        out["previous_ready_since"] = existing.get("ready_since", "")
-        out["demoted_from_trigger_ready_at"] = iso_now_et()
-        out["not_ready_reasons"] = list(dict.fromkeys(fail_reasons))
         decision_log(
             normalize_symbol(row.get("symbol")),
-            "TRIGGER_READY_DEMOTED_TO_WATCH",
-            reason="; ".join(dict.fromkeys(fail_reasons)),
+            "TRIGGER_READY_HELD_WITH_WARNINGS",
+            reason=warning_text,
             confidence=conf,
             price=metrics.price,
             phase=phase,
         )
-        return False, out, "; ".join(dict.fromkeys(fail_reasons))
+        return True, out, ""
 
     exact_plan = build_trade_plan(row, metrics, setup_ready_type, quote)
     exact_live = live_signal_score(row, metrics, exact_plan, regime, phase)
@@ -4243,34 +4269,53 @@ def trigger_ready_reassessment(
         if not event_ok:
             fail.extend(event_reasons)
 
-        if exact_plan.get("valid") and safe_float(exact_plan.get("reward_risk"), 0) >= MIN_RR_WATCH:
-            out = signal_base(
-                row,
-                metrics,
-                exact_plan,
-                "WATCH",
-                "MONITORING",
-                exact_conf,
-                exact_live,
-                "Demoted from Trigger Ready after exact setup reassessment.",
-                phase,
-                regime,
-            )
-            out["detected_at"] = existing.get("detected_at") or existing.get("ready_since") or iso_now_et()
-            out["previous_ready_since"] = existing.get("ready_since", "")
-            out["demoted_from_trigger_ready_at"] = iso_now_et()
-            out["not_ready_reasons"] = list(dict.fromkeys(fail))
-            return False, out, "; ".join(dict.fromkeys(fail))
+        warning_text = "; ".join(dict.fromkeys(fail))
+        out = dict(existing)
+        out.update({
+            "signal_status": "TRIGGER_READY",
+            "last_checked": iso_now_et(),
+            "updated_at": iso_now_et(),
+            "market_phase": phase,
+            "price": round(metrics.price, 4) if metrics.has_data else out.get("price", 0),
+            "price_source": metrics.price_source if metrics.has_data else out.get("price_source", ""),
+            "price_updated_at": metrics.price_updated_at if metrics.has_data else out.get("price_updated_at", ""),
+            "latest_bar_time": timestamp_to_et_iso(metrics.latest_bar_time) if metrics.has_data else out.get("latest_bar_time", ""),
+            "bid": round(metrics.bid, 4) if metrics.has_data else out.get("bid", 0),
+            "ask": round(metrics.ask, 4) if metrics.has_data else out.get("ask", 0),
+            "quote_mid": round(metrics.quote_mid, 4) if metrics.has_data else out.get("quote_mid", 0),
+            "quote_time": metrics.quote_time if metrics.has_data else out.get("quote_time", ""),
+            "trade_price": round(metrics.trade_price, 4) if metrics.has_data else out.get("trade_price", 0),
+            "trade_time": metrics.trade_time if metrics.has_data else out.get("trade_time", ""),
+            "vwap": round(metrics.vwap, 4) if metrics.has_data else out.get("vwap", 0),
+            "hod": round(metrics.hod, 4) if metrics.has_data else out.get("hod", 0),
+            "vwap_dist_pct": round(metrics.vwap_dist_pct, 2) if metrics.has_data else out.get("vwap_dist_pct", 0),
+            "hod_distance_pct": round(metrics.hod_distance_pct, 2) if metrics.has_data else out.get("hod_distance_pct", 0),
+            "ema9": round(metrics.ema9, 4) if metrics.has_data else out.get("ema9", 0),
+            "price_above_ema9": metrics.price_above_ema9 if metrics.has_data else out.get("price_above_ema9", False),
+            "ema9_status": metrics.ema9_status if metrics.has_data else out.get("ema9_status", ""),
+            "macd_value": round(metrics.macd_value, 4) if metrics.has_data else out.get("macd_value", 0),
+            "macd_signal": round(metrics.macd_signal, 4) if metrics.has_data else out.get("macd_signal", 0),
+            "macd_histogram": round(metrics.macd_histogram, 4) if metrics.has_data else out.get("macd_histogram", 0),
+            "macd_status": metrics.macd_status if metrics.has_data else out.get("macd_status", ""),
+            "momentum_status": metrics.momentum_status if metrics.has_data else out.get("momentum_status", ""),
+            "confidence": round(exact_conf, 1),
+            "live_signal_score": round(exact_live, 1),
+            "not_ready_reasons": list(dict.fromkeys(fail)),
+            "protected_ready_warning": warning_text,
+            "reason": f"Protected Trigger Ready. Still locked; warning: {warning_text}",
+        })
+        out["ready_since"] = existing.get("ready_since") or existing.get("detected_at") or iso_now_et()
+        out["detected_at"] = existing.get("detected_at") or out["ready_since"]
 
         decision_log(
             normalize_symbol(row.get("symbol")),
-            "TRIGGER_READY_REASSESSMENT_FAILED",
-            reason="; ".join(dict.fromkeys(fail)),
+            "TRIGGER_READY_HELD_WITH_EXACT_WARNINGS",
+            reason=warning_text,
             confidence=exact_conf,
             price=metrics.price,
             phase=phase,
         )
-        return False, {}, "; ".join(dict.fromkeys(fail))
+        return True, out, ""
 
     out = signal_base(
         row,
