@@ -70,7 +70,7 @@ SIGNAL_STATE_FILE = "signal_state.json"
 SUPPRESSED_SIGNALS_FILE = "suppressed_signals.csv"
 SIGNAL_OUTCOMES_FILE = "signal_outcomes.csv"
 SIGNAL_OUTCOMES_SUMMARY_FILE = "signal_outcomes_summary.json"
-SIGNAL_ENGINE_STRATEGY_VERSION = "v1.6_reclaim_macd_earnings_lunch_outcomes"
+SIGNAL_ENGINE_STRATEGY_VERSION = "v1.7_ready_only_success_outcomes"
 
 # State retention.
 ACTIVE_STALE_MINUTES = 10
@@ -701,6 +701,10 @@ OUTCOME_FIELDNAMES = [
     "hit_t1",
     "hit_t2",
     "hit_stop",
+    "entry_touched_before_active",
+    "target_1_hit_before_active",
+    "target_2_hit_before_active",
+    "success_without_active",
     "max_profit_pct",
     "max_loss_pct",
     "best_r_multiple",
@@ -864,6 +868,10 @@ def initial_outcome_row(signal: Dict[str, Any], existing_rows: List[Dict[str, An
         "hit_t1": "",
         "hit_t2": "",
         "hit_stop": "",
+        "entry_touched_before_active": "",
+        "target_1_hit_before_active": "",
+        "target_2_hit_before_active": "",
+        "success_without_active": "",
         "max_profit_pct": "",
         "max_loss_pct": "",
         "best_r_multiple": "",
@@ -943,18 +951,41 @@ def update_one_outcome(row: Dict[str, Any], signal: Dict[str, Any]) -> Dict[str,
     highest_active = _outcome_float(row, "highest_price_after_active", 0.0)
     lowest_active = _outcome_float(row, "lowest_price_after_active", 0.0)
 
-    high_ref = highest_active or highest_ready
-    low_ref = lowest_active or lowest_ready
+    high_candidates = [v for v in [highest_ready, highest_active] if v > 0]
+    low_candidates = [v for v in [lowest_ready, lowest_active] if v > 0]
+    high_ref = max(high_candidates) if high_candidates else 0.0
+    low_ref = min(low_candidates) if low_candidates else 0.0
+
+    had_active_before_now = bool(row.get("active_time")) or status == "ACTIVE_SIGNAL"
 
     hit_entry = _csv_bool(row.get("hit_entry")) or (entry > 0 and high_ref >= entry)
     hit_t1 = _csv_bool(row.get("hit_t1")) or (target_1 > 0 and high_ref >= target_1)
     hit_t2 = _csv_bool(row.get("hit_t2")) or (target_2 > 0 and high_ref >= target_2)
     hit_stop = _csv_bool(row.get("hit_stop")) or (hit_entry and stop > 0 and low_ref > 0 and low_ref <= stop)
 
+    # Ready-only success:
+    # If a setup becomes TRIGGER_READY and price reaches Entry/T1/T2 before the
+    # engine promotes it to ACTIVE_SIGNAL, count the signal result anyway. This
+    # measures whether the scanner setup worked, not whether the user entered.
+    entry_touched_before_active = _csv_bool(row.get("entry_touched_before_active")) or (
+        bool(row.get("trigger_ready_time")) and not had_active_before_now and entry > 0 and high_ref >= entry
+    )
+    target_1_hit_before_active = _csv_bool(row.get("target_1_hit_before_active")) or (
+        bool(row.get("trigger_ready_time")) and not had_active_before_now and target_1 > 0 and high_ref >= target_1
+    )
+    target_2_hit_before_active = _csv_bool(row.get("target_2_hit_before_active")) or (
+        bool(row.get("trigger_ready_time")) and not had_active_before_now and target_2 > 0 and high_ref >= target_2
+    )
+    success_without_active = _csv_bool(row.get("success_without_active")) or target_1_hit_before_active or target_2_hit_before_active
+
     row["hit_entry"] = hit_entry
     row["hit_t1"] = hit_t1
     row["hit_t2"] = hit_t2
     row["hit_stop"] = hit_stop
+    row["entry_touched_before_active"] = entry_touched_before_active
+    row["target_1_hit_before_active"] = target_1_hit_before_active
+    row["target_2_hit_before_active"] = target_2_hit_before_active
+    row["success_without_active"] = success_without_active
 
     if entry > 0 and high_ref > 0:
         row["max_profit_pct"] = round(pct_change(high_ref, entry), 2)
@@ -972,12 +1003,20 @@ def update_one_outcome(row: Dict[str, Any], signal: Dict[str, Any]) -> Dict[str,
 
     if hit_t2:
         outcome_status = "T2_HIT"
-        outcome_detail = "Target 2 hit after signal tracking began."
+        outcome_detail = (
+            "Target 2 hit from Trigger Ready before Active Signal."
+            if target_2_hit_before_active
+            else "Target 2 hit after signal tracking began."
+        )
         row["completed_time"] = row.get("completed_time") or now_text
         row["final_r_multiple"] = round((target_2 - entry) / risk, 2) if risk > 0 else ""
     elif hit_t1:
         outcome_status = "T1_HIT"
-        outcome_detail = "Target 1 hit after signal tracking began."
+        outcome_detail = (
+            "Target 1 hit from Trigger Ready before Active Signal."
+            if target_1_hit_before_active
+            else "Target 1 hit after signal tracking began."
+        )
         row["completed_time"] = row.get("completed_time") or now_text
         row["final_r_multiple"] = round((target_1 - entry) / risk, 2) if risk > 0 else ""
     elif hit_stop:
@@ -1012,6 +1051,10 @@ def update_one_outcome(row: Dict[str, Any], signal: Dict[str, Any]) -> Dict[str,
     notes = []
     if bool(signal.get("lunch_caution")) or safe_str(signal.get("actionability"), "").upper() == "LUNCH_CAUTION":
         notes.append("Lunch caution/manual review only.")
+    if success_without_active:
+        notes.append("Target reached from Trigger Ready before Active Signal.")
+    if entry_touched_before_active and not had_active_before_now:
+        notes.append("Entry trigger touched before Active Signal.")
     if bool(signal.get("earnings_reaction_trade")):
         notes.append("Earnings reaction only.")
     event_warning = safe_str(signal.get("event_risk_warning"), "")
@@ -1132,6 +1175,7 @@ def summarize_signal_outcomes(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
         "invalidated_before_entry": 0,
         "invalidated_after_entry": 0,
         "watch_removed": 0,
+        "ready_only_success": 0,
         "open": 0,
         "completed": 0,
     }
@@ -1141,8 +1185,11 @@ def summarize_signal_outcomes(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
     for row in today_rows:
         status = safe_str(row.get("outcome_status"), "").upper()
         setup = safe_str(row.get("setup_type"), "UNKNOWN") or "UNKNOWN"
-        setup_counts.setdefault(setup, {"total": 0, "t1_hit": 0, "t2_hit": 0, "stop_hit": 0, "invalidated": 0})
+        setup_counts.setdefault(setup, {"total": 0, "t1_hit": 0, "t2_hit": 0, "stop_hit": 0, "invalidated": 0, "ready_only_success": 0})
         setup_counts[setup]["total"] += 1
+        if _csv_bool(row.get("success_without_active")):
+            counts["ready_only_success"] += 1
+            setup_counts[setup]["ready_only_success"] += 1
 
         if status == "WATCH":
             counts["watch"] += 1
