@@ -97,8 +97,37 @@ MIN_LIVE_1M_AVG_VOL_READY = 1_000.0
 MIN_LIVE_5M_DOLLAR_VOL_READY = 50_000.0
 MIN_CONF_RECLAIM_READY = 68.0
 VWAP_RECLAIM_LOOKBACK_MINUTES = 6
+VWAP_RECLAIM_LIFECYCLE_MINUTES = 30
 VWAP_RECLAIM_MIN_VOLUME_RATIO = 1.35
 VWAP_RECLAIM_MAX_EXTENSION_PCT = 2.0
+RECLAIM_PULLBACK_MAX_EXTENSION_PCT = 3.0
+RECLAIM_PULLBACK_SUPPORT_BUFFER_PCT = 0.50
+MIN_CONF_RECLAIM_PULLBACK_READY = 68.0
+
+# Earnings-day reaction handling.
+# We do not treat earnings-day moves as normal setups. They are allowed only as
+# higher-risk reaction trades with stricter R/R + live participation requirements.
+MIN_RR_EARNINGS_REACTION = 1.8
+MIN_CONF_EARNINGS_READY = 75.0
+MIN_EARNINGS_5M_DOLLAR_VOL_READY = 100_000.0
+MIN_EARNINGS_1M_AVG_VOL_READY = 2_000.0
+
+# VWAP pullback / reclaim MACD lifecycle tuning.
+# 1-minute MACD is used for early reclaim timing/curl; 5-minute MACD is used for
+# broader confirmation and hard risk warnings.
+VWAP_LIFECYCLE_MACD_HARD_FAIL_PRICE_BELOW_EMA9 = True
+
+# Lunch-time handling.
+# Lunch is noisy and lower-liquidity, so no automatic ACTIVE_SIGNAL is allowed.
+# Strong VWAP reclaim / pullback setups may still become TRIGGER_READY with a
+# red caution flag so the user can manually inspect the chart instead of missing
+# the ticker entirely.
+LUNCH_CAUTION_PHASE = "LUNCH_BLACKOUT"
+LUNCH_CAUTION_WARNING = (
+    "Lunch blackout: setup detected during lower-liquidity lunch period. "
+    "No automatic Active Signal; manual chart confirmation required. "
+    "Fakeout risk is higher."
+)
 
 
 # Late-day / quality filters.
@@ -391,6 +420,65 @@ def is_market_open_phase(phase: str) -> bool:
 
 def is_valid_signal_phase(phase: str) -> bool:
     return phase in {"VALID_MORNING", "VALID_AFTERNOON"}
+
+
+def is_lunch_blackout_phase(phase: str) -> bool:
+    return safe_str(phase).upper() == LUNCH_CAUTION_PHASE
+
+
+def is_lunch_trigger_ready_allowed_setup(setup_type: str) -> bool:
+    """
+    Lunch can surface TRIGGER_READY only for the user's core manual setups:
+    VWAP reclaim, reclaim pullback holding, and VWAP pullback continuation.
+
+    It does not create automatic ACTIVE_SIGNAL during lunch.
+    """
+    text = safe_str(setup_type).upper()
+    return any(
+        token in text
+        for token in (
+            "VWAP_RECLAIM",
+            "RECLAIM_PULLBACK",
+            "VWAP_PULLBACK",
+        )
+    )
+
+
+def combine_warning(existing: str, addition: str) -> str:
+    existing = safe_str(existing).strip()
+    addition = safe_str(addition).strip()
+    if existing and addition and addition not in existing:
+        return f"{existing} | {addition}"
+    return existing or addition
+
+
+def apply_lunch_caution_fields(signal: Dict[str, Any], phase: str) -> Dict[str, Any]:
+    """
+    Mark a TRIGGER_READY signal created/fired during lunch as manual-only.
+
+    The status remains TRIGGER_READY so it is visible in the Ready column, but
+    actionability is LUNCH_CAUTION and the dashboard shows a red warning.
+    """
+    if not is_lunch_blackout_phase(phase):
+        return signal
+
+    out = dict(signal)
+    reason = safe_str(out.get("reason"), "")
+    if LUNCH_CAUTION_WARNING not in reason:
+        reason = f"{reason} {LUNCH_CAUTION_WARNING}".strip()
+
+    out.update({
+        "signal_status": "TRIGGER_READY",
+        "actionable": False,
+        "actionability": "LUNCH_CAUTION",
+        "lunch_caution": True,
+        "lunch_blackout_ready": True,
+        "suppression_reason": "LUNCH_BLACKOUT_TRIGGER_READY_ONLY",
+        "entry_warning": LUNCH_CAUTION_WARNING,
+        "event_risk_warning": combine_warning(out.get("event_risk_warning", ""), LUNCH_CAUTION_WARNING),
+        "reason": reason,
+    })
+    return out
 
 
 def session_date_str(now: Optional[datetime] = None) -> str:
@@ -761,6 +849,10 @@ class IntradayMetrics:
     vwap_reclaim_age_minutes: float = 999.0
     vwap_reclaim_volume_ratio: float = 0.0
     vwap_reclaim_reason: str = "No recent VWAP reclaim"
+    vwap_reclaim_lifecycle_active: bool = False
+    vwap_reclaim_support_level: float = 0.0
+    reclaim_pullback_holding: bool = False
+    reclaim_pullback_reason: str = "No reclaim pullback hold"
 
     avg_volume_5: float = 0.0
     avg_volume_prev_5: float = 0.0
@@ -789,6 +881,20 @@ class IntradayMetrics:
     macd_histogram_falling: bool = False
     macd_status: str = "UNKNOWN"
     momentum_status: str = "CLEAN"
+
+    # Faster 1-minute MACD used for VWAP reclaim / immediate pullback lifecycle.
+    macd_1m_value: float = 0.0
+    macd_1m_signal: float = 0.0
+    macd_1m_histogram: float = 0.0
+    macd_1m_histogram_prev: float = 0.0
+    macd_1m_above_signal: bool = False
+    macd_1m_bullish_crossover_recent: bool = False
+    macd_1m_bearish_crossover_recent: bool = False
+    macd_1m_histogram_rising: bool = False
+    macd_1m_histogram_falling: bool = False
+    macd_1m_curling_up: bool = False
+    macd_1m_curling_down: bool = False
+    macd_1m_status: str = "UNKNOWN"
 
     ema9: float = 0.0
     ema9_prev: float = 0.0
@@ -956,6 +1062,48 @@ def analyze_execution_bars(symbol: str, bars: List[Dict[str, Any]]) -> IntradayM
     metrics.vwap_dist_pct = pct_change(metrics.price, metrics.vwap) if metrics.vwap > 0 else 0
     metrics.hod_distance_pct = pct_change(metrics.price, metrics.hod) if metrics.hod > 0 else 0
 
+    # 1-minute MACD for early VWAP reclaim / pullback timing.
+    closes_1m = [safe_float(b.get("c"), 0) for b in clean]
+    macd_1m, macd_1m_signal, macd_1m_hist = macd_components(closes_1m)
+    if len(macd_1m) >= 4 and len(macd_1m_signal) >= 4 and len(macd_1m_hist) >= 4:
+        metrics.macd_1m_value = macd_1m[-1]
+        metrics.macd_1m_signal = macd_1m_signal[-1]
+        metrics.macd_1m_histogram = macd_1m_hist[-1]
+        metrics.macd_1m_histogram_prev = macd_1m_hist[-2]
+        metrics.macd_1m_above_signal = metrics.macd_1m_value >= metrics.macd_1m_signal
+        metrics.macd_1m_histogram_rising = macd_1m_hist[-1] > macd_1m_hist[-2]
+        metrics.macd_1m_histogram_falling = macd_1m_hist[-1] < macd_1m_hist[-2]
+        metrics.macd_1m_curling_up = (
+            macd_1m_hist[-1] > macd_1m_hist[-2]
+            and (len(macd_1m_hist) < 5 or macd_1m_hist[-2] >= macd_1m_hist[-3] * 0.95)
+        )
+        metrics.macd_1m_curling_down = (
+            macd_1m_hist[-1] < macd_1m_hist[-2]
+            and (len(macd_1m_hist) < 5 or macd_1m_hist[-2] <= macd_1m_hist[-3] * 1.05)
+        )
+
+        recent_pairs_1m = list(zip(macd_1m[-8:], macd_1m_signal[-8:]))
+        for i in range(1, len(recent_pairs_1m)):
+            prev_macd, prev_sig = recent_pairs_1m[i - 1]
+            cur_macd, cur_sig = recent_pairs_1m[i]
+            if prev_macd <= prev_sig and cur_macd > cur_sig:
+                metrics.macd_1m_bullish_crossover_recent = True
+            if prev_macd >= prev_sig and cur_macd < cur_sig:
+                metrics.macd_1m_bearish_crossover_recent = True
+
+        if metrics.macd_1m_bullish_crossover_recent:
+            metrics.macd_1m_status = "BULLISH_CROSSOVER"
+        elif metrics.macd_1m_curling_up and metrics.macd_1m_above_signal:
+            metrics.macd_1m_status = "CURLING_UP"
+        elif metrics.macd_1m_bearish_crossover_recent:
+            metrics.macd_1m_status = "BEARISH_CROSSOVER"
+        elif metrics.macd_1m_curling_down and not metrics.macd_1m_above_signal:
+            metrics.macd_1m_status = "CURLING_DOWN"
+        elif metrics.macd_1m_above_signal:
+            metrics.macd_1m_status = "ABOVE_SIGNAL"
+        else:
+            metrics.macd_1m_status = "NEUTRAL"
+
     first15 = clean[:15]
     if first15:
         lows = [safe_float(b.get("l"), 0) for b in first15 if safe_float(b.get("l"), 0) > 0]
@@ -993,7 +1141,7 @@ def analyze_execution_bars(symbol: str, bars: List[Dict[str, Any]]) -> IntradayM
     #   below VWAP -> high-volume reclaim -> hold/continue above VWAP
     # before they turn into chased/extended moves. Opening noise is ignored.
     if metrics.vwap > 0 and len(clean) >= 6:
-        search = clean[-max(8, VWAP_RECLAIM_LOOKBACK_MINUTES + 3):]
+        search = clean[-max(12, VWAP_RECLAIM_LIFECYCLE_MINUTES + 3):]
         reclaim_candidates: List[Tuple[int, Dict[str, Any], float]] = []
 
         for local_idx, bar in enumerate(search):
@@ -1029,19 +1177,33 @@ def analyze_execution_bars(symbol: str, bars: List[Dict[str, Any]]) -> IntradayM
             bar_low = safe_float(reclaim_bar.get("l"), 0)
             bar_close = safe_float(reclaim_bar.get("c"), 0)
             metrics.vwap_reclaim_recent = age_min <= VWAP_RECLAIM_LOOKBACK_MINUTES
+            metrics.vwap_reclaim_lifecycle_active = age_min <= VWAP_RECLAIM_LIFECYCLE_MINUTES
             metrics.vwap_reclaim_bar_high = bar_high
             metrics.vwap_reclaim_bar_low = bar_low
             metrics.vwap_reclaim_bar_close = bar_close
             metrics.vwap_reclaim_bar_time = timestamp_to_et_iso(reclaim_bar.get("t"))
             metrics.vwap_reclaim_age_minutes = round(age_min, 2)
             metrics.vwap_reclaim_volume_ratio = round(vol_ratio, 2)
+            metrics.vwap_reclaim_support_level = max(
+                metrics.vwap * (1.0 - RECLAIM_PULLBACK_SUPPORT_BUFFER_PCT / 100.0),
+                bar_low,
+            ) if metrics.vwap > 0 and bar_low > 0 else metrics.vwap
 
-            extension_ok = metrics.vwap_dist_pct <= VWAP_RECLAIM_MAX_EXTENSION_PCT
+            fresh_extension_ok = metrics.vwap_dist_pct <= VWAP_RECLAIM_MAX_EXTENSION_PCT
+            pullback_extension_ok = metrics.vwap_dist_pct <= RECLAIM_PULLBACK_MAX_EXTENSION_PCT
             volume_ok = vol_ratio >= VWAP_RECLAIM_MIN_VOLUME_RATIO or metrics.recent_5m_dollar_volume >= MIN_LIVE_5M_DOLLAR_VOL_READY
             hold_ok = metrics.price >= metrics.vwap and bar_close >= metrics.vwap
+            support_hold_ok = (
+                metrics.vwap > 0
+                and metrics.price >= metrics.vwap * (1.0 - RECLAIM_PULLBACK_SUPPORT_BUFFER_PCT / 100.0)
+                and (
+                    metrics.vwap_reclaim_support_level <= 0
+                    or metrics.price >= metrics.vwap_reclaim_support_level * 0.995
+                )
+            )
             participation_ok = metrics.live_participation_ready_ok
 
-            if metrics.vwap_reclaim_recent and extension_ok and volume_ok and hold_ok and participation_ok:
+            if metrics.vwap_reclaim_recent and fresh_extension_ok and volume_ok and hold_ok and participation_ok:
                 metrics.vwap_reclaim_ready = True
                 metrics.vwap_reclaim_reason = (
                     f"Recent high-volume VWAP reclaim; age {age_min:.1f}m, "
@@ -1050,8 +1212,8 @@ def analyze_execution_bars(symbol: str, bars: List[Dict[str, Any]]) -> IntradayM
             else:
                 fails = []
                 if not metrics.vwap_reclaim_recent:
-                    fails.append(f"reclaim age {age_min:.1f}m > {VWAP_RECLAIM_LOOKBACK_MINUTES}m")
-                if not extension_ok:
+                    fails.append(f"fresh reclaim age {age_min:.1f}m > {VWAP_RECLAIM_LOOKBACK_MINUTES}m")
+                if not fresh_extension_ok:
                     fails.append(f"VWAP extension {metrics.vwap_dist_pct:.2f}% > {VWAP_RECLAIM_MAX_EXTENSION_PCT:.1f}%")
                 if not volume_ok:
                     fails.append(f"reclaim volume ratio {vol_ratio:.2f}x < {VWAP_RECLAIM_MIN_VOLUME_RATIO:.2f}x")
@@ -1060,6 +1222,22 @@ def analyze_execution_bars(symbol: str, bars: List[Dict[str, Any]]) -> IntradayM
                 if not participation_ok:
                     fails.append(metrics.live_participation_reason)
                 metrics.vwap_reclaim_reason = "; ".join(fails) if fails else "VWAP reclaim not ready"
+
+            if metrics.vwap_reclaim_lifecycle_active and support_hold_ok and pullback_extension_ok and participation_ok:
+                metrics.reclaim_pullback_holding = True
+                metrics.reclaim_pullback_reason = (
+                    f"VWAP reclaim lifecycle holding; reclaim age {age_min:.1f}m, "
+                    f"support {metrics.vwap_reclaim_support_level:.2f}, extension {metrics.vwap_dist_pct:.2f}%"
+                )
+            elif metrics.vwap_reclaim_lifecycle_active:
+                fails = []
+                if not support_hold_ok:
+                    fails.append("reclaim pullback lost VWAP/reclaim support")
+                if not pullback_extension_ok:
+                    fails.append(f"VWAP extension {metrics.vwap_dist_pct:.2f}% > {RECLAIM_PULLBACK_MAX_EXTENSION_PCT:.1f}%")
+                if not participation_ok:
+                    fails.append(metrics.live_participation_reason)
+                metrics.reclaim_pullback_reason = "; ".join(fails) if fails else "VWAP reclaim pullback not holding"
 
     return metrics
 
@@ -1240,6 +1418,23 @@ def enrich_structure_from_5min(metrics: IntradayMetrics, bars_5m: List[Dict[str,
         if metrics.vwap > 0 and low >= metrics.vwap * 0.995 and close >= metrics.vwap:
             hold_count += 1
     metrics.pullback_holding_vwap = hold_count >= min(2, len(recent3))
+
+    # VWAP reclaim lifecycle:
+    # After a valid reclaim, a normal pullback to EMA9/VWAP should stay alive.
+    # Do not treat a small EMA9 dip as failure if VWAP/reclaim support is holding.
+    if metrics.vwap_reclaim_lifecycle_active and metrics.above_vwap:
+        support_level = metrics.vwap_reclaim_support_level or metrics.vwap
+        support_holding = metrics.price >= support_level * 0.995 if support_level > 0 else metrics.above_vwap
+        if support_holding and (
+            metrics.pullback_holding_vwap
+            or metrics.price >= metrics.vwap
+            or metrics.price >= support_level * 1.002
+        ):
+            metrics.reclaim_pullback_holding = True
+            metrics.reclaim_pullback_reason = (
+                f"Reclaim pullback holding above VWAP/support; support {support_level:.2f}, "
+                f"VWAP dist {metrics.vwap_dist_pct:.2f}%"
+            )
 
     # VWAP touch quality on 5-minute structure.
     #
@@ -1649,6 +1844,140 @@ def high_risk_extreme(row: Dict[str, Any]) -> bool:
     return risk in {"HIGH_RISK_EXTREME", "EXTREME"} or bucket == "HIGH_RISK_EXTREME"
 
 
+def is_earnings_reaction_row(row: Dict[str, Any]) -> bool:
+    """
+    True when scanner marks the candidate as an earnings reaction / earnings-day event.
+
+    This does not automatically forbid a day trade. It means the setup must be
+    treated as EARNINGS_REACTION_ONLY with stricter confirmation and warnings.
+    """
+    raw_flag = safe_str(row.get("is_earnings_reaction"), "").strip().lower()
+    if raw_flag in {"true", "1", "yes", "y"}:
+        return True
+
+    text_fields = " ".join([
+        safe_str(row.get("catalyst_label"), ""),
+        safe_str(row.get("catalyst_headline"), ""),
+        safe_str(row.get("risk_flags"), ""),
+        safe_str(row.get("tags"), ""),
+    ]).lower()
+
+    if "earnings" in text_fields or "eps" in text_fields or "revenue" in text_fields:
+        return True
+
+    dte = safe_str(row.get("days_to_earnings"), "").strip().lower()
+    return dte in {"0", "0.0", "today", "same day"}
+
+
+def event_context_for_row(row: Dict[str, Any]) -> str:
+    return "EARNINGS_REACTION" if is_earnings_reaction_row(row) else "NORMAL"
+
+
+def earnings_reaction_requirements(
+    row: Dict[str, Any],
+    metrics: IntradayMetrics,
+    plan: Dict[str, Any],
+    confidence: float,
+) -> Tuple[bool, List[str]]:
+    """
+    Earnings-day names are allowed only as reaction trades, not normal setups.
+
+    The idea:
+      - do not buy pre-earnings anticipation,
+      - do not treat earnings names as ordinary VWAP reclaim/pullback,
+      - allow only clear liquid post-reaction VWAP structure.
+    """
+    if not is_earnings_reaction_row(row):
+        return True, []
+
+    reasons: List[str] = []
+    rr = safe_float(plan.get("reward_risk"), 0)
+
+    if rr < MIN_RR_EARNINGS_REACTION:
+        reasons.append(f"Earnings reaction requires R/R >= {MIN_RR_EARNINGS_REACTION:.1f}; current {rr:.2f}")
+
+    if confidence < MIN_CONF_EARNINGS_READY:
+        reasons.append(f"Earnings reaction requires confidence >= {MIN_CONF_EARNINGS_READY:.0f}; current {confidence:.1f}")
+
+    if not metrics.above_vwap:
+        reasons.append("Earnings reaction must be above VWAP")
+
+    if not (
+        metrics.recent_5m_dollar_volume >= MIN_EARNINGS_5M_DOLLAR_VOL_READY
+        or metrics.avg_volume_1m_5 >= MIN_EARNINGS_1M_AVG_VOL_READY
+    ):
+        reasons.append(
+            "Earnings reaction needs stronger live participation "
+            f"(5m $vol ${metrics.recent_5m_dollar_volume:,.0f}, "
+            f"1m avg vol {metrics.avg_volume_1m_5:.0f})"
+        )
+
+    if metrics.vwap_dist_pct > RECLAIM_PULLBACK_MAX_EXTENSION_PCT:
+        reasons.append(f"Earnings reaction is too extended from VWAP ({metrics.vwap_dist_pct:.2f}%)")
+
+    return len(reasons) == 0, reasons
+
+
+def vwap_lifecycle_macd_confirmation(metrics: IntradayMetrics, setup_type: str) -> Tuple[bool, str]:
+    """
+    MACD logic for VWAP reclaim/pullback lifecycle.
+
+    We do NOT invalidate a normal reclaim pullback only because MACD cools.
+    We DO block when MACD rolls down hard while price is losing EMA9/VWAP pressure.
+    """
+    if metrics.bearish_momentum_divergence:
+        return False, "Bearish MACD/momentum divergence"
+
+    reclaim_family = setup_type in {
+        "VWAP_RECLAIM_BREAKOUT",
+        "RECLAIM_PULLBACK_HOLDING",
+        "VWAP_PULLBACK_CONTINUATION",
+    }
+
+    if reclaim_family:
+        # Hard fail only when momentum and price structure both deteriorate.
+        if (
+            metrics.macd_bearish_crossover_recent
+            and metrics.macd_histogram_falling
+            and metrics.macd_1m_bearish_crossover_recent
+            and (not metrics.price_above_ema9)
+            and metrics.vwap_dist_pct <= 0.35
+        ):
+            return False, "Hard MACD failure: 5m and 1m bearish while price is pressing VWAP"
+
+        if (
+            metrics.macd_1m_curling_down
+            and not metrics.macd_1m_above_signal
+            and not metrics.price_above_ema9
+            and metrics.vwap_dist_pct <= 0.20
+        ):
+            return False, "1m MACD curling down while price is below EMA9 near VWAP"
+
+        if metrics.macd_1m_curling_up or metrics.macd_1m_bullish_crossover_recent:
+            return True, "1m MACD curling up supports VWAP reclaim/pullback"
+
+        if metrics.macd_histogram_rising or metrics.macd_above_signal:
+            return True, "5m MACD acceptable for VWAP reclaim/pullback"
+
+        # Flat/cooling MACD is allowed while reclaim support is holding.
+        if metrics.reclaim_pullback_holding and metrics.above_vwap:
+            return True, "MACD cooling but VWAP reclaim support still holding"
+
+        return True, "MACD neutral; VWAP/reclaim structure still primary"
+
+    return macd_ready_confirmation(metrics)
+
+
+def setup_display_label(row: Dict[str, Any], setup_type: str) -> str:
+    if is_earnings_reaction_row(row) and setup_type and setup_type not in {"MONITORING", "PREMARKET_MONITOR", "BLACKOUT_MONITOR"}:
+        return f"EARNINGS_REACTION_{setup_type}"
+    return setup_type or "MONITORING"
+
+
+def is_reclaim_lifecycle_setup_type(setup_type: str) -> bool:
+    return setup_type in {"VWAP_RECLAIM_BREAKOUT", "RECLAIM_PULLBACK_HOLDING", "VWAP_PULLBACK_CONTINUATION"}
+
+
 def is_relative_strength_long(row: Dict[str, Any], metrics: IntradayMetrics, regime: Dict[str, Any]) -> bool:
     if not metrics.has_data:
         return False
@@ -1706,7 +2035,10 @@ def watch_criteria_pass(
 
 def trigger_level_for_setup(setup_type: str, metrics: IntradayMetrics) -> float:
     if setup_type == "VWAP_RECLAIM_BREAKOUT":
-        level = max(metrics.vwap_reclaim_bar_high, metrics.pullback_high, metrics.price)
+        level = max(metrics.vwap_reclaim_bar_high, metrics.price)
+        return level * 1.0002 if level > 0 else 0.0
+    if setup_type == "RECLAIM_PULLBACK_HOLDING":
+        level = max(metrics.pullback_high, metrics.vwap_reclaim_bar_high, metrics.price)
         return level * 1.0002 if level > 0 else 0.0
     if setup_type == "VWAP_PULLBACK_CONTINUATION":
         return metrics.pullback_high * 1.0002
@@ -1724,13 +2056,15 @@ def support_level_for_setup(setup_type: str, metrics: IntradayMetrics, entry: fl
     """
     candidates: List[Tuple[float, str]] = []
 
-    if setup_type == "VWAP_RECLAIM_BREAKOUT":
+    if setup_type in {"VWAP_RECLAIM_BREAKOUT", "RECLAIM_PULLBACK_HOLDING"}:
         if metrics.vwap > 0:
             candidates.append((metrics.vwap, "VWAP reclaim support"))
+        if metrics.vwap_reclaim_support_level > 0:
+            candidates.append((metrics.vwap_reclaim_support_level, "VWAP reclaim lifecycle support"))
         if metrics.vwap_reclaim_bar_low > 0:
             candidates.append((metrics.vwap_reclaim_bar_low, "1Min VWAP reclaim candle low"))
         if metrics.pullback_low > 0:
-            candidates.append((metrics.pullback_low, "5Min pullback low"))
+            candidates.append((metrics.pullback_low, "5Min reclaim pullback low"))
 
     elif setup_type == "VWAP_PULLBACK_CONTINUATION":
         if metrics.pullback_low > 0:
@@ -2001,6 +2335,17 @@ def macd_confirmation_score(metrics: IntradayMetrics) -> float:
     if metrics.bearish_momentum_divergence:
         score -= 8.0
 
+    # Faster 1-minute MACD is especially useful for VWAP reclaim/pullback timing.
+    if metrics.macd_1m_bullish_crossover_recent:
+        score += 2.0
+    elif metrics.macd_1m_curling_up:
+        score += 1.5
+
+    if metrics.macd_1m_bearish_crossover_recent and not metrics.macd_1m_above_signal:
+        score -= 2.0
+    elif metrics.macd_1m_curling_down and not metrics.macd_1m_above_signal:
+        score -= 1.0
+
     return round(clamp(score, -8.0, MACD_BULLISH_BONUS_MAX), 2)
 
 
@@ -2053,6 +2398,8 @@ def setup_ready_conf_required(setup_type: str, phase: str) -> float:
     """
     if setup_type == "VWAP_RECLAIM_BREAKOUT":
         return MIN_CONF_RECLAIM_READY
+    if setup_type == "RECLAIM_PULLBACK_HOLDING":
+        return MIN_CONF_RECLAIM_PULLBACK_READY
     return ready_confidence_required(phase)
 
 
@@ -2085,12 +2432,14 @@ def setup_vwap_reclaim_ready(metrics: IntradayMetrics, rr: float, confidence: fl
         return False, metrics.live_participation_reason
 
     if metrics.ema9 > 0:
-        if not metrics.price_above_ema9:
+        # Fresh VWAP reclaim often happens before the 5-minute EMA9 fully catches up.
+        # Do not block the setup for a temporary EMA9 dip if VWAP/reclaim support is holding.
+        if not metrics.price_above_ema9 and not metrics.reclaim_pullback_holding:
             return False, "Price below EMA9 after VWAP reclaim"
-        if metrics.ema9_falling:
+        if metrics.ema9_falling and not metrics.reclaim_pullback_holding:
             return False, "EMA9 falling after VWAP reclaim"
 
-    macd_ok, macd_reason = macd_ready_confirmation(metrics)
+    macd_ok, macd_reason = vwap_lifecycle_macd_confirmation(metrics, "VWAP_RECLAIM_BREAKOUT")
     if not macd_ok:
         return False, macd_reason
 
@@ -2104,6 +2453,47 @@ def setup_vwap_reclaim_ready(metrics: IntradayMetrics, rr: float, confidence: fl
     return True, metrics.vwap_reclaim_reason or "High-volume VWAP reclaim breakout"
 
 
+def setup_reclaim_pullback_ready(metrics: IntradayMetrics, rr: float, confidence: float) -> Tuple[bool, str]:
+    """
+    Second phase of the common day-trade lifecycle:
+      VWAP_RECLAIM_BREAKOUT -> pullback toward EMA9/VWAP -> continuation.
+
+    A reclaim pullback should NOT be invalidated merely because price briefly
+    dips below EMA9. It remains alive while VWAP/reclaim support is holding and
+    R/R is still valid.
+    """
+    if not metrics.has_data:
+        return False, "No intraday bars"
+
+    if not metrics.vwap_reclaim_lifecycle_active:
+        return False, metrics.reclaim_pullback_reason or "No active VWAP reclaim lifecycle"
+
+    if not metrics.above_vwap:
+        return False, "Reclaim pullback below VWAP"
+
+    if not metrics.reclaim_pullback_holding:
+        return False, metrics.reclaim_pullback_reason or "Reclaim pullback not holding"
+
+    if metrics.vwap_dist_pct > RECLAIM_PULLBACK_MAX_EXTENSION_PCT:
+        return False, f"Reclaim pullback extended {metrics.vwap_dist_pct:.2f}% > {RECLAIM_PULLBACK_MAX_EXTENSION_PCT:.1f}%"
+
+    if not metrics.live_participation_ready_ok:
+        return False, metrics.live_participation_reason
+
+    macd_ok, macd_reason = vwap_lifecycle_macd_confirmation(metrics, "RECLAIM_PULLBACK_HOLDING")
+    if not macd_ok:
+        return False, macd_reason
+
+    if rr < MIN_RR:
+        return False, "R/R below 1.5"
+
+    required_conf = MIN_CONF_RECLAIM_PULLBACK_READY
+    if confidence < required_conf:
+        return False, f"Confidence below reclaim-pullback minimum {required_conf:.0f}"
+
+    return True, metrics.reclaim_pullback_reason or "VWAP reclaim pullback holding; waiting for continuation trigger"
+
+
 def setup_vwap_pullback_ready(metrics: IntradayMetrics, rr: float, confidence: float) -> Tuple[bool, str]:
     if not metrics.has_data:
         return False, "No intraday bars"
@@ -2115,9 +2505,19 @@ def setup_vwap_pullback_ready(metrics: IntradayMetrics, rr: float, confidence: f
     if not ema_ok:
         return False, ema_reason
 
-    macd_ok, macd_reason = macd_ready_confirmation(metrics)
+    macd_ok, macd_reason = vwap_lifecycle_macd_confirmation(metrics, "VWAP_PULLBACK_CONTINUATION")
     if not macd_ok:
         return False, macd_reason
+
+    # For ordinary VWAP pullbacks, prefer MACD curling up / above signal.
+    # For reclaim-lifecycle pullbacks, neutral MACD is acceptable while support holds.
+    if (
+        not metrics.reclaim_pullback_holding
+        and metrics.macd_1m_curling_down
+        and not metrics.macd_1m_above_signal
+        and not metrics.macd_histogram_rising
+    ):
+        return False, "VWAP pullback MACD still curling down"
 
     if metrics.volume_fading_vs_morning:
         return False, "Volume fading vs morning reference"
@@ -2263,28 +2663,55 @@ def setup_hod_breakout_ready(metrics: IntradayMetrics, rr: float, confidence: fl
     return True, "5-min HOD breakout setup; waiting for break above HOD"
 
 
-def choose_setup(metrics: IntradayMetrics, plan: Dict[str, Any], confidence: float, phase: str) -> Tuple[str, str, List[str]]:
+def choose_setup(metrics: IntradayMetrics, plan: Dict[str, Any], confidence: float, phase: str, row: Optional[Dict[str, Any]] = None) -> Tuple[str, str, List[str]]:
     rr = safe_float(plan.get("reward_risk"), 0)
     reasons = []
+    row = row or {}
+
+    def _event_allowed(candidate_setup: str) -> Tuple[bool, str]:
+        ok, event_reasons = earnings_reaction_requirements(row, metrics, plan, confidence)
+        if ok:
+            return True, ""
+        return False, "; ".join(event_reasons)
 
     reclaim_ready, reclaim_reason = setup_vwap_reclaim_ready(metrics, rr, confidence)
     if reclaim_ready:
-        return "VWAP_RECLAIM_BREAKOUT", reclaim_reason, reasons
+        event_ok, event_reason = _event_allowed("VWAP_RECLAIM_BREAKOUT")
+        if event_ok:
+            return "VWAP_RECLAIM_BREAKOUT", reclaim_reason, reasons
+        reasons.append(f"Earnings reaction filter: {event_reason}")
     reasons.append(f"VWAP reclaim not ready: {reclaim_reason}")
+
+    reclaim_pullback_ready, reclaim_pullback_reason = setup_reclaim_pullback_ready(metrics, rr, confidence)
+    if reclaim_pullback_ready:
+        event_ok, event_reason = _event_allowed("RECLAIM_PULLBACK_HOLDING")
+        if event_ok:
+            return "RECLAIM_PULLBACK_HOLDING", reclaim_pullback_reason, reasons
+        reasons.append(f"Earnings reaction filter: {event_reason}")
+    reasons.append(f"Reclaim pullback not ready: {reclaim_pullback_reason}")
 
     vwap_ready, vwap_reason = setup_vwap_pullback_ready(metrics, rr, confidence)
     if vwap_ready:
-        return "VWAP_PULLBACK_CONTINUATION", vwap_reason, reasons
+        event_ok, event_reason = _event_allowed("VWAP_PULLBACK_CONTINUATION")
+        if event_ok:
+            return "VWAP_PULLBACK_CONTINUATION", vwap_reason, reasons
+        reasons.append(f"Earnings reaction filter: {event_reason}")
     reasons.append(f"VWAP pullback not ready: {vwap_reason}")
 
     base_ready, base_reason = setup_base_squeeze_ready(metrics, rr, confidence)
     if base_ready:
-        return "BASE_SQUEEZE_BREAKOUT", base_reason, reasons
+        event_ok, event_reason = _event_allowed("BASE_SQUEEZE_BREAKOUT")
+        if event_ok:
+            return "BASE_SQUEEZE_BREAKOUT", base_reason, reasons
+        reasons.append(f"Earnings reaction filter: {event_reason}")
     reasons.append(f"Base/flag squeeze not ready: {base_reason}")
 
     hod_ready, hod_reason = setup_hod_breakout_ready(metrics, rr, confidence)
     if hod_ready:
-        return "HOD_BREAKOUT_CONTINUATION", hod_reason, reasons
+        event_ok, event_reason = _event_allowed("HOD_BREAKOUT_CONTINUATION")
+        if event_ok:
+            return "HOD_BREAKOUT_CONTINUATION", hod_reason, reasons
+        reasons.append(f"Earnings reaction filter: {event_reason}")
     reasons.append(f"HOD breakout not ready: {hod_reason}")
 
     return "", "No trigger-ready setup", reasons
@@ -2309,6 +2736,8 @@ def live_signal_score(
     if metrics.above_vwap:
         if metrics.vwap_reclaim_ready:
             vwap_score = 22
+        elif metrics.reclaim_pullback_holding:
+            vwap_score = 21
         elif 0 <= metrics.vwap_dist_pct <= 2.0:
             vwap_score = 20
         elif 2.0 < metrics.vwap_dist_pct <= 3.0:
@@ -2340,6 +2769,8 @@ def live_signal_score(
     # 3. Volume/structure: 15
     if metrics.vwap_reclaim_ready:
         volume_score = 17
+    elif metrics.reclaim_pullback_holding and not metrics.volume_fading_vs_morning:
+        volume_score = 14
     elif metrics.recent_volume_expanding and not metrics.volume_fading_vs_morning:
         volume_score = 15
     elif metrics.base_compression and not metrics.volume_fading_vs_morning:
@@ -2422,10 +2853,10 @@ def live_signal_score(
     if metrics.bearish_momentum_divergence:
         penalty += BEARISH_DIVERGENCE_PENALTY
 
-    if metrics.macd_bearish_crossover_recent:
+    if metrics.macd_bearish_crossover_recent and not metrics.reclaim_pullback_holding:
         penalty += MACD_BEARISH_CROSSOVER_PENALTY
 
-    if metrics.macd_histogram_falling and not metrics.macd_above_signal:
+    if metrics.macd_histogram_falling and not metrics.macd_above_signal and not metrics.reclaim_pullback_holding:
         penalty += MACD_HISTOGRAM_WEAKENING_PENALTY
 
     if is_late_day() and not late_day_volume_confirmed(metrics):
@@ -2469,8 +2900,19 @@ def not_ready_reasons(metrics: IntradayMetrics, plan: Dict[str, Any], confidence
     if rr < MIN_RR:
         reasons.append(f"R/R {rr:.2f} < minimum 1.5")
 
+    # Event-risk diagnostics. If this is an earnings-day name, Signal Desk
+    # should make clear it is an earnings reaction trade only.
+    if plan.get("valid"):
+        # Row is not available here, so earnings-specific reasons are attached
+        # in diagnostic_candidate/signal_base. Setup-specific not-ready reasons
+        # remain focused on live technicals.
+        pass
+
     _, reclaim_reason = setup_vwap_reclaim_ready(metrics, rr, confidence)
     reasons.append(f"VWAP reclaim not ready: {reclaim_reason}")
+
+    _, reclaim_pullback_reason = setup_reclaim_pullback_ready(metrics, rr, confidence)
+    reasons.append(f"Reclaim pullback not ready: {reclaim_pullback_reason}")
 
     _, vwap_reason = setup_vwap_pullback_ready(metrics, rr, confidence)
     reasons.append(f"VWAP pullback not ready: {vwap_reason}")
@@ -2511,6 +2953,12 @@ def diagnostic_candidate(
         "sector_status": safe_str(row.get("sector_status"), ""),
         "risk_category": safe_str(row.get("risk_category"), "NORMAL"),
         "setup_bucket": safe_str(row.get("setup_bucket"), ""),
+        "event_context": event_context_for_row(row),
+        "earnings_reaction_trade": is_earnings_reaction_row(row),
+        "event_risk_warning": (
+            "Earnings reaction only — higher volatility; requires stricter VWAP/volume/R:R confirmation."
+            if is_earnings_reaction_row(row) else ""
+        ),
         "dollar_vol_M": safe_float(row.get("dollar_vol_M"), 0),
         "atr_pct": safe_float(row.get("atr_pct"), 0),
         "price": round(metrics.price, 4),
@@ -2558,6 +3006,18 @@ def diagnostic_candidate(
         "macd_histogram_rising": metrics.macd_histogram_rising,
         "macd_histogram_falling": metrics.macd_histogram_falling,
         "macd_status": metrics.macd_status,
+        "macd_1m_value": round(metrics.macd_1m_value, 4),
+        "macd_1m_signal": round(metrics.macd_1m_signal, 4),
+        "macd_1m_histogram": round(metrics.macd_1m_histogram, 4),
+        "macd_1m_histogram_prev": round(metrics.macd_1m_histogram_prev, 4),
+        "macd_1m_above_signal": metrics.macd_1m_above_signal,
+        "macd_1m_bullish_crossover_recent": metrics.macd_1m_bullish_crossover_recent,
+        "macd_1m_bearish_crossover_recent": metrics.macd_1m_bearish_crossover_recent,
+        "macd_1m_histogram_rising": metrics.macd_1m_histogram_rising,
+        "macd_1m_histogram_falling": metrics.macd_1m_histogram_falling,
+        "macd_1m_curling_up": metrics.macd_1m_curling_up,
+        "macd_1m_curling_down": metrics.macd_1m_curling_down,
+        "macd_1m_status": metrics.macd_1m_status,
         "base_compression": metrics.base_compression,
         "base_range_pct": round(metrics.base_range_pct, 2),
         "base_high": round(metrics.base_high, 4),
@@ -2581,6 +3041,10 @@ def diagnostic_candidate(
         "vwap_reclaim_age_minutes": round(metrics.vwap_reclaim_age_minutes, 2),
         "vwap_reclaim_volume_ratio": round(metrics.vwap_reclaim_volume_ratio, 2),
         "vwap_reclaim_reason": metrics.vwap_reclaim_reason,
+        "vwap_reclaim_lifecycle_active": metrics.vwap_reclaim_lifecycle_active,
+        "vwap_reclaim_support_level": round(metrics.vwap_reclaim_support_level, 4),
+        "reclaim_pullback_holding": metrics.reclaim_pullback_holding,
+        "reclaim_pullback_reason": metrics.reclaim_pullback_reason,
         "avg_volume_5": round(metrics.avg_volume_5, 2),
         "avg_volume_prev_5": round(metrics.avg_volume_prev_5, 2),
         "morning_avg_volume_5m": round(metrics.morning_avg_volume_5m, 2),
@@ -2631,6 +3095,13 @@ def signal_base(
         "symbol": symbol,
         "signal_status": status,
         "setup_type": setup_type or "MONITORING",
+        "setup_label": setup_display_label(row, setup_type or "MONITORING"),
+        "event_context": event_context_for_row(row),
+        "earnings_reaction_trade": is_earnings_reaction_row(row),
+        "event_risk_warning": (
+            "Earnings reaction only — higher volatility; requires stricter VWAP/volume/R:R confirmation."
+            if is_earnings_reaction_row(row) else ""
+        ),
         "confidence": round(confidence, 1),
         "live_signal_score": round(live_score, 1),
         "scanner_score": safe_float(row.get("score"), 0),
@@ -2695,6 +3166,18 @@ def signal_base(
         "macd_histogram_rising": metrics.macd_histogram_rising,
         "macd_histogram_falling": metrics.macd_histogram_falling,
         "macd_status": metrics.macd_status,
+        "macd_1m_value": round(metrics.macd_1m_value, 4),
+        "macd_1m_signal": round(metrics.macd_1m_signal, 4),
+        "macd_1m_histogram": round(metrics.macd_1m_histogram, 4),
+        "macd_1m_histogram_prev": round(metrics.macd_1m_histogram_prev, 4),
+        "macd_1m_above_signal": metrics.macd_1m_above_signal,
+        "macd_1m_bullish_crossover_recent": metrics.macd_1m_bullish_crossover_recent,
+        "macd_1m_bearish_crossover_recent": metrics.macd_1m_bearish_crossover_recent,
+        "macd_1m_histogram_rising": metrics.macd_1m_histogram_rising,
+        "macd_1m_histogram_falling": metrics.macd_1m_histogram_falling,
+        "macd_1m_curling_up": metrics.macd_1m_curling_up,
+        "macd_1m_curling_down": metrics.macd_1m_curling_down,
+        "macd_1m_status": metrics.macd_1m_status,
         "base_compression": metrics.base_compression,
         "base_range_pct": round(metrics.base_range_pct, 2),
         "base_high": round(metrics.base_high, 4),
@@ -2718,6 +3201,10 @@ def signal_base(
         "vwap_reclaim_age_minutes": round(metrics.vwap_reclaim_age_minutes, 2),
         "vwap_reclaim_volume_ratio": round(metrics.vwap_reclaim_volume_ratio, 2),
         "vwap_reclaim_reason": metrics.vwap_reclaim_reason,
+        "vwap_reclaim_lifecycle_active": metrics.vwap_reclaim_lifecycle_active,
+        "vwap_reclaim_support_level": round(metrics.vwap_reclaim_support_level, 4),
+        "reclaim_pullback_holding": metrics.reclaim_pullback_holding,
+        "reclaim_pullback_reason": metrics.reclaim_pullback_reason,
         "avg_volume_5": round(metrics.avg_volume_5, 2),
         "avg_volume_prev_5": round(metrics.avg_volume_prev_5, 2),
         "morning_avg_volume_5m": round(metrics.morning_avg_volume_5m, 2),
@@ -2729,7 +3216,7 @@ def signal_base(
         "sector_status": safe_str(row.get("sector_status"), ""),
         "market_phase": phase,
         "reason": reason,
-        "invalidation": "Lose VWAP, lose trigger, break pullback/base low, stop would hit, or signal becomes stale.",
+        "invalidation": "For VWAP reclaim: invalidate only on VWAP/reclaim-base loss, stale setup, stop hit, or invalid R/R. For other setups: lose VWAP/trigger/base support or stale signal.",
         "last_checked": now_text,
         "updated_at": now_text,
         "session_date": session_date_str(),
@@ -2761,7 +3248,8 @@ def make_invalidated(
     out.update({
         "symbol": symbol,
         "signal_status": "INVALIDATED",
-        "invalidation_reason": category,
+        "invalidation_reason": reason,
+        "invalidation_category": category,
         "reason": reason,
         "actionable": False,
         "actionability": "INVALIDATED",
@@ -2810,6 +3298,49 @@ def expired_by_age(signal: Dict[str, Any], max_minutes: int, now: Optional[datet
     return False
 
 
+def is_reclaim_lifecycle_setup(signal: Dict[str, Any]) -> bool:
+    return safe_str(signal.get("setup_type"), "").upper() in {
+        "VWAP_RECLAIM_BREAKOUT",
+        "RECLAIM_PULLBACK_HOLDING",
+        "VWAP_PULLBACK_CONTINUATION",
+    }
+
+
+def reclaim_lifecycle_holding(signal: Dict[str, Any], metrics: IntradayMetrics) -> Tuple[bool, str]:
+    """
+    For VWAP reclaim setups, a pullback to EMA9/VWAP is normal.
+    Keep the setup alive while VWAP/reclaim support is holding.
+    """
+    if not metrics.has_data:
+        return False, "No intraday data available"
+
+    vwap = safe_float(metrics.vwap, 0)
+    stored_vwap = safe_float(signal.get("vwap"), 0)
+    support_candidates = [
+        safe_float(signal.get("support_level"), 0),
+        safe_float(signal.get("vwap_reclaim_support_level"), 0),
+        safe_float(signal.get("vwap_reclaim_bar_low"), 0),
+        vwap,
+        stored_vwap,
+    ]
+    support_candidates = [x for x in support_candidates if x > 0]
+    support = max(support_candidates) if support_candidates else 0
+
+    if vwap > 0 and metrics.price < vwap * (1.0 - RECLAIM_PULLBACK_SUPPORT_BUFFER_PCT / 100.0):
+        return False, f"Lost VWAP reclaim support: price {metrics.price:.2f} < VWAP {vwap:.2f}"
+
+    if support > 0 and metrics.price < support * 0.992:
+        return False, f"Broke reclaim lifecycle support: price {metrics.price:.2f} < support {support:.2f}"
+
+    if metrics.bearish_momentum_divergence and metrics.price < vwap:
+        return False, "Bearish divergence while losing VWAP reclaim support"
+
+    return True, (
+        f"VWAP reclaim lifecycle still holding: price {metrics.price:.2f}, "
+        f"VWAP {vwap:.2f}, support {support:.2f}"
+    )
+
+
 def trigger_fired(existing: Dict[str, Any], metrics: IntradayMetrics) -> bool:
     trigger = safe_float(existing.get("entry_trigger"), 0)
     if trigger <= 0 or not metrics.has_data:
@@ -2828,7 +3359,12 @@ def active_invalidated(signal: Dict[str, Any], metrics: IntradayMetrics) -> Tupl
         return True, "Lost VWAP after active signal", "FAILED_SETUP"
 
     if trigger > 0 and metrics.price < trigger:
-        return True, "Price fell back below trigger", "FAILED_SETUP"
+        if is_reclaim_lifecycle_setup(signal):
+            holding, _hold_reason = reclaim_lifecycle_holding(signal, metrics)
+            if not holding:
+                return True, "Active reclaim signal lost VWAP/reclaim support after falling below trigger", "FAILED_SETUP"
+        else:
+            return True, "Price fell back below trigger", "FAILED_SETUP"
 
     if stop > 0 and metrics.price <= stop:
         return True, "Stop would have been hit", "FAILED_SETUP"
@@ -2845,6 +3381,22 @@ def ready_invalidated(signal: Dict[str, Any], metrics: IntradayMetrics) -> Tuple
 
     support = safe_float(signal.get("support_level"), 0)
     trigger = safe_float(signal.get("entry_trigger"), 0)
+
+    # VWAP reclaim lifecycle is intentionally more tolerant:
+    # after reclaim, a pullback toward EMA9/VWAP is normal and should not be
+    # invalidated unless VWAP/reclaim support fails.
+    if is_reclaim_lifecycle_setup(signal):
+        holding, hold_reason = reclaim_lifecycle_holding(signal, metrics)
+        if not holding:
+            return True, hold_reason, "FAILED_SETUP"
+
+        if expired_by_age(signal, TRIGGER_READY_STALE_MINUTES):
+            return True, "VWAP reclaim trigger-ready setup became stale", "MISSED_WINDOW"
+
+        if trigger > 0 and pct_change(metrics.price, trigger) > 2.0:
+            return True, "Price moved too far above reclaim trigger without valid active signal", "MISSED_WINDOW"
+
+        return False, "", ""
 
     if not metrics.above_vwap:
         return True, "Lost VWAP before trigger", "FAILED_SETUP"
@@ -2886,15 +3438,24 @@ def suppress_trigger_during_blackout(
 ) -> Dict[str, Any]:
     now_text = iso_now_et()
     out = dict(signal)
+    lunch_phase = is_lunch_blackout_phase(phase)
     out.update({
         "signal_status": "TRIGGER_READY",
         "actionable": False,
-        "actionability": "SUPPRESSED",
-        "suppression_reason": f"{phase}_TRIGGER",
+        "actionability": "LUNCH_CAUTION" if lunch_phase else "SUPPRESSED",
+        "suppression_reason": "LUNCH_BLACKOUT_TRIGGER_READY_ONLY" if lunch_phase else f"{phase}_TRIGGER",
+        "lunch_caution": bool(lunch_phase),
+        "lunch_blackout_ready": bool(lunch_phase),
         "blackout_trigger_price": round(metrics.price, 4),
         "blackout_trigger_time": now_text,
         "requires_fresh_trigger": True,
-        "reason": f"Trigger fired during {phase.lower().replace('_', ' ')}. No active signal generated.",
+        "entry_warning": LUNCH_CAUTION_WARNING if lunch_phase else "",
+        "event_risk_warning": combine_warning(out.get("event_risk_warning", ""), LUNCH_CAUTION_WARNING) if lunch_phase else out.get("event_risk_warning", ""),
+        "reason": (
+            "Trigger fired during lunch blackout. No automatic Active Signal generated; manual chart confirmation required."
+            if lunch_phase else
+            f"Trigger fired during {phase.lower().replace('_', ' ')}. No active signal generated."
+        ),
         "last_checked": now_text,
         "updated_at": now_text,
         "market_phase": phase,
@@ -2931,12 +3492,16 @@ def suppress_trigger_during_blackout(
         "vwap_distance_pct": metrics.vwap_dist_pct,
         "sector_status": safe_str(row.get("sector_status"), ""),
         "market_regime": safe_str(regime.get("label"), ""),
-        "notes": "Trigger suppressed by Signal Desk v1 blackout rule.",
+        "notes": (
+            "Trigger surfaced during lunch as caution-only; no automatic Active Signal."
+            if is_lunch_blackout_phase(phase) else
+            "Trigger suppressed by Signal Desk v1 blackout rule."
+        ),
     })
 
     decision_log(
         normalize_symbol(row.get("symbol")),
-        "TRIGGER_SUPPRESSED_BLACKOUT",
+        "TRIGGER_READY_LUNCH_CAUTION" if is_lunch_blackout_phase(phase) else "TRIGGER_SUPPRESSED_BLACKOUT",
         phase=phase,
         price=metrics.price,
         trigger=signal.get("entry_trigger"),
@@ -2973,7 +3538,16 @@ def trigger_ready_reassessment(
         live,
     )
 
-    setup_ready_type, setup_reason, setup_fail_reasons = choose_setup(metrics, plan, conf, phase)
+    setup_ready_type, setup_reason, setup_fail_reasons = choose_setup(metrics, plan, conf, phase, row)
+    existing_reclaim_lifecycle = is_reclaim_lifecycle_setup(existing)
+    if existing_reclaim_lifecycle and not setup_ready_type:
+        holding, hold_reason = reclaim_lifecycle_holding(existing, metrics)
+        if holding:
+            setup_ready_type = "RECLAIM_PULLBACK_HOLDING"
+            setup_reason = hold_reason
+        else:
+            setup_fail_reasons.append(hold_reason)
+
     ready_min = setup_ready_conf_required(setup_ready_type, phase) if setup_ready_type else ready_confidence_required(phase)
 
     fail_reasons: List[str] = []
@@ -2987,19 +3561,27 @@ def trigger_ready_reassessment(
     if conf < ready_min:
         fail_reasons.append(f"Confidence {conf:.1f} < ready minimum {ready_min:.0f}")
 
-    macd_ok, macd_reason = macd_ready_confirmation(metrics)
-    if not macd_ok:
-        fail_reasons.append(macd_reason)
+    if existing_reclaim_lifecycle or setup_ready_type in {"VWAP_RECLAIM_BREAKOUT", "RECLAIM_PULLBACK_HOLDING"}:
+        # Do not kill reclaim-pullback setups for a normal EMA9 dip or routine
+        # volume cooling. Only hard-fail genuine structure loss / bearish divergence.
+        if metrics.bearish_momentum_divergence:
+            fail_reasons.append("Bearish MACD/momentum divergence")
+        if is_late_day() and not late_day_volume_confirmed(metrics):
+            fail_reasons.append("Late-day reclaim setup needs fresh volume expansion")
+    else:
+        macd_ok, macd_reason = macd_ready_confirmation(metrics)
+        if not macd_ok:
+            fail_reasons.append(macd_reason)
 
-    ema_ok, ema_reason = ema9_ready_confirmation(metrics)
-    if not ema_ok:
-        fail_reasons.append(ema_reason)
+        ema_ok, ema_reason = ema9_ready_confirmation(metrics)
+        if not ema_ok:
+            fail_reasons.append(ema_reason)
 
-    if metrics.volume_fading_vs_morning:
-        fail_reasons.append("Volume fading vs morning reference")
+        if metrics.volume_fading_vs_morning:
+            fail_reasons.append("Volume fading vs morning reference")
 
-    if is_late_day() and not late_day_volume_confirmed(metrics):
-        fail_reasons.append("Late-day setup needs volume expansion")
+        if is_late_day() and not late_day_volume_confirmed(metrics):
+            fail_reasons.append("Late-day setup needs volume expansion")
 
     if not setup_ready_type:
         fail_reasons.extend(setup_fail_reasons)
@@ -3043,10 +3625,12 @@ def trigger_ready_reassessment(
     )
 
     exact_ready_min = setup_ready_conf_required(setup_ready_type, phase)
+    event_ok, event_reasons = earnings_reaction_requirements(row, metrics, exact_plan, exact_conf)
     if (
         not exact_plan.get("valid")
         or safe_float(exact_plan.get("reward_risk"), 0) < MIN_RR
         or exact_conf < exact_ready_min
+        or not event_ok
     ):
         fail = []
         if not exact_plan.get("valid"):
@@ -3055,6 +3639,8 @@ def trigger_ready_reassessment(
             fail.append(f"R/R {safe_float(exact_plan.get('reward_risk'), 0):.2f} < minimum 1.5")
         if exact_conf < exact_ready_min:
             fail.append(f"Confidence {exact_conf:.1f} < ready minimum {exact_ready_min:.0f}")
+        if not event_ok:
+            fail.extend(event_reasons)
 
         if exact_plan.get("valid") and safe_float(exact_plan.get("reward_risk"), 0) >= MIN_RR_WATCH:
             out = signal_base(
@@ -3157,6 +3743,8 @@ def active_promotion_failure_reasons(
     confidence: float,
     metrics: IntradayMetrics,
     phase: str,
+    setup_type: str = "",
+    row: Optional[Dict[str, Any]] = None,
 ) -> List[str]:
     reasons: List[str] = []
 
@@ -3172,18 +3760,36 @@ def active_promotion_failure_reasons(
     if not metrics.above_vwap:
         reasons.append("Price is not above VWAP")
 
-    if metrics.ema9 > 0 and not metrics.price_above_ema9:
-        reasons.append("Price is below EMA9")
+    reclaim_family = is_reclaim_lifecycle_setup_type(setup_type)
 
-    if metrics.ema9_falling:
-        reasons.append("EMA9 is falling")
+    if reclaim_family:
+        # VWAP reclaim/pullback continuation can dip around EMA9 during a normal
+        # pullback. Do not block solely for EMA9 unless VWAP/reclaim structure is
+        # also under pressure.
+        macd_ok, macd_reason = vwap_lifecycle_macd_confirmation(metrics, setup_type)
+        if not macd_ok:
+            reasons.append(macd_reason)
 
-    macd_ok, macd_reason = macd_ready_confirmation(metrics)
-    if not macd_ok:
-        reasons.append(macd_reason)
+        if metrics.ema9_falling and not metrics.reclaim_pullback_holding and metrics.vwap_dist_pct <= 0.35:
+            reasons.append("EMA9 falling while reclaim support is not clearly holding")
+    else:
+        if metrics.ema9 > 0 and not metrics.price_above_ema9:
+            reasons.append("Price is below EMA9")
 
-    if metrics.volume_fading_vs_morning:
-        reasons.append("Volume fading versus morning reference")
+        if metrics.ema9_falling:
+            reasons.append("EMA9 is falling")
+
+        macd_ok, macd_reason = macd_ready_confirmation(metrics)
+        if not macd_ok:
+            reasons.append(macd_reason)
+
+        if metrics.volume_fading_vs_morning:
+            reasons.append("Volume fading versus morning reference")
+
+    if row is not None:
+        event_ok, event_reasons = earnings_reaction_requirements(row, metrics, plan, confidence)
+        if not event_ok:
+            reasons.extend(event_reasons)
 
     if is_late_day() and not late_day_volume_confirmed(metrics):
         reasons.append("Late-day active signal needs volume expansion")
@@ -3216,7 +3822,7 @@ def promote_trigger_ready_to_active(
     )
     conf = max(safe_float(existing.get("confidence"), 0), recomputed_conf)
 
-    failure_reasons = active_promotion_failure_reasons(plan, conf, metrics, phase)
+    failure_reasons = active_promotion_failure_reasons(plan, conf, metrics, phase, safe_str(existing.get("setup_type"), ""), row)
     if failure_reasons:
         decision_log(
             normalize_symbol(row.get("symbol")),
@@ -3502,7 +4108,90 @@ def process_new_or_watch(
         log_watch_rejected(symbol, final_reasons, conf, metrics, phase)
         return {}, diagnostic_candidate(row, metrics, plan, live, conf, final_reasons, phase, regime)
 
-    # Blackout phases: WATCH only if usable; no READY.
+    # Lunch blackout: allow WATCH -> TRIGGER_READY for valid VWAP reclaim/pullback
+    # setups, but never allow automatic ACTIVE_SIGNAL. This surfaces the ticker
+    # for manual review without violating the "no lunch auto-entry" rule.
+    if is_lunch_blackout_phase(phase):
+        if not watch_ok or not plan.get("valid") or safe_float(plan.get("reward_risk"), 0) < MIN_RR_WATCH or conf < MIN_CONF_WATCH:
+            log_watch_rejected(symbol, rejected_reasons, conf, metrics, phase)
+            return {}, diagnostic_candidate(row, metrics, plan, live, conf, rejected_reasons, phase, regime)
+
+        setup_ready_type, setup_reason, setup_fail_reasons = choose_setup(metrics, plan, conf, phase, row)
+
+        if setup_ready_type and is_lunch_trigger_ready_allowed_setup(setup_ready_type):
+            exact_plan = build_trade_plan(row, metrics, setup_ready_type, quote)
+            exact_live = live_signal_score(row, metrics, exact_plan, regime, phase)
+            exact_conf = final_confidence(safe_float(row.get("score"), 0), exact_live)
+            exact_ready_min_conf = setup_ready_conf_required(setup_ready_type, phase)
+            event_ok, event_reasons = earnings_reaction_requirements(row, metrics, exact_plan, exact_conf)
+
+            lunch_ready_failures: List[str] = []
+            if not exact_plan.get("valid"):
+                lunch_ready_failures.append(f"Plan invalid: {safe_str(exact_plan.get('rejection_reason'), 'Invalid plan')}")
+            if safe_float(exact_plan.get("reward_risk"), 0) < MIN_RR:
+                lunch_ready_failures.append(f"R/R {safe_float(exact_plan.get('reward_risk'), 0):.2f} < minimum {MIN_RR:.1f}")
+            if exact_conf < exact_ready_min_conf:
+                lunch_ready_failures.append(f"Confidence {exact_conf:.1f} < ready minimum {exact_ready_min_conf:.0f}")
+            if not event_ok:
+                lunch_ready_failures.extend(event_reasons)
+
+            if not lunch_ready_failures:
+                out = signal_base(
+                    row,
+                    metrics,
+                    exact_plan,
+                    "TRIGGER_READY",
+                    setup_ready_type,
+                    exact_conf,
+                    exact_live,
+                    setup_reason,
+                    phase,
+                    regime,
+                )
+                now_text = iso_now_et()
+                out["ready_since"] = now_text
+                out["detected_at"] = now_text
+                out = apply_lunch_caution_fields(out, phase)
+
+                decision_log(
+                    symbol,
+                    "BECAME_TRIGGER_READY_LUNCH_CAUTION",
+                    setup=setup_ready_type,
+                    confidence=exact_conf,
+                    trigger=exact_plan.get("entry_trigger"),
+                    stop=exact_plan.get("stop_loss"),
+                    target_1=exact_plan.get("target_1"),
+                    target_2=exact_plan.get("target_2"),
+                    rr=exact_plan.get("reward_risk"),
+                    price=metrics.price,
+                    phase=phase,
+                    reason=LUNCH_CAUTION_WARNING,
+                )
+                return out, None
+
+            setup_fail_reasons.extend(lunch_ready_failures)
+
+        # Valid but not lunch-ready. Keep as WATCH with explicit lunch context.
+        out = signal_base(
+            row,
+            metrics,
+            plan,
+            "WATCH",
+            "LUNCH_BLACKOUT_MONITOR",
+            conf,
+            live,
+            "Lunch blackout monitor only. VWAP reclaim/pullback can become Trigger Ready with caution, but no automatic Active Signal.",
+            phase,
+            regime,
+        )
+        out["detected_at"] = iso_now_et()
+        out["lunch_caution"] = True
+        out["event_risk_warning"] = combine_warning(out.get("event_risk_warning", ""), LUNCH_CAUTION_WARNING)
+        out["not_ready_reasons"] = setup_fail_reasons or not_ready_reasons(metrics, plan, conf)
+        log_watch_evaluated(symbol, out, metrics, phase)
+        return out, None
+
+    # Blackout phases other than lunch: WATCH only if usable; no READY.
     if not is_valid_signal_phase(phase):
         if watch_ok and plan.get("valid") and safe_float(plan.get("reward_risk"), 0) >= MIN_RR_WATCH and conf >= MIN_CONF_WATCH:
             out = signal_base(
@@ -3535,7 +4224,7 @@ def process_new_or_watch(
     ready_min_conf = ready_confidence_required(phase)
     early_ready_min_conf = min(ready_min_conf, MIN_CONF_RECLAIM_READY if metrics.vwap_reclaim_recent else ready_min_conf)
     if plan.get("valid") and safe_float(plan.get("reward_risk"), 0) >= MIN_RR and conf >= early_ready_min_conf:
-        setup_ready_type, setup_reason, setup_fail_reasons = choose_setup(metrics, plan, conf, phase)
+        setup_ready_type, setup_reason, setup_fail_reasons = choose_setup(metrics, plan, conf, phase, row)
 
         if setup_ready_type:
             # Rebuild plan using the exact ready setup type.
@@ -3544,7 +4233,8 @@ def process_new_or_watch(
             exact_conf = final_confidence(safe_float(row.get("score"), 0), exact_live)
 
             exact_ready_min_conf = setup_ready_conf_required(setup_ready_type, phase)
-            if exact_plan.get("valid") and safe_float(exact_plan.get("reward_risk"), 0) >= MIN_RR and exact_conf >= exact_ready_min_conf:
+            event_ok, event_reasons = earnings_reaction_requirements(row, metrics, exact_plan, exact_conf)
+            if exact_plan.get("valid") and safe_float(exact_plan.get("reward_risk"), 0) >= MIN_RR and exact_conf >= exact_ready_min_conf and event_ok:
                 out = signal_base(
                     row,
                     metrics,
@@ -3574,6 +4264,9 @@ def process_new_or_watch(
                     phase=phase,
                 )
                 return out, None
+
+            if not event_ok:
+                setup_fail_reasons.extend(event_reasons)
 
         # Good plan, but setup itself is not ready. WATCH.
         out = signal_base(
