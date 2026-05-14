@@ -10,7 +10,7 @@ Purpose:
 
 Current behavior:
 - Broad scanner: 09:00, 09:45, 13:30 ET
-- Signal refresh: every 60 seconds, Mon-Fri 09:30–16:05 ET
+- Signal refresh: every 60 seconds, Mon-Fri 09:46–16:05 ET
 - Dashboard publish: after every scanner/signal run
 - No auto-trading. Manual trading discipline remains unchanged.
 """
@@ -61,9 +61,11 @@ FULL_SCAN_TIMES = [
 ]
 
 # Signal Desk refresh window.
-# We still refresh during blackout windows because protected TRIGGER_READY /
-# ACTIVE_SIGNAL names must be monitored, suppressed, expired, or invalidated.
-SIGNAL_REFRESH_START = dt_time(9, 30)
+# Starts after the opening 15-minute range plus 1-minute buffer.
+# We still refresh during later blackout/lunch windows because protected
+# TRIGGER_READY / ACTIVE_SIGNAL names must be monitored, suppressed,
+# expired, or invalidated.
+SIGNAL_REFRESH_START = dt_time(9, 46)
 SIGNAL_REFRESH_END = dt_time(16, 5)
 
 # If runner starts a little late, allow catching scanner jobs within this window.
@@ -243,9 +245,6 @@ def publish_dashboard() -> bool:
 
     for pattern in patterns:
         for src in PROJECT_DIR.glob(pattern):
-            if src.name == "elite_runner.log":
-                # Publish it too, but keep name clear.
-                pass
             shutil.copy2(src, WEB_DIR / src.name)
             copied += 1
 
