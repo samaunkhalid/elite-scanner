@@ -23,7 +23,9 @@ Default filters are intentionally relaxed for monitor-only discovery:
   - listed exchange
   - valid extended-hours trade/quote timestamp
   - minimum extended-hours % move
-  - minimum extended-hours volume or notional, with high-move bypass
+  - minimum extended-hours volume / notional
+  - minimum extended-hours bar count
+  - common-stock cleanup to remove warrants, units, rights and funds
 """
 
 from __future__ import annotations
@@ -49,7 +51,7 @@ except Exception:  # pragma: no cover
     ZoneInfo = None
 
 
-VERSION = "extended_hours_movers_v1.0"
+VERSION = "extended_hours_movers_v1.1_liquidity_quality"
 
 PROJECT_DIR = Path(os.getenv("ELITE_PROJECT_DIR", Path(__file__).resolve().parent)).resolve()
 
@@ -66,9 +68,18 @@ MAX_PRICE = float(os.getenv("EXTENDED_MAX_PRICE", "200.00"))
 PREMARKET_MIN_MOVE_PCT = float(os.getenv("PREMARKET_MIN_MOVE_PCT", "1.5"))
 AFTER_HOURS_MIN_MOVE_PCT = float(os.getenv("AFTER_HOURS_MIN_MOVE_PCT", "1.0"))
 
-MIN_EXTENDED_VOLUME = int(os.getenv("EXTENDED_MIN_VOLUME", "1000"))
-MIN_EXTENDED_NOTIONAL = float(os.getenv("EXTENDED_MIN_NOTIONAL", "25000"))
-HIGH_MOVE_BYPASS_PCT = float(os.getenv("EXTENDED_HIGH_MOVE_BYPASS_PCT", "8.0"))
+MIN_EXTENDED_VOLUME = int(os.getenv("EXTENDED_MIN_VOLUME", "5000"))
+MIN_EXTENDED_NOTIONAL = float(os.getenv("EXTENDED_MIN_NOTIONAL", "50000"))
+# Quality gates for monitor-only extended-hours movers.
+# These are intentionally separate from the regular-market scanner filters.
+# They remove fake 1-share/2-share extended-hours prints without restoring
+# strict regular-session filters such as market cap, ATR, SMA, EPS, or earnings.
+ABSOLUTE_MIN_EXTENDED_VOLUME = int(os.getenv("EXTENDED_ABSOLUTE_MIN_VOLUME", "1000"))
+MIN_EXTENDED_BARS = int(os.getenv("EXTENDED_MIN_BARS", "2"))
+MAX_QUOTE_SPREAD_PCT = float(os.getenv("EXTENDED_MAX_SPREAD_PCT", "15.0"))
+ALLOW_HIGH_MOVE_BYPASS = os.getenv("EXTENDED_ALLOW_HIGH_MOVE_BYPASS", "0").strip().lower() in {"1", "true", "yes", "y"}
+HIGH_MOVE_BYPASS_PCT = float(os.getenv("EXTENDED_HIGH_MOVE_BYPASS_PCT", "999.0"))
+EXCLUDE_NON_COMMON_STOCKS = os.getenv("EXTENDED_EXCLUDE_NON_COMMON", "1").strip().lower() in {"1", "true", "yes", "y"}
 
 MAX_OUTPUT_ROWS = int(os.getenv("EXTENDED_MAX_OUTPUT_ROWS", "30"))
 SNAPSHOT_CHUNK_SIZE = int(os.getenv("EXTENDED_SNAPSHOT_CHUNK_SIZE", "200"))
@@ -210,6 +221,82 @@ def clean_symbol(value: Any) -> str:
         return ""
 
     return sym
+
+
+
+
+NON_COMMON_NAME_KEYWORDS = (
+    "warrant",
+    "warrants",
+    "right",
+    "rights",
+    "unit",
+    "units",
+    "preferred",
+    "preference",
+    "depositary share",
+    "depositary shares",
+    "notes due",
+    "senior notes",
+    "subordinated notes",
+    "bond",
+    "bonds",
+    "debenture",
+    "debentures",
+    "etf",
+    "etn",
+    "exchange traded",
+    "closed-end fund",
+    "closed end fund",
+    "fund",
+)
+
+
+def looks_like_non_common_symbol(symbol: str) -> bool:
+    """
+    Conservative symbol-level cleanup for extended-hours monitor mode.
+
+    This rejects common warrant/right/unit suffix patterns without rejecting
+    normal short common-stock tickers like W, NOW, LAW, HROW, etc.
+    """
+    s = clean_symbol(symbol)
+    if not s:
+        return True
+
+    compact = s.replace(".", "")
+
+    # Common warrant/right/unit suffixes after a base ticker.
+    if compact.endswith(("WW", "WS", "WT", "WTS", "WSA", "WSB")) and len(compact) >= 4:
+        return True
+
+    # Many warrants/rights/units are ABCDW / ABCDR / ABCDU.
+    # Use length >= 5 so normal common tickers ending W/R/U are not removed.
+    if len(compact) >= 5 and compact[-1] in {"W", "R", "U"}:
+        return True
+
+    return False
+
+
+def looks_like_non_common_name(name: str) -> bool:
+    text = str(name or "").lower()
+    if not text:
+        return False
+
+    # Avoid substring false positives such as "Bright" matching "right".
+    for keyword in NON_COMMON_NAME_KEYWORDS:
+        if re.search(r"\b" + re.escape(keyword) + r"\b", text):
+            return True
+    return False
+
+
+def is_allowed_extended_asset(symbol: str, name: str) -> bool:
+    if not EXCLUDE_NON_COMMON_STOCKS:
+        return True
+    if looks_like_non_common_symbol(symbol):
+        return False
+    if looks_like_non_common_name(name):
+        return False
+    return True
 
 
 def headers() -> Dict[str, str]:
@@ -359,14 +446,20 @@ def fetch_assets() -> List[Asset]:
         if not symbol or symbol in seen:
             continue
 
+        name = str(item.get("name") or symbol)
+
+        if not is_allowed_extended_asset(symbol, name):
+            continue
+
         exchange = str(item.get("exchange") or "").strip().upper()
         if exchange and exchange not in VALID_EXCHANGES:
             continue
 
-        # Keep active U.S. equities. Tradability can be false for some listings,
-        # but extended-hours mover monitoring can still display them if data exists.
+        # Keep active U.S. common equities / ADR-like listings for monitor mode.
+        # Tradability can be false for some listings, but extended-hours mover
+        # monitoring can still display them if data exists.
         seen.add(symbol)
-        assets.append(Asset(symbol, str(item.get("name") or symbol), exchange))
+        assets.append(Asset(symbol, name, exchange))
 
     assets.sort(key=lambda x: x.symbol)
     write_asset_cache(ASSET_CACHE_FILE, assets)
@@ -633,10 +726,27 @@ def tier_for_score(score: int) -> int:
     return 4
 
 
-def passes_liquidity(change_pct: float, volume: float, notional: float) -> bool:
-    if change_pct >= HIGH_MOVE_BYPASS_PCT and volume > 0:
-        return True
-    return volume >= MIN_EXTENDED_VOLUME or notional >= MIN_EXTENDED_NOTIONAL
+def passes_liquidity(change_pct: float, volume: float, notional: float, bar_count: int) -> Tuple[bool, str]:
+    """
+    Extended-hours quality gate.
+
+    This is deliberately NOT the regular scanner quality filter. It only removes
+    fake extended-hours prints caused by 1-share/2-share trades, single-bar spikes,
+    and near-zero notional movers.
+    """
+    if bar_count < MIN_EXTENDED_BARS:
+        return False, "too_few_extended_bars"
+
+    if volume < ABSOLUTE_MIN_EXTENDED_VOLUME:
+        return False, "absolute_volume_too_low"
+
+    if ALLOW_HIGH_MOVE_BYPASS and change_pct >= HIGH_MOVE_BYPASS_PCT and volume >= ABSOLUTE_MIN_EXTENDED_VOLUME:
+        return True, "high_move_bypass"
+
+    if volume >= MIN_EXTENDED_VOLUME or notional >= MIN_EXTENDED_NOTIONAL:
+        return True, "passed"
+
+    return False, "liquidity_too_low"
 
 
 def build_movers(session: str) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
@@ -725,6 +835,9 @@ def build_movers(session: str) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
 
     rows: List[Dict[str, Any]] = []
     skipped_liquidity = 0
+    skipped_too_few_bars = 0
+    skipped_absolute_volume = 0
+    skipped_wide_spread = 0
 
     for r in validation_pool:
         symbol = str(r["symbol"])
@@ -745,21 +858,37 @@ def build_movers(session: str) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
         stats = bar_stats.get(symbol, {})
         ext_volume = safe_float(stats.get("extended_volume"), 0.0)
         ext_notional = safe_float(stats.get("extended_notional"), 0.0)
+        ext_bar_count = int(safe_float(stats.get("extended_bar_count"), 0.0))
 
         # If bar volume is missing but latest trade has size, preserve a minimal
-        # liquidity datapoint instead of discarding high-move names.
+        # datapoint for diagnostics, but do not allow it to bypass the minimum
+        # extended-bar-count quality gate.
         latest_size = safe_int(r.get("latest_size"), 0)
         if ext_volume <= 0 and latest_size > 0:
             ext_volume = float(latest_size)
             ext_notional = float(latest_size) * latest
 
-        if not passes_liquidity(change, ext_volume, ext_notional):
-            skipped_liquidity += 1
+        liquidity_ok, liquidity_reason = passes_liquidity(change, ext_volume, ext_notional, ext_bar_count)
+        if not liquidity_ok:
+            if liquidity_reason == "too_few_extended_bars":
+                skipped_too_few_bars += 1
+            elif liquidity_reason == "absolute_volume_too_low":
+                skipped_absolute_volume += 1
+            else:
+                skipped_liquidity += 1
             continue
 
         bid = safe_float(r.get("bid"), 0.0)
         ask = safe_float(r.get("ask"), 0.0)
         spr = spread_pct(bid, ask, latest)
+
+        # Quote-only candidates with very wide spreads are usually bad
+        # extended-hours display names. Latest-trade candidates are not rejected
+        # by spread unless a usable quote exists and is extreme.
+        if spr > MAX_QUOTE_SPREAD_PCT:
+            skipped_wide_spread += 1
+            continue
+
         score = score_mover(change, ext_volume, ext_notional, spr)
 
         session_label = "Pre-Market" if session == "premarket" else "After-Hours"
@@ -801,7 +930,7 @@ def build_movers(session: str) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
             "extended_notional": round(ext_notional, 2),
             "extended_high": round(safe_float(stats.get("extended_high"), 0.0), 4),
             "extended_low": round(safe_float(stats.get("extended_low"), 0.0), 4),
-            "extended_bar_count": int(safe_float(stats.get("extended_bar_count"), 0.0)),
+            "extended_bar_count": ext_bar_count,
             "bid": round(bid, 4) if bid else "",
             "ask": round(ask, 4) if ask else "",
             "spread_pct": round(spr, 2) if spr else "",
@@ -819,7 +948,7 @@ def build_movers(session: str) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
         }
         rows.append(row)
 
-    rows.sort(key=lambda r: (-safe_float(r.get("change_pct"), 0.0), -safe_float(r.get("extended_notional"), 0.0), str(r.get("symbol"))))
+    rows.sort(key=lambda r: (-safe_float(r.get("score"), 0.0), -safe_float(r.get("change_pct"), 0.0), -safe_float(r.get("extended_notional"), 0.0), str(r.get("symbol"))))
     rows = rows[:MAX_OUTPUT_ROWS]
 
     metadata = {
@@ -839,6 +968,11 @@ def build_movers(session: str) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
         "min_move_pct": min_move,
         "min_extended_volume": MIN_EXTENDED_VOLUME,
         "min_extended_notional": MIN_EXTENDED_NOTIONAL,
+        "absolute_min_extended_volume": ABSOLUTE_MIN_EXTENDED_VOLUME,
+        "min_extended_bars": MIN_EXTENDED_BARS,
+        "max_quote_spread_pct": MAX_QUOTE_SPREAD_PCT,
+        "exclude_non_common_stocks": EXCLUDE_NON_COMMON_STOCKS,
+        "allow_high_move_bypass": ALLOW_HIGH_MOVE_BYPASS,
         "high_move_bypass_pct": HIGH_MOVE_BYPASS_PCT,
         "skipped_no_snapshot": skipped_no_snapshot,
         "skipped_no_price": skipped_no_price,
@@ -846,6 +980,9 @@ def build_movers(session: str) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
         "skipped_no_anchor": skipped_no_anchor,
         "skipped_below_move": skipped_below_move,
         "skipped_liquidity": skipped_liquidity,
+        "skipped_too_few_extended_bars": skipped_too_few_bars,
+        "skipped_absolute_volume": skipped_absolute_volume,
+        "skipped_wide_spread": skipped_wide_spread,
         "ranking_method": (
             "latest pre-market trade/quote vs previous regular close"
             if session == "premarket"
@@ -875,7 +1012,13 @@ def run(session: str) -> int:
     print(f"Universe: {metadata['asset_universe_count']} | Snapshots: {metadata['snapshot_count']} | Rough: {metadata['rough_candidate_count']}")
     print(f"Saved: {csv_path.name} ({len(rows)} rows)")
     print(f"Saved: {json_path.name}")
-    print(f"Skipped below move: {metadata['skipped_below_move']} | skipped liquidity: {metadata['skipped_liquidity']}")
+    print(
+        f"Skipped below move: {metadata['skipped_below_move']} | "
+        f"too few bars: {metadata['skipped_too_few_extended_bars']} | "
+        f"abs vol low: {metadata['skipped_absolute_volume']} | "
+        f"liquidity low: {metadata['skipped_liquidity']} | "
+        f"wide spread: {metadata['skipped_wide_spread']}"
+    )
     print("=" * 70)
 
     if rows:
