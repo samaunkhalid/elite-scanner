@@ -121,7 +121,7 @@ VWAP_PULLBACK_GRACE_MINUTES = 3.0
 BASE_SQUEEZE_GRACE_MINUTES = 2.0
 
 # Live participation / VWAP reclaim filters.
-# Alpaca IEX volume is non-consolidated, so thresholds are intentionally modest.
+# Alpaca SIP volume is non-consolidated, so thresholds are intentionally modest.
 MIN_LIVE_1M_AVG_VOL_WATCH = 500.0
 MIN_LIVE_5M_DOLLAR_VOL_WATCH = 25_000.0
 MIN_LIVE_1M_AVG_VOL_READY = 1_000.0
