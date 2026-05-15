@@ -61,7 +61,7 @@ def write_scanner_meta(extra=None):
     """
     meta = {
         "scanner_generated_at_et": iso_now_et(),
-        "price_source_preference": "Alpaca IEX last intraday bar when available; Yahoo fallback",
+        "price_source_preference": "Alpaca SIP last intraday bar when available; Yahoo fallback",
         "note": "This is the broad scanner data timestamp. Signal Desk refresh may be newer.",
     }
 
@@ -1358,9 +1358,9 @@ def main():
     results = sorted(results, key=lambda x: x["score"], reverse=True)
     
     # =================================================================
-    # ALPACA IEX ENRICHMENT (Real-time intraday data)
+    # ALPACA SIP ENRICHMENT (Real-time intraday data)
     # =================================================================
-    print(f"\n[Stage 6] Enriching top candidates with Alpaca IEX real-time data...\n")
+    print(f"\n[Stage 6] Enriching top candidates with Alpaca SIP real-time data...\n")
     
     # Debug: Check if API keys are available
     import os
@@ -1408,7 +1408,7 @@ def main():
                 # intraday bar source as VWAP/HOD when Alpaca data exists.
                 stock["price"] = rt["last_price"]
                 stock["intraday_last_price"] = rt["last_price"]
-                stock["price_source"] = "Alpaca IEX"
+                stock["price_source"] = "Alpaca SIP"
                 stock["price_updated_at"] = rt.get("last_bar_time", "")
 
                 stock["vwap"] = rt["vwap"]
@@ -1419,7 +1419,7 @@ def main():
                 stock["from_hod_pct"] = rt["from_hod_pct"]
                 stock["near_hod"] = rt["near_hod"]
                 stock["intraday_volume"] = rt["intraday_volume"]
-                stock["data_source"] = "Yahoo + Alpaca IEX"
+                stock["data_source"] = "Yahoo + Alpaca SIP"
                 
                 # Add intraday reasons to tags
                 if intraday_reasons:
@@ -1429,8 +1429,8 @@ def main():
                 
                 enriched_count += 1
         
-        print(f"  ✓ Enriched {enriched_count} stocks with IEX real-time data")
-        print(f"  ⚠️ Note: IEX volume is non-consolidated (~2-3% of market)")
+        print(f"  ✓ Enriched {enriched_count} stocks with SIP real-time data")
+        print(f"  ⚠️ Note: SIP consolidated market data enabled")
         
         # Re-sort with intraday scores
         results = sorted(results, key=lambda x: x["score"], reverse=True)
