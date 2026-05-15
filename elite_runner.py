@@ -3,23 +3,27 @@
 Elite Scanner VPS Runner
 
 Purpose:
-- Run full whole-market scanner at scheduled ET discovery times.
-- Run optional sector rotation during full scanner cycles only.
-- Run Smart Money Phase 1 bars proxy before Signal Desk decisions.
+- Run pre-market monitor-only scanner snapshots.
+- Run regular full market scanner at scheduled ET times.
 - Run Signal Desk refresh every 60 seconds during the regular monitoring window.
+- Run after-hours monitor-only scanner snapshots.
 - Run dashboard-only session status refresh at 04:00, 09:30, and 20:01 ET.
 - Publish dashboard files to the Nginx web directory.
 
-Important:
-- smart_money_bars_proxy.py is a normal Python script with .py extension.
-- sector_rotation.py runs only during FULL_SCANNER and only when the file exists.
-- DASHBOARD_ONLY never runs scanner, sector rotation, smart money, or signal engine.
-- FULL_SCANNER and SIGNAL_REFRESH behavior remain separate.
+Locked behavior:
+- PREMARKET_SCAN and AFTER_HOURS_SCAN never run signal_engine.py.
+- PREMARKET_SCAN writes premarket_movers.csv/json and then clears regular candidate files.
+- AFTER_HOURS_SCAN writes after_hours_movers.csv/json and then clears regular candidate files.
+- FULL_SCANNER runs scanner + sector + Smart Money + signal engine + dashboard.
+- SIGNAL_REFRESH runs Smart Money + signal engine + dashboard.
+- DASHBOARD_ONLY runs only elite_dashboard.py.
 """
 
 from __future__ import annotations
 
 import argparse
+import csv
+import json
 import logging
 import os
 import shutil
@@ -30,11 +34,11 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, time as dtime
 from pathlib import Path
-from typing import Callable, Iterable, List, Optional
+from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 try:
     from zoneinfo import ZoneInfo
-except Exception:  # pragma: no cover
+except Exception:
     ZoneInfo = None
 
 
@@ -58,9 +62,19 @@ SMART_MONEY_SCRIPT = "smart_money_bars_proxy.py"
 SIGNAL_ENGINE_SCRIPT = "signal_engine.py"
 DASHBOARD_SCRIPT = "elite_dashboard.py"
 
-# Full whole-market scanner schedule.
-# These are discovery scans, not 60-second signal refreshes.
-# No 09:00 pre-market scan because pre-market scanner candidates are not displayed.
+# Pre-market monitor-only scanner snapshots.
+# These are discovery scans only. They do not create Signal Desk decisions.
+PREMARKET_SCAN_TIMES_ET = {
+    "07:00",
+    "07:30",
+    "08:00",
+    "08:30",
+    "09:00",
+    "09:15",
+}
+
+# Regular whole-market scanner schedule.
+# These are discovery scans used for regular Signal Desk decision flow.
 SCANNER_TIMES_ET = {
     "09:45",
     "10:30",
@@ -69,7 +83,20 @@ SCANNER_TIMES_ET = {
     "14:30",
 }
 
-# Signal Desk refresh.
+# After-hours monitor-only scanner snapshots.
+# These are discovery scans only. They do not create Signal Desk decisions.
+AFTER_HOURS_SCAN_TIMES_ET = {
+    "16:15",
+    "16:30",
+    "17:00",
+    "17:30",
+    "18:00",
+    "18:30",
+    "19:00",
+    "19:30",
+}
+
+# Signal Desk refresh:
 # Refresh already-picked scanner tickers every 60 seconds.
 # Runs smart_money_bars_proxy.py + signal_engine.py + elite_dashboard.py.
 SIGNAL_REFRESH_START_ET = "09:46"
@@ -77,20 +104,30 @@ SIGNAL_REFRESH_END_ET = "16:05"
 SIGNAL_REFRESH_INTERVAL_SECONDS = 60
 
 # Dashboard-only session boundary refreshes.
-# These do NOT run scanner, sector rotation, smart money, or signal engine.
-# 04:00 ET = show PRE-MARKET
-# 09:30 ET = show MARKET OPEN
-# 20:01 ET = show CLOSED
+# These do NOT run scanner, sector rotation, Smart Money, or signal engine.
+# 04:00 ET = show PRE-MARKET / closed boundary status
+# 09:30 ET = show MARKET OPEN boundary status
+# 20:01 ET = show CLOSED boundary status
 DASHBOARD_ONLY_TIMES_ET = {
     "04:00",
     "09:30",
     "20:01",
 }
 
+# Regular candidate files that must not be promoted from pre-market/after-hours scans.
+REGULAR_CANDIDATE_FILES = [
+    "potential_movers.csv",
+    "active_momentum.csv",
+    "elite_watchlist.csv",
+    "elite_watchlist.json",
+    "elite_watchlist_raw.csv",
+    "extended_movers.csv",
+    "high_risk_movers.csv",
+]
+
 # Files to publish to Nginx after dashboard rebuilds.
+# dashboard.html is handled first and forced to both index.html and dashboard.html.
 PUBLISH_PATTERNS = [
-    "index.html",
-    "dashboard.html",
     "*.json",
     "*.csv",
     "*.log",
@@ -171,13 +208,21 @@ def script_exists(script_name: str) -> bool:
     return (PROJECT_DIR / script_name).exists()
 
 
-def run_python_script(script_name: str, timeout_seconds: int = 1800) -> RunResult:
+def run_python_script(
+    script_name: str,
+    timeout_seconds: int = 1800,
+    required: bool = True,
+) -> RunResult:
     script_path = PROJECT_DIR / script_name
     start = time.monotonic()
 
     if not script_path.exists():
-        logging.error("Missing script: %s", script_path)
-        return RunResult(script_name, False, 127, 0.0)
+        if required:
+            logging.error("Missing required script: %s", script_path)
+            return RunResult(script_name, False, 127, 0.0)
+
+        logging.warning("Skipping optional script because it is missing: %s", script_path)
+        return RunResult(script_name, True, 0, 0.0)
 
     cmd = [PYTHON_BIN, str(script_path)]
     logging.info("Running: %s", " ".join(cmd))
@@ -197,7 +242,7 @@ def run_python_script(script_name: str, timeout_seconds: int = 1800) -> RunResul
         output = (completed.stdout or "").strip()
 
         if output:
-            for line in output.splitlines()[-80:]:
+            for line in output.splitlines()[-100:]:
                 logging.info("[%s] %s", script_name, line)
 
         if completed.returncode == 0:
@@ -227,18 +272,35 @@ def run_python_script(script_name: str, timeout_seconds: int = 1800) -> RunResul
         return RunResult(script_name, False, 1, duration)
 
 
-def run_script_sequence(name: str, scripts: Iterable[str], publish_after: bool = True) -> bool:
+def run_script_sequence(
+    name: str,
+    scripts: Sequence[Tuple[str, bool]],
+    publish_after: bool = True,
+) -> bool:
+    """
+    Run a mixed critical/non-critical sequence.
+
+    scripts:
+      (script_name, required)
+
+    Required script failure stops the job.
+    Optional script failure logs but continues.
+    """
     logging.info("===== START %s =====", name)
 
     all_ok = True
 
-    for script in scripts:
-        result = run_python_script(script)
+    for script, required in scripts:
+        result = run_python_script(script, required=required)
 
         if not result.ok:
             all_ok = False
-            logging.error("Stopping %s because %s failed", name, script)
-            break
+
+            if required:
+                logging.error("Stopping %s because required script failed: %s", name, script)
+                break
+
+            logging.warning("Continuing %s despite optional script failure: %s", name, script)
 
     if publish_after:
         publish_dashboard()
@@ -248,39 +310,239 @@ def run_script_sequence(name: str, scripts: Iterable[str], publish_after: bool =
 
 
 # =========================
+# Extended Session Snapshots
+# =========================
+
+def read_csv_rows(path: Path) -> List[Dict[str, str]]:
+    if not path.exists():
+        return []
+
+    try:
+        with path.open("r", encoding="utf-8", newline="") as f:
+            return [dict(row) for row in csv.DictReader(f)]
+    except Exception as exc:
+        logging.error("Failed reading CSV %s: %s", path, exc)
+        return []
+
+
+def write_csv_rows(path: Path, rows: List[Dict[str, object]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    if rows:
+        fieldnames: List[str] = []
+        seen = set()
+        for row in rows:
+            for key in row.keys():
+                if key not in seen:
+                    seen.add(key)
+                    fieldnames.append(key)
+    else:
+        fieldnames = [
+            "symbol",
+            "monitor_session",
+            "source_bucket",
+            "snapshot_generated_at_et",
+            "monitor_only",
+        ]
+
+    with path.open("w", encoding="utf-8", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
+        writer.writeheader()
+        writer.writerows(rows)
+
+
+def clear_regular_candidate_outputs(reason: str) -> None:
+    """
+    Prevent pre-market / after-hours scans from being promoted into regular
+    Potential Movers, Active Momentum, or Signal Desk candidate files.
+
+    Dashboard will use premarket_movers.csv / after_hours_movers.csv for
+    monitor-only display. Regular full scanner repopulates these files at
+    scheduled market times.
+    """
+    logging.info("Clearing regular candidate outputs after %s snapshot", reason)
+
+    for filename in REGULAR_CANDIDATE_FILES:
+        path = PROJECT_DIR / filename
+
+        try:
+            if filename.endswith(".json"):
+                path.write_text("[]\n", encoding="utf-8")
+            elif filename.endswith(".csv"):
+                write_csv_rows(path, [])
+        except Exception as exc:
+            logging.error("Failed clearing %s: %s", filename, exc)
+
+
+def save_extended_session_snapshot(session_name: str) -> None:
+    """
+    Save ranked monitor-only mover list from the latest scanner output.
+
+    session_name:
+      PREMARKET
+      AFTER_HOURS
+
+    Output:
+      premarket_movers.csv/json
+      after_hours_movers.csv/json
+    """
+    session_upper = session_name.upper()
+    now_label = now_et().isoformat(timespec="seconds")
+
+    output_stem = "premarket_movers" if session_upper == "PREMARKET" else "after_hours_movers"
+    csv_out = PROJECT_DIR / f"{output_stem}.csv"
+    json_out = PROJECT_DIR / f"{output_stem}.json"
+
+    sources = [
+        ("potential_movers.csv", "POTENTIAL_MOVER"),
+        ("active_momentum.csv", "ACTIVE_MOMENTUM"),
+    ]
+
+    rows: List[Dict[str, object]] = []
+
+    for filename, source_bucket in sources:
+        for row in read_csv_rows(PROJECT_DIR / filename):
+            item: Dict[str, object] = dict(row)
+            item["monitor_session"] = session_upper
+            item["source_bucket"] = source_bucket
+            item["snapshot_generated_at_et"] = now_label
+            item["monitor_only"] = "true"
+            item["execution_allowed"] = "false"
+            item["monitor_label"] = (
+                "Monitor Only — No Entries Before Regular Market Open"
+                if session_upper == "PREMARKET"
+                else "Monitor Only — No After-Hours Entries"
+            )
+            rows.append(item)
+
+    # Preserve scanner ranking order: potential first, active second.
+    # Limit to a focused monitor list for dashboard readability.
+    max_rows = int(os.getenv("EXTENDED_SESSION_MAX_MOVERS", "20"))
+    rows = rows[:max_rows]
+
+    write_csv_rows(csv_out, rows)
+
+    payload = {
+        "metadata": {
+            "session": session_upper,
+            "generated_at_et": now_label,
+            "monitor_only": True,
+            "execution_allowed": False,
+            "source_files": [s[0] for s in sources],
+            "rows": len(rows),
+            "max_rows": max_rows,
+        },
+        "symbols": rows,
+    }
+
+    json_out.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+
+    logging.info(
+        "Saved %s monitor snapshot: %s rows -> %s / %s",
+        session_upper,
+        len(rows),
+        csv_out.name,
+        json_out.name,
+    )
+
+
+# =========================
 # Job Types
 # =========================
 
-def full_scanner_scripts() -> List[str]:
+def run_premarket_scan() -> bool:
     """
-    Full discovery scan order.
+    Pre-market monitor-only scan.
 
-    sector_rotation.py is optional for now:
-    - If present, it runs after elite_scanner.py creates elite_watchlist_raw.csv.
-    - If absent, the runner continues without failing.
+    Runs:
+    - macro_calendar.py
+    - elite_scanner.py
+    - sector_rotation.py if present
+    - smart_money_bars_proxy.py
+    - save premarket_movers.csv/json
+    - clear regular candidate outputs
+    - elite_dashboard.py
+
+    Does NOT run signal_engine.py.
     """
-    scripts = [
-        MACRO_SCRIPT,
-        SCANNER_SCRIPT,
+    logging.info("===== START PREMARKET_SCAN =====")
+
+    all_ok = True
+
+    sequence = [
+        (MACRO_SCRIPT, True),
+        (SCANNER_SCRIPT, True),
+        (SECTOR_ROTATION_SCRIPT, False),
+        (SMART_MONEY_SCRIPT, False),
     ]
 
-    if script_exists(SECTOR_ROTATION_SCRIPT):
-        scripts.append(SECTOR_ROTATION_SCRIPT)
-    else:
-        logging.info("Optional script not found, skipping: %s", SECTOR_ROTATION_SCRIPT)
+    for script, required in sequence:
+        result = run_python_script(script, required=required)
+        if not result.ok:
+            all_ok = False
+            if required:
+                logging.error("Stopping PREMARKET_SCAN because required script failed: %s", script)
+                break
 
-    scripts.extend([
-        SMART_MONEY_SCRIPT,
-        SIGNAL_ENGINE_SCRIPT,
-        DASHBOARD_SCRIPT,
-    ])
+    if all_ok:
+        save_extended_session_snapshot("PREMARKET")
+        clear_regular_candidate_outputs("PREMARKET")
+        dash = run_python_script(DASHBOARD_SCRIPT, required=True)
+        all_ok = all_ok and dash.ok
 
-    return scripts
+    publish_dashboard()
+    logging.info("===== END PREMARKET_SCAN | ok=%s =====", all_ok)
+    return all_ok
+
+
+def run_after_hours_scan() -> bool:
+    """
+    After-hours monitor-only scan.
+
+    Runs:
+    - macro_calendar.py
+    - elite_scanner.py
+    - sector_rotation.py if present
+    - smart_money_bars_proxy.py
+    - save after_hours_movers.csv/json
+    - clear regular candidate outputs
+    - elite_dashboard.py
+
+    Does NOT run signal_engine.py.
+    """
+    logging.info("===== START AFTER_HOURS_SCAN =====")
+
+    all_ok = True
+
+    sequence = [
+        (MACRO_SCRIPT, True),
+        (SCANNER_SCRIPT, True),
+        (SECTOR_ROTATION_SCRIPT, False),
+        (SMART_MONEY_SCRIPT, False),
+    ]
+
+    for script, required in sequence:
+        result = run_python_script(script, required=required)
+        if not result.ok:
+            all_ok = False
+            if required:
+                logging.error("Stopping AFTER_HOURS_SCAN because required script failed: %s", script)
+                break
+
+    if all_ok:
+        save_extended_session_snapshot("AFTER_HOURS")
+        clear_regular_candidate_outputs("AFTER_HOURS")
+        dash = run_python_script(DASHBOARD_SCRIPT, required=True)
+        all_ok = all_ok and dash.ok
+
+    publish_dashboard()
+    logging.info("===== END AFTER_HOURS_SCAN | ok=%s =====", all_ok)
+    return all_ok
 
 
 def run_full_scanner() -> bool:
     """
-    Whole-market discovery scan.
+    Regular market whole-universe discovery scan.
 
     Runs:
     - macro_calendar.py
@@ -289,10 +551,21 @@ def run_full_scanner() -> bool:
     - smart_money_bars_proxy.py
     - signal_engine.py
     - elite_dashboard.py
+
+    Reason:
+    After scanner refreshes the candidate universe, Smart Money and Signal Desk
+    should immediately evaluate the fresh list once, then dashboard rebuilds.
     """
     return run_script_sequence(
         "FULL_SCANNER",
-        full_scanner_scripts(),
+        [
+            (MACRO_SCRIPT, True),
+            (SCANNER_SCRIPT, True),
+            (SECTOR_ROTATION_SCRIPT, False),
+            (SMART_MONEY_SCRIPT, False),
+            (SIGNAL_ENGINE_SCRIPT, True),
+            (DASHBOARD_SCRIPT, True),
+        ],
         publish_after=True,
     )
 
@@ -307,16 +580,15 @@ def run_signal_refresh() -> bool:
     - elite_dashboard.py
 
     Does NOT run:
-    - macro_calendar.py
     - elite_scanner.py
     - sector_rotation.py
     """
     return run_script_sequence(
         "SIGNAL_REFRESH",
         [
-            SMART_MONEY_SCRIPT,
-            SIGNAL_ENGINE_SCRIPT,
-            DASHBOARD_SCRIPT,
+            (SMART_MONEY_SCRIPT, False),
+            (SIGNAL_ENGINE_SCRIPT, True),
+            (DASHBOARD_SCRIPT, True),
         ],
         publish_after=True,
     )
@@ -327,7 +599,6 @@ def run_dashboard_only_refresh(reason: str = "SESSION_STATUS") -> bool:
     Dashboard-only refresh.
 
     Strict rule:
-    - NO macro_calendar.py
     - NO elite_scanner.py
     - NO sector_rotation.py
     - NO smart_money_bars_proxy.py
@@ -338,14 +609,14 @@ def run_dashboard_only_refresh(reason: str = "SESSION_STATUS") -> bool:
     - ONLY elite_dashboard.py rebuild + publish
 
     Used at:
-    - 04:00 ET PRE-MARKET label
-    - 09:30 ET MARKET OPEN label
-    - 20:01 ET CLOSED label
+    - 04:00 ET PRE-MARKET boundary/status label
+    - 09:30 ET MARKET OPEN boundary/status label
+    - 20:01 ET CLOSED boundary/status label
     """
     return run_script_sequence(
         f"DASHBOARD_ONLY_{reason}",
         [
-            DASHBOARD_SCRIPT,
+            (DASHBOARD_SCRIPT, True),
         ],
         publish_after=True,
     )
@@ -359,29 +630,35 @@ def publish_dashboard() -> None:
     """
     Copy dashboard output files into Nginx web directory.
 
-    This does not change scanner/signal state.
+    Important:
+    elite_dashboard.py writes dashboard.html. The browser root serves index.html.
+    Therefore dashboard.html is always copied to:
+    - PROJECT_DIR/index.html
+    - WEB_DIR/index.html
+    - WEB_DIR/dashboard.html
 
-    Also forces dashboard.html to index.html in both project root and web root,
-    so http://IP/ and /dashboard.html always serve the latest dashboard.
+    This prevents the root URL from serving stale index.html.
     """
     try:
         WEB_DIR.mkdir(parents=True, exist_ok=True)
 
-        project_dashboard = PROJECT_DIR / "dashboard.html"
-        project_index = PROJECT_DIR / "index.html"
-        web_dashboard = WEB_DIR / "dashboard.html"
-        web_index = WEB_DIR / "index.html"
-
-        if project_dashboard.exists():
-            try:
-                shutil.copy2(project_dashboard, project_index)
-                shutil.copy2(project_dashboard, web_dashboard)
-                shutil.copy2(project_dashboard, web_index)
-                logging.info("Forced dashboard.html to project/web index.html and dashboard.html")
-            except Exception as exc:
-                logging.error("Failed forcing dashboard.html to index/dashboard outputs: %s", exc)
-
         copied = 0
+        dashboard_src = PROJECT_DIR / "dashboard.html"
+
+        if dashboard_src.exists() and dashboard_src.is_file():
+            project_index = PROJECT_DIR / "index.html"
+            shutil.copy2(dashboard_src, project_index)
+            copied += 1
+
+            shutil.copy2(dashboard_src, WEB_DIR / "index.html")
+            copied += 1
+
+            shutil.copy2(dashboard_src, WEB_DIR / "dashboard.html")
+            copied += 1
+
+            logging.info("Forced dashboard.html to project/web index.html and dashboard.html")
+        else:
+            logging.warning("dashboard.html not found; index.html cannot be refreshed")
 
         for pattern in PUBLISH_PATTERNS:
             for src in PROJECT_DIR.glob(pattern):
@@ -412,7 +689,9 @@ class EliteRunner:
     def __init__(self) -> None:
         self.stop_requested = False
 
+        self.last_premarket_key: Optional[str] = None
         self.last_scanner_key: Optional[str] = None
+        self.last_after_hours_key: Optional[str] = None
         self.last_dashboard_only_key: Optional[str] = None
         self.last_signal_refresh_epoch: float = 0.0
         self.active_job = False
@@ -430,10 +709,27 @@ class EliteRunner:
 
         try:
             logging.info("Job start: %s", job_name)
-            func()
-            logging.info("Job end: %s", job_name)
+            ok = func()
+            logging.info("Job end: %s | ok=%s", job_name, ok)
         finally:
             self.active_job = False
+
+    def check_premarket_schedule(self, current: datetime) -> None:
+        if not is_weekday(current):
+            return
+
+        current_hhmm = hhmm(current)
+
+        if current_hhmm not in PREMARKET_SCAN_TIMES_ET:
+            return
+
+        key = f"{ymd(current)}:{current_hhmm}:premarket-scan"
+
+        if self.last_premarket_key == key:
+            return
+
+        self.last_premarket_key = key
+        self.run_job_locked(f"premarket-scan-{current_hhmm}", run_premarket_scan)
 
     def check_scanner_schedule(self, current: datetime) -> None:
         if not is_weekday(current):
@@ -451,6 +747,23 @@ class EliteRunner:
 
         self.last_scanner_key = key
         self.run_job_locked(f"scanner-{current_hhmm}", run_full_scanner)
+
+    def check_after_hours_schedule(self, current: datetime) -> None:
+        if not is_weekday(current):
+            return
+
+        current_hhmm = hhmm(current)
+
+        if current_hhmm not in AFTER_HOURS_SCAN_TIMES_ET:
+            return
+
+        key = f"{ymd(current)}:{current_hhmm}:after-hours-scan"
+
+        if self.last_after_hours_key == key:
+            return
+
+        self.last_after_hours_key = key
+        self.run_job_locked(f"after-hours-scan-{current_hhmm}", run_after_hours_scan)
 
     def check_dashboard_only_schedule(self, current: datetime) -> None:
         if not is_weekday(current):
@@ -493,7 +806,9 @@ class EliteRunner:
         logging.info("Project dir: %s", PROJECT_DIR)
         logging.info("Python: %s", PYTHON_BIN)
         logging.info("Web dir: %s", WEB_DIR)
-        logging.info("Scanner times ET: %s", sorted(SCANNER_TIMES_ET))
+        logging.info("Pre-market scan times ET: %s", sorted(PREMARKET_SCAN_TIMES_ET))
+        logging.info("Regular scanner times ET: %s", sorted(SCANNER_TIMES_ET))
+        logging.info("After-hours scan times ET: %s", sorted(AFTER_HOURS_SCAN_TIMES_ET))
         logging.info(
             "Signal refresh ET: %s-%s every %ss",
             SIGNAL_REFRESH_START_ET,
@@ -502,17 +817,21 @@ class EliteRunner:
         )
         logging.info("Dashboard-only times ET: %s", sorted(DASHBOARD_ONLY_TIMES_ET))
         logging.info("Smart Money script: %s", SMART_MONEY_SCRIPT)
-        logging.info("Sector rotation script: %s optional=%s", SECTOR_ROTATION_SCRIPT, not script_exists(SECTOR_ROTATION_SCRIPT))
+        logging.info("Sector rotation script: %s", SECTOR_ROTATION_SCRIPT)
 
         while not self.stop_requested:
             current = now_et()
 
             try:
                 # Order matters:
-                # 1. Full scanner at scheduled discovery times.
-                # 2. Dashboard-only boundary refresh at 04:00 / 09:30 / 20:01.
-                # 3. Signal refresh during 09:46-16:05 only.
+                # 1. Pre-market monitor-only scans.
+                # 2. Regular full scanner at scheduled discovery times.
+                # 3. After-hours monitor-only scans.
+                # 4. Dashboard-only boundary refresh at 04:00 / 09:30 / 20:01.
+                # 5. Signal refresh during 09:46-16:05 only.
+                self.check_premarket_schedule(current)
                 self.check_scanner_schedule(current)
+                self.check_after_hours_schedule(current)
                 self.check_dashboard_only_schedule(current)
                 self.check_signal_refresh(current)
 
@@ -530,30 +849,13 @@ class EliteRunner:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Elite Scanner VPS runner")
-    parser.add_argument("--once-scan", action="store_true", help="Run one full scanner cycle and exit")
+    parser.add_argument("--once-scan", action="store_true", help="Run one regular full scanner cycle and exit")
     parser.add_argument("--once-signal", action="store_true", help="Run one signal refresh cycle and exit")
     parser.add_argument("--once-dashboard", action="store_true", help="Run one dashboard-only refresh and exit")
+    parser.add_argument("--once-premarket", action="store_true", help="Run one pre-market monitor-only scan and exit")
+    parser.add_argument("--once-afterhours", action="store_true", help="Run one after-hours monitor-only scan and exit")
     parser.add_argument("--publish-only", action="store_true", help="Publish current output files and exit")
-    parser.add_argument("--print-plan", action="store_true", help="Print planned script sequences and exit")
     return parser.parse_args()
-
-
-def print_plan() -> None:
-    print("FULL_SCANNER:")
-    for script in full_scanner_scripts():
-        print(f"  {script}")
-
-    print("\nSIGNAL_REFRESH:")
-    for script in [SMART_MONEY_SCRIPT, SIGNAL_ENGINE_SCRIPT, DASHBOARD_SCRIPT]:
-        print(f"  {script}")
-
-    print("\nDASHBOARD_ONLY:")
-    print(f"  {DASHBOARD_SCRIPT}")
-
-    print("\nSCHEDULE:")
-    print(f"  scanner={sorted(SCANNER_TIMES_ET)}")
-    print(f"  signal_refresh={SIGNAL_REFRESH_START_ET}-{SIGNAL_REFRESH_END_ET} every {SIGNAL_REFRESH_INTERVAL_SECONDS}s")
-    print(f"  dashboard_only={sorted(DASHBOARD_ONLY_TIMES_ET)}")
 
 
 def main() -> int:
@@ -566,13 +868,15 @@ def main() -> int:
 
     os.chdir(PROJECT_DIR)
 
-    if args.print_plan:
-        print_plan()
-        return 0
-
     if args.publish_only:
         publish_dashboard()
         return 0
+
+    if args.once_premarket:
+        return 0 if run_premarket_scan() else 1
+
+    if args.once_afterhours:
+        return 0 if run_after_hours_scan() else 1
 
     if args.once_scan:
         return 0 if run_full_scanner() else 1
