@@ -4946,7 +4946,7 @@ td small {
     <div id="desk">$desk_table</div>
 
     <div class="footer-note">
-        VPS live dashboard. Data updates from Elite Runner during market hours; this page auto-refreshes every 60 seconds. Extended/high-risk names are saved in CSV but hidden from this decision view. Alpaca SIP volume is non-consolidated; confirm spread, liquidity, VWAP, and news manually before execution.
+        © Elite Scanner Pro Desk. Data refreshes during market hours via Elite Runner; page auto-refreshes every 60 seconds. Extended/high-risk names are saved to CSV but hidden. Alpaca SIP data enabled; confirm spread, liquidity, VWAP, and news before execution.
     </div>
 </main>
 
