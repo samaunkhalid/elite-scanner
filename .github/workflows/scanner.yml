@@ -35,7 +35,7 @@ jobs:
           APCA_API_KEY_ID: ${{ secrets.ALPACA_API_KEY }}
           APCA_API_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
           ALPACA_BASE_URL: https://paper-api.alpaca.markets
-          ALPACA_DATA_FEED: iex
+          ALPACA_DATA_FEED: sip
           TZ: America/New_York
         run: |
           python elite_scanner.py
