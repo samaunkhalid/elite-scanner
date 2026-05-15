@@ -37,6 +37,7 @@ from yahooquery import Ticker
 import pandas as pd
 import requests
 import json
+import os
 from datetime import datetime, timedelta
 
 try:
@@ -52,6 +53,93 @@ def iso_now_et():
     return datetime.now().isoformat(timespec="seconds")
 
 
+def scanner_now_et():
+    """Return current New York time for scanner session-mode gating."""
+    if ZoneInfo:
+        return datetime.now(ZoneInfo("America/New_York"))
+    return datetime.now()
+
+
+def _env_float(name, default):
+    try:
+        return float(os.getenv(name, str(default)))
+    except Exception:
+        return float(default)
+
+
+def detect_scanner_session_mode():
+    """
+    Decide whether this scanner run is regular-market or monitor-only.
+
+    Default AUTO behavior:
+      04:00-09:29 ET  -> PREMARKET_MONITOR
+      09:30-15:59 ET  -> REGULAR
+      16:00-19:59 ET  -> AFTER_HOURS_MONITOR
+      otherwise       -> CLOSED_MONITOR
+
+    Forced override for diagnostics:
+      ELITE_SCANNER_SESSION=REGULAR
+      ELITE_SCANNER_SESSION=PREMARKET_MONITOR
+      ELITE_SCANNER_SESSION=AFTER_HOURS_MONITOR
+      ELITE_SCANNER_SESSION=CLOSED_MONITOR
+    """
+    forced = os.getenv("ELITE_SCANNER_SESSION", "AUTO").strip().upper()
+    aliases = {
+        "REGULAR": "REGULAR",
+        "MARKET": "REGULAR",
+        "OPEN": "REGULAR",
+        "PREMARKET": "PREMARKET_MONITOR",
+        "PRE_MARKET": "PREMARKET_MONITOR",
+        "PREMARKET_MONITOR": "PREMARKET_MONITOR",
+        "AFTERHOURS": "AFTER_HOURS_MONITOR",
+        "AFTER_HOURS": "AFTER_HOURS_MONITOR",
+        "AFTER_HOURS_MONITOR": "AFTER_HOURS_MONITOR",
+        "CLOSED": "CLOSED_MONITOR",
+        "CLOSED_MONITOR": "CLOSED_MONITOR",
+    }
+    if forced in aliases:
+        return aliases[forced]
+
+    now = scanner_now_et()
+    if now.weekday() >= 5:
+        return "CLOSED_MONITOR"
+
+    minutes = now.hour * 60 + now.minute
+    if 4 * 60 <= minutes < 9 * 60 + 30:
+        return "PREMARKET_MONITOR"
+    if 9 * 60 + 30 <= minutes < 16 * 60:
+        return "REGULAR"
+    if 16 * 60 <= minutes < 20 * 60:
+        return "AFTER_HOURS_MONITOR"
+    return "CLOSED_MONITOR"
+
+
+SCANNER_SESSION_MODE = detect_scanner_session_mode()
+EXTENDED_MONITOR_MODE = SCANNER_SESSION_MODE in {
+    "PREMARKET_MONITOR",
+    "AFTER_HOURS_MONITOR",
+    "CLOSED_MONITOR",
+}
+
+# Keep the regular strategy strict. Only monitor-only extended-session scanner
+# runs use these relaxed gates. Defaults intentionally preserve the existing
+# scanner price range; adjust by env only if you explicitly want wider coverage.
+EXTENDED_MONITOR_MIN_PRICE = _env_float("EXTENDED_MONITOR_MIN_PRICE", "5.0")
+EXTENDED_MONITOR_MAX_PRICE = _env_float("EXTENDED_MONITOR_MAX_PRICE", "100.0")
+
+LISTED_US_EXCHANGES = {"NMS", "NYQ", "ASE", "NGM", "PCX", "BTS", "NCM"}
+
+
+def scanner_session_label():
+    if SCANNER_SESSION_MODE == "REGULAR":
+        return "REGULAR"
+    if SCANNER_SESSION_MODE == "PREMARKET_MONITOR":
+        return "PREMARKET_MONITOR_ONLY"
+    if SCANNER_SESSION_MODE == "AFTER_HOURS_MONITOR":
+        return "AFTER_HOURS_MONITOR_ONLY"
+    return "CLOSED_MONITOR_ONLY"
+
+
 def write_scanner_meta(extra=None):
     """
     Write the true broad-scanner generation timestamp.
@@ -61,8 +149,12 @@ def write_scanner_meta(extra=None):
     """
     meta = {
         "scanner_generated_at_et": iso_now_et(),
+        "scanner_session_mode": SCANNER_SESSION_MODE,
+        "monitor_only": bool(EXTENDED_MONITOR_MODE),
+        "extended_monitor_min_price": EXTENDED_MONITOR_MIN_PRICE if EXTENDED_MONITOR_MODE else None,
+        "extended_monitor_max_price": EXTENDED_MONITOR_MAX_PRICE if EXTENDED_MONITOR_MODE else None,
         "price_source_preference": "Alpaca SIP last intraday bar when available; Yahoo fallback",
-        "note": "This is the broad scanner data timestamp. Signal Desk refresh may be newer.",
+        "note": "Regular market runs keep strict filters. Pre-market/after-hours runs are monitor-only snapshots and must not feed Signal Desk.",
     }
 
     if isinstance(extra, dict):
@@ -81,6 +173,20 @@ def get_dynamic_universe():
     universe = set()
     screeners = ["day_gainers", "day_losers", "most_actives",
                  "small_cap_gainers", "growth_technology_stocks"]
+
+    # Monitor-only pre-market / after-hours scans need a wider discovery net.
+    # Invalid Yahoo screener IDs are harmless because each request is isolated
+    # and failures are logged but not fatal.
+    if EXTENDED_MONITOR_MODE:
+        screeners.extend([
+            "aggressive_small_caps",
+            "undervalued_growth_stocks",
+            "undervalued_large_caps",
+            "most_shorted_stocks",
+            "day_losers",
+            "day_gainers",
+            "most_actives",
+        ])
 
     for screener in screeners:
         try:
@@ -506,7 +612,40 @@ def score_sector_alignment(symbol, change_pct, sector, sector_context, regime):
 # ==============================================================
 
 def hard_reject(symbol, price, market_cap, avg_vol, exchange, atr_pct, earnings_within_2d):
-    """Returns (rejected, reason)."""
+    """
+    Returns (rejected, reason).
+
+    Protection:
+      - REGULAR runs keep the original strict strategy filters.
+      - PREMARKET / AFTER_HOURS / CLOSED monitor-only runs relax filters so
+        extended-hours jumpers are not excluded by regular-market quality gates.
+
+    Extended monitor-only mode keeps:
+      - valid price
+      - configured price range
+      - listed US exchange check
+
+    Extended monitor-only mode removes:
+      - market-cap gate
+      - average-volume gate
+      - dollar-volume gate
+      - ATR gate
+      - earnings-imminent gate
+
+    This cannot promote names into Signal Desk because runner monitor-only jobs
+    do not run signal_engine.py and clear regular candidate files after snapshot.
+    """
+    if EXTENDED_MONITOR_MODE:
+        if price <= 0:
+            return True, "extended_invalid_price"
+        if price < EXTENDED_MONITOR_MIN_PRICE:
+            return True, "extended_price_too_low"
+        if price > EXTENDED_MONITOR_MAX_PRICE:
+            return True, "extended_price_too_high"
+        if exchange and exchange not in LISTED_US_EXCHANGES:
+            return True, "bad_exchange"
+        return False, ""
+
     if price < 5.0:
         return True, "price_too_low"
     if price > 100.0:
@@ -515,23 +654,23 @@ def hard_reject(symbol, price, market_cap, avg_vol, exchange, atr_pct, earnings_
         return True, "mkt_cap_too_small"
     if avg_vol < 200_000:
         return True, "avg_vol_too_low"
-    
+
     dollar_vol = avg_vol * price
     if dollar_vol < 5_000_000:
         return True, "dollar_vol_too_low"
-    
-    if exchange and exchange not in ["NMS", "NYQ", "ASE", "NGM", "PCX", "BTS", "NCM"]:
+
+    if exchange and exchange not in LISTED_US_EXCHANGES:
         return True, "bad_exchange"
-    
+
     if atr_pct > 0:
         if atr_pct < 1.0:
             return True, "too_low_volatility"
         if atr_pct > 15:
             return True, "too_volatile"
-    
+
     if earnings_within_2d:
         return True, "earnings_imminent"
-    
+
     return False, ""
 
 
@@ -1065,6 +1204,12 @@ def main():
     print("\n" + "=" * 70)
     print("ELITE MULTI-SOURCE STOCK SCANNER v2.1 (Calibrated)")
     print(f"Started: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"Scanner Session: {scanner_session_label()}")
+    if EXTENDED_MONITOR_MODE:
+        print(
+            f"Monitor-only relaxed filters: price {EXTENDED_MONITOR_MIN_PRICE:g}-{EXTENDED_MONITOR_MAX_PRICE:g}, "
+            "listed exchanges only; no market-cap/avg-volume/dollar-volume/ATR/earnings gates"
+        )
     print("=" * 70)
 
     regime = detect_market_regime()
@@ -1240,7 +1385,8 @@ def main():
             else:
                 score_distribution["80+"] += 1
 
-            if final_score < 25:
+            min_score_to_keep = 0 if EXTENDED_MONITOR_MODE else 25
+            if final_score < min_score_to_keep:
                 continue
 
             # Tier (normalized to 100)
@@ -1300,6 +1446,14 @@ def main():
                 "dollar_vol_M": round(avg_vol * price / 1e6, 1),
                 "market_cap_B": round(market_cap / 1e9, 2),
                 "days_to_earnings": days_to_earnings if days_to_earnings is not None else "—",
+                "scanner_session_mode": SCANNER_SESSION_MODE,
+                "monitor_only": bool(EXTENDED_MONITOR_MODE),
+                "execution_allowed": not bool(EXTENDED_MONITOR_MODE),
+                "extended_monitor_filter": (
+                    f"price {EXTENDED_MONITOR_MIN_PRICE:g}-{EXTENDED_MONITOR_MAX_PRICE:g}; listed exchanges only"
+                    if EXTENDED_MONITOR_MODE
+                    else ""
+                ),
                 "tags": tags,
             })
 
@@ -1493,7 +1647,14 @@ def main():
     # Recalculate tier and setup bucket after Alpaca enrichment
     for stock in results:
         stock["tier"] = assign_tier(stock.get("score", 0))
-        stock["setup_bucket"] = classify_setup_bucket(stock)
+        if EXTENDED_MONITOR_MODE:
+            stock["setup_bucket"] = "MONITOR"
+            stock["risk_category"] = stock.get("risk_category") or "NORMAL"
+            old_tags = str(stock.get("tags", "") or "")
+            monitor_tag = scanner_session_label().replace("_", " ")
+            stock["tags"] = f"{monitor_tag} · {old_tags}" if old_tags else monitor_tag
+        else:
+            stock["setup_bucket"] = classify_setup_bucket(stock)
 
     df = pd.DataFrame(results)
 
