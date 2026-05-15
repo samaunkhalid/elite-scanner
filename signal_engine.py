@@ -63,7 +63,15 @@ ALPACA_BASE_URL = "https://data.alpaca.markets/v2"
 
 POTENTIAL_FILE = "potential_movers.csv"
 ACTIVE_FILE = "active_momentum.csv"
+RAW_WATCHLIST_FILE = "elite_watchlist_raw.csv"
 MARKET_REGIME_FILE = "market_regime.json"
+
+# Optional Phase 1 Smart Money Proxy output.
+# Written by smart_money_bars_proxy.py. If this file is missing, stale, or
+# malformed, the signal engine falls back to the original scanner scores.
+SMART_MONEY_FILE = os.getenv("SMART_MONEY_OUTPUT_FILE", "smart_money_scores.json")
+SMART_MONEY_MAX_AGE_SECONDS = int(os.getenv("SMART_MONEY_MAX_AGE_SECONDS", "180"))
+SMART_MONEY_ADJUSTMENT_CAP = float(os.getenv("SMART_MONEY_ADJUSTMENT_CAP", "5"))
 
 SIGNAL_DESK_FILE = "signal_desk.json"
 SIGNAL_STATE_FILE = "signal_state.json"
@@ -796,17 +804,199 @@ def load_csv(path: str, limit: Optional[int] = None) -> List[Dict[str, Any]]:
         return []
 
 
+def _smart_money_age_seconds(payload: Dict[str, Any]) -> Optional[float]:
+    """
+    Return smart_money_scores.json age in seconds using metadata.generated_at_et.
+    Falls back to the file modification time if the timestamp is unavailable.
+    """
+    meta = payload.get("metadata", {}) if isinstance(payload, dict) else {}
+    generated_at = meta.get("generated_at_et") or meta.get("generated_at") or meta.get("updated_at_et")
+    dt = parse_iso_dt(generated_at)
+    if dt is not None:
+        now = ny_now()
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=now.tzinfo)
+        elif now.tzinfo is not None:
+            dt = dt.astimezone(now.tzinfo)
+        return max(0.0, (now - dt).total_seconds())
+
+    try:
+        return max(0.0, time.time() - Path(SMART_MONEY_FILE).stat().st_mtime)
+    except Exception:
+        return None
+
+
+def load_smart_money_scores() -> Dict[str, Dict[str, Any]]:
+    """
+    Load optional Phase 1 Smart Money Proxy scores.
+
+    Expected format from smart_money_bars_proxy.py:
+      {
+        "metadata": {...},
+        "symbols": {
+          "AAPL": {
+            "raw_score": 82,
+            "score_adjustment": 3,
+            "label": "Moderate Proxy",
+            "bias": "BULLISH",
+            "signals": [...]
+          }
+        }
+      }
+
+    If missing, stale, or malformed, return {} so the engine behaves exactly
+    like the original scanner.
+    """
+    path = Path(SMART_MONEY_FILE)
+    if not path.exists():
+        return {}
+
+    payload = load_json(SMART_MONEY_FILE, {})
+    if not isinstance(payload, dict):
+        log(f"  ⚠ Smart money file malformed: {SMART_MONEY_FILE}")
+        return {}
+
+    age = _smart_money_age_seconds(payload)
+    if age is not None and age > SMART_MONEY_MAX_AGE_SECONDS:
+        log(
+            f"  ⚠ Smart money scores stale: age={age:.0f}s "
+            f"> max={SMART_MONEY_MAX_AGE_SECONDS}s; skipping adjustment"
+        )
+        return {}
+
+    raw_symbols = payload.get("symbols", payload)
+    if not isinstance(raw_symbols, dict):
+        log(f"  ⚠ Smart money symbols payload malformed: {SMART_MONEY_FILE}")
+        return {}
+
+    scores: Dict[str, Dict[str, Any]] = {}
+    for symbol, record in raw_symbols.items():
+        sym = normalize_symbol(symbol)
+        if not sym or not isinstance(record, dict):
+            continue
+        scores[sym] = record
+
+    if scores:
+        log(f"  Smart money scores loaded: {len(scores)} symbols")
+    return scores
+
+
+def _smart_money_signals_text(record: Dict[str, Any]) -> str:
+    signals = record.get("signals", [])
+    if isinstance(signals, list):
+        return " | ".join(safe_str(x, "") for x in signals if safe_str(x, ""))
+    return safe_str(signals, "")
+
+
+def apply_smart_money_to_row(row: Dict[str, Any], smart_scores: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
+    """
+    Attach smart-money fields and adjust row['score'] in memory only.
+    Original CSV files are never rewritten.
+    """
+    row = dict(row)
+    sym = normalize_symbol(row.get("symbol"))
+    base_score = safe_float(row.get("score"), 0.0)
+    record = smart_scores.get(sym, {}) if sym else {}
+
+    raw_score = safe_float(record.get("raw_score"), 0.0) if record else 0.0
+    adjustment = safe_float(record.get("score_adjustment"), 0.0) if record else 0.0
+    adjustment = clamp(adjustment, -SMART_MONEY_ADJUSTMENT_CAP, SMART_MONEY_ADJUSTMENT_CAP)
+
+    row["symbol"] = sym
+    row["base_scanner_score"] = base_score
+    row["smart_money_score"] = raw_score
+    row["smart_money_adjustment"] = adjustment
+    row["smart_money_label"] = safe_str(record.get("label"), "") if record else ""
+    row["smart_money_bias"] = safe_str(record.get("bias"), "") if record else ""
+    row["smart_money_signals"] = _smart_money_signals_text(record) if record else ""
+    row["smart_money_volume_ratio"] = safe_float(record.get("volume_ratio"), 0.0) if record else 0.0
+    row["smart_money_vwap_distance_pct"] = safe_float(record.get("vwap_distance_pct"), 0.0) if record else 0.0
+    row["smart_money_vwap_touch_count"] = safe_int(record.get("vwap_touch_count"), 0) if record else 0
+    row["smart_money_range_ratio"] = safe_float(record.get("range_ratio"), 0.0) if record else 0.0
+    row["score"] = round(clamp(base_score + adjustment, 0, 100), 2)
+
+    return row
+
+
 def load_focus_candidates() -> Dict[str, Dict[str, Any]]:
     """
-    Load Top 12 Potential + Top 8 Active.
-    Returns symbol -> row.
-    If duplicate appears, keep the first bucket priority:
-      Potential first, Active second.
+    Load the focus universe and apply optional Smart Money Proxy adjustments
+    in memory only.
+
+    Preferred path:
+      1. Read elite_watchlist_raw.csv.
+      2. Apply smart_money_scores.json adjustments.
+      3. Re-rank POTENTIAL_MOVER and ACTIVE_MOMENTUM buckets in memory.
+      4. Select Top 12 Potential + Top 8 Active.
+
+    Fallback:
+      If the raw file is missing/empty or has no usable decision buckets, read
+      potential_movers.csv and active_momentum.csv exactly like the original
+      engine, then apply smart-money adjustments inside those existing buckets.
+
+    Original scanner CSV files are never rewritten.
     """
     focus: Dict[str, Dict[str, Any]] = {}
+    smart_scores = load_smart_money_scores()
 
-    potential = load_csv(POTENTIAL_FILE, POTENTIAL_LIMIT)
-    active = load_csv(ACTIVE_FILE, ACTIVE_LIMIT)
+    def bucket_kind(row: Dict[str, Any]) -> str:
+        bucket = safe_str(row.get("setup_bucket"), "").upper()
+        if "POTENTIAL" in bucket:
+            return "POTENTIAL"
+        if "ACTIVE" in bucket:
+            return "ACTIVE"
+        return ""
+
+    def prepare_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        prepared: List[Dict[str, Any]] = []
+        seen: set[str] = set()
+        for raw in rows:
+            row = apply_smart_money_to_row(raw, smart_scores)
+            sym = normalize_symbol(row.get("symbol"))
+            if not sym or sym in seen:
+                continue
+            row["symbol"] = sym
+            prepared.append(row)
+            seen.add(sym)
+        return prepared
+
+    used_raw_universe = False
+
+    raw_rows = load_csv(RAW_WATCHLIST_FILE, None)
+    if raw_rows:
+        prepared = prepare_rows(raw_rows)
+        potential = [r for r in prepared if bucket_kind(r) == "POTENTIAL"]
+        active = [r for r in prepared if bucket_kind(r) == "ACTIVE"]
+
+        if potential or active:
+            used_raw_universe = True
+            potential = sorted(potential, key=lambda r: safe_float(r.get("score"), 0), reverse=True)[:POTENTIAL_LIMIT]
+            active = sorted(active, key=lambda r: safe_float(r.get("score"), 0), reverse=True)[:ACTIVE_LIMIT]
+
+            log(
+                f"  Focus ranked from {RAW_WATCHLIST_FILE}: "
+                f"potential={len(potential)}, active={len(active)}"
+            )
+        else:
+            potential = []
+            active = []
+    else:
+        potential = []
+        active = []
+
+    if not used_raw_universe:
+        # Original behavior fallback: use already-focused scanner CSVs, but still
+        # apply smart-money adjustments and re-rank within each existing bucket.
+        potential = prepare_rows(load_csv(POTENTIAL_FILE, None))
+        active = prepare_rows(load_csv(ACTIVE_FILE, None))
+
+        potential = sorted(potential, key=lambda r: safe_float(r.get("score"), 0), reverse=True)[:POTENTIAL_LIMIT]
+        active = sorted(active, key=lambda r: safe_float(r.get("score"), 0), reverse=True)[:ACTIVE_LIMIT]
+
+        log(
+            f"  Focus ranked from focused CSV fallback: "
+            f"potential={len(potential)}, active={len(active)}"
+        )
 
     for idx, row in enumerate(potential):
         sym = normalize_symbol(row.get("symbol"))
@@ -822,9 +1012,20 @@ def load_focus_candidates() -> Dict[str, Dict[str, Any]]:
         sym = normalize_symbol(row.get("symbol"))
         if not sym:
             continue
+
         if sym in focus:
             focus[sym]["signal_source_bucket"] = "POTENTIAL+ACTIVE"
+            focus[sym]["active_signal_rank"] = idx + 1
+
+            # Preserve the strongest adjusted record while keeping the duplicate
+            # bucket marker visible.
+            if safe_float(row.get("score"), 0) > safe_float(focus[sym].get("score"), 0):
+                for key, value in row.items():
+                    focus[sym][key] = value
+                focus[sym]["signal_source_bucket"] = "POTENTIAL+ACTIVE"
+                focus[sym]["active_signal_rank"] = idx + 1
             continue
+
         row = dict(row)
         row["symbol"] = sym
         row["signal_source_bucket"] = "ACTIVE"
@@ -933,6 +1134,12 @@ OUTCOME_FIELDNAMES = [
     "reward_risk",
     "confidence",
     "scanner_score",
+    "base_scanner_score",
+    "smart_money_score",
+    "smart_money_adjustment",
+    "smart_money_label",
+    "smart_money_bias",
+    "smart_money_signals",
     "live_signal_score",
     "market_phase",
     "event_context",
@@ -1160,6 +1367,12 @@ def update_one_outcome(row: Dict[str, Any], signal: Dict[str, Any]) -> Dict[str,
         "reward_risk": safe_float(signal.get("reward_risk"), _outcome_float(row, "reward_risk", 0.0)),
         "confidence": safe_float(signal.get("confidence"), _outcome_float(row, "confidence", 0.0)),
         "scanner_score": safe_float(signal.get("scanner_score"), _outcome_float(row, "scanner_score", 0.0)),
+        "base_scanner_score": safe_float(signal.get("base_scanner_score"), _outcome_float(row, "base_scanner_score", 0.0)),
+        "smart_money_score": safe_float(signal.get("smart_money_score"), _outcome_float(row, "smart_money_score", 0.0)),
+        "smart_money_adjustment": safe_float(signal.get("smart_money_adjustment"), _outcome_float(row, "smart_money_adjustment", 0.0)),
+        "smart_money_label": safe_str(signal.get("smart_money_label"), row.get("smart_money_label", "")),
+        "smart_money_bias": safe_str(signal.get("smart_money_bias"), row.get("smart_money_bias", "")),
+        "smart_money_signals": safe_str(signal.get("smart_money_signals"), row.get("smart_money_signals", "")),
         "live_signal_score": safe_float(signal.get("live_signal_score"), _outcome_float(row, "live_signal_score", 0.0)),
         "market_phase": safe_str(signal.get("market_phase"), ""),
         "event_context": safe_str(signal.get("event_context"), row.get("event_context", "")),
@@ -4135,6 +4348,12 @@ def diagnostic_candidate(
         "symbol": normalize_symbol(row.get("symbol")),
         "diagnostic_status": "REJECTED",
         "scanner_score": safe_float(row.get("score"), 0),
+        "base_scanner_score": safe_float(row.get("base_scanner_score"), safe_float(row.get("score"), 0)),
+        "smart_money_score": safe_float(row.get("smart_money_score"), 0),
+        "smart_money_adjustment": safe_float(row.get("smart_money_adjustment"), 0),
+        "smart_money_label": safe_str(row.get("smart_money_label"), ""),
+        "smart_money_bias": safe_str(row.get("smart_money_bias"), ""),
+        "smart_money_signals": safe_str(row.get("smart_money_signals"), ""),
         "source_bucket": safe_str(row.get("signal_source_bucket"), ""),
         "signal_rank": safe_int(row.get("signal_rank"), 0),
         "market_phase": phase,
@@ -4297,6 +4516,16 @@ def signal_base(
         "readiness_grade": "PRIME_READY" if confidence >= 80 else ("TRIGGER_READY" if confidence >= MIN_CONF_READY else "WATCH"),
         "live_signal_score": round(live_score, 1),
         "scanner_score": safe_float(row.get("score"), 0),
+        "base_scanner_score": safe_float(row.get("base_scanner_score"), safe_float(row.get("score"), 0)),
+        "smart_money_score": safe_float(row.get("smart_money_score"), 0),
+        "smart_money_adjustment": safe_float(row.get("smart_money_adjustment"), 0),
+        "smart_money_label": safe_str(row.get("smart_money_label"), ""),
+        "smart_money_bias": safe_str(row.get("smart_money_bias"), ""),
+        "smart_money_signals": safe_str(row.get("smart_money_signals"), ""),
+        "smart_money_volume_ratio": safe_float(row.get("smart_money_volume_ratio"), 0),
+        "smart_money_vwap_distance_pct": safe_float(row.get("smart_money_vwap_distance_pct"), 0),
+        "smart_money_vwap_touch_count": safe_int(row.get("smart_money_vwap_touch_count"), 0),
+        "smart_money_range_ratio": safe_float(row.get("smart_money_range_ratio"), 0),
         "source_bucket": safe_str(row.get("signal_source_bucket"), ""),
         "signal_rank": safe_int(row.get("signal_rank"), 0),
         "entry_trigger": plan.get("entry_trigger"),
