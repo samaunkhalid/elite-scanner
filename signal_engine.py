@@ -121,7 +121,7 @@ VWAP_PULLBACK_GRACE_MINUTES = 3.0
 BASE_SQUEEZE_GRACE_MINUTES = 2.0
 
 # Live participation / VWAP reclaim filters.
-# Alpaca SIP volume is non-consolidated, so thresholds are intentionally modest.
+# Alpaca SIP is consolidated; thresholds remain intentionally conservative.
 MIN_LIVE_1M_AVG_VOL_WATCH = 500.0
 MIN_LIVE_5M_DOLLAR_VOL_WATCH = 25_000.0
 MIN_LIVE_1M_AVG_VOL_READY = 1_000.0
@@ -1601,13 +1601,23 @@ def summarize_signal_outcomes(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
 
 class AlpacaMarketData:
     def __init__(self, feed: str = DATA_FEED):
-        self.api_key = os.getenv("ALPACA_API_KEY")
-        self.secret_key = os.getenv("ALPACA_SECRET_KEY")
-        self.feed = feed
+        # Support both common Alpaca credential environment variable styles.
+        # Do not hardcode API keys in source files.
+        self.api_key = (
+            os.getenv("ALPACA_API_KEY")
+            or os.getenv("APCA_API_KEY_ID")
+            or ""
+        ).strip()
+        self.secret_key = (
+            os.getenv("ALPACA_SECRET_KEY")
+            or os.getenv("APCA_API_SECRET_KEY")
+            or ""
+        ).strip()
+        self.feed = (feed or DATA_FEED or "sip").strip().lower()
 
         self.headers = {
-            "APCA-API-KEY-ID": self.api_key or "",
-            "APCA-API-SECRET-KEY": self.secret_key or "",
+            "APCA-API-KEY-ID": self.api_key,
+            "APCA-API-SECRET-KEY": self.secret_key,
         }
 
     @property
