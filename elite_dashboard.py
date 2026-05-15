@@ -349,7 +349,7 @@ def build_live_market_map(signal_payload):
     rows.extend(signal_payload.get("signals", []) or [])
 
     generated_at = safe_str(signal_payload.get("generated_at_et"), "")
-    feed = safe_str(signal_payload.get("alpaca_feed"), "IEX").upper()
+    feed = safe_str(signal_payload.get("alpaca_feed"), "SIP").upper()
 
     for row in rows:
         if not isinstance(row, dict):
@@ -1365,33 +1365,132 @@ def build_macro_html(macro):
     action = safe_str(macro.get("action"), "Check the economic calendar manually before trading.")
     source = safe_str(macro.get("source"), "Unknown source")
     generated = full_datetime_et_label(macro.get("generated_at_et"), "")
-    events = macro.get("events", []) or []
 
-    high_events = [e for e in events if safe_str(e.get("impact"), "").upper() == "HIGH"]
-    medium_events = [e for e in events if safe_str(e.get("impact"), "").upper() == "MEDIUM"]
+    events = [e for e in (macro.get("events", []) or []) if isinstance(e, dict)]
+    released_events_today = [e for e in (macro.get("released_events_today", []) or []) if isinstance(e, dict)]
+    upcoming_events = [e for e in (macro.get("upcoming_events", []) or []) if isinstance(e, dict)]
 
-    primary_event = None
-    if high_events:
-        primary_event = high_events[0]
-    elif medium_events:
-        primary_event = medium_events[0]
-    elif events:
-        primary_event = events[0]
+    now_utc, now_ny = get_times()
 
-    primary_name = "No high/medium macro event"
-    primary_when = ""
-    primary_impact = risk_level
+    def event_dt(event):
+        dt = parse_et_datetime(event.get("datetime_et"))
+        if dt:
+            return dt
 
-    if isinstance(primary_event, dict):
-        primary_name = macro_display_name(primary_event.get("name") or primary_event.get("event") or "Macro Event")
-        primary_when = macro_event_datetime_label(primary_event)
-        primary_impact = safe_str(primary_event.get("impact"), risk_level).upper()
+        date_text = safe_str(event.get("date"), "")
+        time_text = safe_str(event.get("time_et"), "").replace(" ET", "").strip()
+
+        if date_text and time_text and time_text.upper() != "TBD":
+            dt = parse_et_datetime(f"{date_text} {time_text}")
+            if dt:
+                return dt
+
+        if date_text:
+            try:
+                return datetime.fromisoformat(date_text[:10])
+            except Exception:
+                return None
+
+        return None
+
+    def event_ts(event, default=0.0):
+        dt = event_dt(event)
+        if not dt:
+            return default
+        try:
+            if dt.tzinfo is None:
+                if ZoneInfo:
+                    dt = dt.replace(tzinfo=ZoneInfo("America/New_York"))
+                else:
+                    dt = dt.replace(tzinfo=timezone.utc)
+            return dt.timestamp()
+        except Exception:
+            return default
+
+    def is_today_event(event):
+        dt = event_dt(event)
+        if not dt:
+            return False
+        try:
+            if dt.tzinfo and ZoneInfo:
+                dt = dt.astimezone(ZoneInfo("America/New_York"))
+            return dt.date() == now_ny.date()
+        except Exception:
+            return False
+
+    def event_release_status(event):
+        status = safe_str(event.get("release_status"), "").upper()
+        if status == "RELEASED":
+            return "RELEASED"
+
+        minutes_until = safe_float(event.get("minutes_until"), None)
+        if minutes_until is not None and minutes_until < 0 and is_today_event(event):
+            return "RELEASED"
+
+        dt = event_dt(event)
+        if dt and is_today_event(event):
+            try:
+                if dt.tzinfo is None and ZoneInfo:
+                    dt = dt.replace(tzinfo=ZoneInfo("America/New_York"))
+                compare_now = now_ny
+                if dt.tzinfo and compare_now.tzinfo:
+                    compare_now = compare_now.astimezone(dt.tzinfo)
+                if dt <= compare_now:
+                    return "RELEASED"
+            except Exception:
+                pass
+
+        return "UPCOMING"
+
+    # Backward compatibility: if macro_calendar.py does not yet provide separate
+    # released/upcoming lists, infer them from the events list.
+    if not released_events_today:
+        released_events_today = [
+            e for e in events
+            if is_today_event(e) and event_release_status(e) == "RELEASED"
+        ]
+
+    if not upcoming_events:
+        upcoming_events = [
+            e for e in events
+            if event_release_status(e) != "RELEASED"
+        ]
+
+    released_events_today = sorted(
+        released_events_today,
+        key=lambda e: event_ts(e, 0.0),
+        reverse=True,
+    )
+
+    upcoming_events = sorted(
+        upcoming_events,
+        key=lambda e: event_ts(e, 9999999999.0),
+    )
+
+    def event_impact_class(event):
+        impact = safe_str(event.get("impact"), "MEDIUM").upper()
+        if impact == "HIGH":
+            return "impact-high"
+        if impact == "MEDIUM":
+            return "impact-medium"
+        return "impact-low"
 
     def render_event_chip(event):
-        impact = safe_str(event.get("impact"), "MEDIUM").upper()
-        impact_class = "impact-high" if impact == "HIGH" else "impact-medium" if impact == "MEDIUM" else "impact-low"
+        status = event_release_status(event)
         name = macro_display_name(event.get("name") or event.get("event") or "Macro Event")
         when = macro_event_datetime_label(event)
+
+        if status == "RELEASED":
+            return f"""
+            <div class="macro-event">
+                <span class="impact-pill impact-low">RELEASED</span>
+                <strong>{esc(name)}</strong>
+                <span class="macro-event-time">{esc(when)}</span>
+            </div>
+            """
+
+        impact = safe_str(event.get("impact"), "MEDIUM").upper()
+        impact_class = event_impact_class(event)
 
         return f"""
         <div class="macro-event">
@@ -1401,24 +1500,50 @@ def build_macro_html(macro):
         </div>
         """
 
-    def same_event(a, b):
-        if not isinstance(a, dict) or not isinstance(b, dict):
-            return False
-        return (
-            safe_str(a.get("name") or a.get("event"), "").lower() == safe_str(b.get("name") or b.get("event"), "").lower()
-            and safe_str(a.get("date"), "")[:10] == safe_str(b.get("date"), "")[:10]
-            and safe_str(a.get("time_et"), "") == safe_str(b.get("time_et"), "")
+    primary_label = "Upcoming:"
+    primary_name = "No high/medium macro event"
+    primary_when = ""
+    primary_badge = risk_level
+    primary_badge_class = "impact-high" if risk_level == "HIGH" else "impact-medium" if risk_level == "MEDIUM" else "impact-low"
+
+    primary_event = None
+    if released_events_today:
+        primary_event = released_events_today[0]
+        primary_label = "Today:"
+        primary_badge = "RELEASED"
+        primary_badge_class = "impact-low"
+    elif upcoming_events:
+        primary_event = upcoming_events[0]
+        primary_label = "Today:" if is_today_event(primary_event) else "Upcoming:"
+        primary_badge = safe_str(primary_event.get("impact"), risk_level).upper()
+        primary_badge_class = event_impact_class(primary_event)
+
+    if isinstance(primary_event, dict):
+        primary_name = macro_display_name(primary_event.get("name") or primary_event.get("event") or "Macro Event")
+        primary_when = macro_event_datetime_label(primary_event)
+
+    # Compact row: released today first, then upcoming. Do not repeat sentiment.
+    event_source = []
+    event_source.extend(released_events_today[:3])
+    event_source.extend(upcoming_events[:5])
+
+    # De-duplicate by name/date/time.
+    deduped = []
+    seen = set()
+    for event in event_source:
+        key = (
+            safe_str(event.get("name") or event.get("event"), "").lower(),
+            safe_str(event.get("date"), "")[:10],
+            safe_str(event.get("time_et"), ""),
         )
-
-    visible_events = []
-    for e in high_events + medium_events:
-        if primary_event and same_event(e, primary_event):
+        if key in seen:
             continue
-        visible_events.append(e)
+        seen.add(key)
+        deduped.append(event)
 
-    visible_limit = 3
-    visible_chips = "".join(render_event_chip(e) for e in visible_events[:visible_limit])
-    more_count = max(0, len(visible_events) - visible_limit)
+    visible_limit = 4
+    visible_chips = "".join(render_event_chip(e) for e in deduped[:visible_limit])
+    more_count = max(0, len(deduped) - visible_limit)
 
     more_chip = ""
     if more_count:
@@ -1431,9 +1556,7 @@ def build_macro_html(macro):
 
     event_row = visible_chips + more_chip
     if not event_row:
-        event_row = '<div class="macro-event muted">No additional high/medium events in lookahead window.</div>'
-
-    primary_impact_class = "impact-high" if primary_impact == "HIGH" else "impact-medium" if primary_impact == "MEDIUM" else "impact-low"
+        event_row = '<div class="macro-event muted">No high/medium macro events in lookahead window.</div>'
 
     return f"""
     <section class="macro-banner {esc(risk_class)} macro-compact">
@@ -1441,10 +1564,10 @@ def build_macro_html(macro):
             <div class="macro-primary">
                 <div class="macro-title-line">
                     <strong>Macro Risk: {esc(risk_level)}</strong>
-                    <span class="impact-pill {primary_impact_class}">{esc(primary_impact)}</span>
+                    <span class="impact-pill {primary_badge_class}">{esc(primary_badge)}</span>
                 </div>
                 <div class="macro-next">
-                    <span class="macro-label">Next:</span>
+                    <span class="macro-label">{esc(primary_label)}</span>
                     <strong>{esc(primary_name)}</strong>
                     {f'<span class="macro-time">{esc(primary_when)}</span>' if primary_when else ''}
                 </div>
@@ -1485,7 +1608,7 @@ def build_regime_html(regime):
     <div class="regime-banner {bias_class}">
         <div>
             <strong>{esc(label)}</strong>
-            <span>Bias: {esc(bias.replace("_", " "))} · Data: Yahoo + Alpaca IEX + Alpaca News</span>
+            <span>Bias: {esc(bias.replace("_", " "))} · Data: Yahoo + Alpaca SIP + Alpaca News</span>
         </div>
         <div class="regime-metrics">
             <span>SPY <b class="{'positive' if spy >= 0 else 'negative'}">{spy:+.2f}%</b></span>
@@ -4823,7 +4946,7 @@ td small {
     <div id="desk">$desk_table</div>
 
     <div class="footer-note">
-        VPS live dashboard. Data updates from Elite Runner during market hours; this page auto-refreshes every 60 seconds. Extended/high-risk names are saved in CSV but hidden from this decision view. Alpaca IEX volume is non-consolidated; confirm spread, liquidity, VWAP, and news manually before execution.
+        VPS live dashboard. Data updates from Elite Runner during market hours; this page auto-refreshes every 60 seconds. Extended/high-risk names are saved in CSV but hidden from this decision view. Alpaca SIP volume is non-consolidated; confirm spread, liquidity, VWAP, and news manually before execution.
     </div>
 </main>
 
