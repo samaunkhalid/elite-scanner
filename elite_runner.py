@@ -5,13 +5,14 @@ Elite Scanner VPS Runner
 Purpose:
 - Run full market scanner at scheduled ET times.
 - Run Signal Desk refresh every 60 seconds during the regular monitoring window.
-- Run dashboard-only session status refresh at 04:00 and 20:01 ET.
+- Run dashboard-only session status refresh at 04:00, 09:30, and 20:01 ET.
 - Publish dashboard files to the Nginx web directory.
 
 Important:
 - Dashboard-only refresh NEVER runs elite_scanner.py or signal_engine.py.
 - Dashboard-only refresh only rebuilds/publishes dashboard status.
 - Full scanner and signal refresh behavior remain separate.
+- dashboard.html is always forced to index.html so the root URL is never stale.
 """
 
 from __future__ import annotations
@@ -69,9 +70,8 @@ SIGNAL_REFRESH_INTERVAL_SECONDS = 60
 # Dashboard-only session boundary refreshes.
 # These do NOT run scanner or signal engine.
 # 04:00 ET = show PRE-MARKET
+# 09:30 ET = show MARKET OPEN, but scanner buckets remain hidden until first 09:45+ scanner data
 # 20:01 ET = show CLOSED
-# No 09:30 dashboard-only refresh.
-# No 16:00 dashboard-only refresh because signal refresh runs until 16:05.
 DASHBOARD_ONLY_TIMES_ET = {
     "04:00",
     "09:30",
@@ -79,9 +79,8 @@ DASHBOARD_ONLY_TIMES_ET = {
 }
 
 # Files to publish to Nginx after dashboard rebuilds.
+# dashboard.html is handled first and forced to both index.html and dashboard.html.
 PUBLISH_PATTERNS = [
-    "index.html",
-    "dashboard.html",
     "*.json",
     "*.csv",
     "*.log",
@@ -298,6 +297,7 @@ def run_dashboard_only_refresh(reason: str = "SESSION_STATUS") -> bool:
 
     Used at:
     - 04:00 ET PRE-MARKET label
+    - 09:30 ET MARKET OPEN label
     - 20:01 ET CLOSED label
     """
     return run_script_sequence(
@@ -317,12 +317,35 @@ def publish_dashboard() -> None:
     """
     Copy dashboard output files into Nginx web directory.
 
-    This does not change scanner/signal state.
+    Important:
+    elite_dashboard.py writes dashboard.html. The browser root serves index.html.
+    Therefore dashboard.html is always copied to:
+    - PROJECT_DIR/index.html
+    - WEB_DIR/index.html
+    - WEB_DIR/dashboard.html
+
+    This prevents the root URL from serving stale index.html.
     """
     try:
         WEB_DIR.mkdir(parents=True, exist_ok=True)
 
         copied = 0
+        dashboard_src = PROJECT_DIR / "dashboard.html"
+
+        if dashboard_src.exists() and dashboard_src.is_file():
+            project_index = PROJECT_DIR / "index.html"
+            shutil.copy2(dashboard_src, project_index)
+            copied += 1
+
+            shutil.copy2(dashboard_src, WEB_DIR / "index.html")
+            copied += 1
+
+            shutil.copy2(dashboard_src, WEB_DIR / "dashboard.html")
+            copied += 1
+
+            logging.info("Forced dashboard.html to project/web index.html and dashboard.html")
+        else:
+            logging.warning("dashboard.html not found; index.html cannot be refreshed")
 
         for pattern in PUBLISH_PATTERNS:
             for src in PROJECT_DIR.glob(pattern):
@@ -449,7 +472,7 @@ class EliteRunner:
             try:
                 # Order matters:
                 # 1. Full scanner at scheduled discovery times.
-                # 2. Dashboard-only boundary refresh at 04:00 / 20:01.
+                # 2. Dashboard-only boundary refresh at 04:00 / 09:30 / 20:01.
                 # 3. Signal refresh during 09:46-16:05 only.
                 self.check_scanner_schedule(current)
                 self.check_dashboard_only_schedule(current)
