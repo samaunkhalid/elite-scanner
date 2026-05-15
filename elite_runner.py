@@ -4,16 +4,17 @@ Elite Scanner VPS Runner
 
 Purpose:
 - Run full whole-market scanner at scheduled ET discovery times.
+- Run optional sector rotation during full scanner cycles only.
 - Run Smart Money Phase 1 bars proxy before Signal Desk decisions.
 - Run Signal Desk refresh every 60 seconds during the regular monitoring window.
 - Run dashboard-only session status refresh at 04:00, 09:30, and 20:01 ET.
 - Publish dashboard files to the Nginx web directory.
 
 Important:
-- smart_money_bars_proxy is an extensionless Python script.
-- Dashboard-only refresh NEVER runs elite_scanner.py, smart_money_bars_proxy, or signal_engine.py.
-- Dashboard-only refresh only rebuilds/publishes dashboard status.
-- Full scanner and Signal Desk refresh behavior remain separate.
+- smart_money_bars_proxy.py is a normal Python script with .py extension.
+- sector_rotation.py runs only during FULL_SCANNER and only when the file exists.
+- DASHBOARD_ONLY never runs scanner, sector rotation, smart money, or signal engine.
+- FULL_SCANNER and SIGNAL_REFRESH behavior remain separate.
 """
 
 from __future__ import annotations
@@ -29,7 +30,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, time as dtime
 from pathlib import Path
-from typing import Callable, Iterable, Optional
+from typing import Callable, Iterable, List, Optional
 
 try:
     from zoneinfo import ZoneInfo
@@ -50,8 +51,15 @@ RUNNER_LOG = LOG_DIR / "elite_runner.log"
 
 ET_TZ_NAME = "America/New_York"
 
+MACRO_SCRIPT = "macro_calendar.py"
+SCANNER_SCRIPT = "elite_scanner.py"
+SECTOR_ROTATION_SCRIPT = "sector_rotation.py"
+SMART_MONEY_SCRIPT = "smart_money_bars_proxy.py"
+SIGNAL_ENGINE_SCRIPT = "signal_engine.py"
+DASHBOARD_SCRIPT = "elite_dashboard.py"
+
 # Full whole-market scanner schedule.
-# These are discovery scans, not 60-sec signal refreshes.
+# These are discovery scans, not 60-second signal refreshes.
 # No 09:00 pre-market scan because pre-market scanner candidates are not displayed.
 SCANNER_TIMES_ET = {
     "09:45",
@@ -61,15 +69,15 @@ SCANNER_TIMES_ET = {
     "14:30",
 }
 
-# Signal Desk refresh:
+# Signal Desk refresh.
 # Refresh already-picked scanner tickers every 60 seconds.
-# Runs smart_money_bars_proxy + signal_engine.py + elite_dashboard.py.
+# Runs smart_money_bars_proxy.py + signal_engine.py + elite_dashboard.py.
 SIGNAL_REFRESH_START_ET = "09:46"
 SIGNAL_REFRESH_END_ET = "16:05"
 SIGNAL_REFRESH_INTERVAL_SECONDS = 60
 
 # Dashboard-only session boundary refreshes.
-# These do NOT run scanner, smart money tracker, or signal engine.
+# These do NOT run scanner, sector rotation, smart money, or signal engine.
 # 04:00 ET = show PRE-MARKET
 # 09:30 ET = show MARKET OPEN
 # 20:01 ET = show CLOSED
@@ -159,6 +167,10 @@ class RunResult:
     duration_seconds: float
 
 
+def script_exists(script_name: str) -> bool:
+    return (PROJECT_DIR / script_name).exists()
+
+
 def run_python_script(script_name: str, timeout_seconds: int = 1800) -> RunResult:
     script_path = PROJECT_DIR / script_name
     start = time.monotonic()
@@ -185,7 +197,7 @@ def run_python_script(script_name: str, timeout_seconds: int = 1800) -> RunResul
         output = (completed.stdout or "").strip()
 
         if output:
-            for line in output.splitlines()[-100:]:
+            for line in output.splitlines()[-80:]:
                 logging.info("[%s] %s", script_name, line)
 
         if completed.returncode == 0:
@@ -239,6 +251,33 @@ def run_script_sequence(name: str, scripts: Iterable[str], publish_after: bool =
 # Job Types
 # =========================
 
+def full_scanner_scripts() -> List[str]:
+    """
+    Full discovery scan order.
+
+    sector_rotation.py is optional for now:
+    - If present, it runs after elite_scanner.py creates elite_watchlist_raw.csv.
+    - If absent, the runner continues without failing.
+    """
+    scripts = [
+        MACRO_SCRIPT,
+        SCANNER_SCRIPT,
+    ]
+
+    if script_exists(SECTOR_ROTATION_SCRIPT):
+        scripts.append(SECTOR_ROTATION_SCRIPT)
+    else:
+        logging.info("Optional script not found, skipping: %s", SECTOR_ROTATION_SCRIPT)
+
+    scripts.extend([
+        SMART_MONEY_SCRIPT,
+        SIGNAL_ENGINE_SCRIPT,
+        DASHBOARD_SCRIPT,
+    ])
+
+    return scripts
+
+
 def run_full_scanner() -> bool:
     """
     Whole-market discovery scan.
@@ -246,24 +285,14 @@ def run_full_scanner() -> bool:
     Runs:
     - macro_calendar.py
     - elite_scanner.py
-    - smart_money_bars_proxy
+    - sector_rotation.py if present
+    - smart_money_bars_proxy.py
     - signal_engine.py
     - elite_dashboard.py
-
-    Reason:
-    After scanner refreshes the candidate universe, Smart Money Phase 1 scores
-    the current universe, Signal Desk evaluates the merged ranking once, then
-    dashboard rebuilds.
     """
     return run_script_sequence(
         "FULL_SCANNER",
-        [
-            "macro_calendar.py",
-            "elite_scanner.py",
-            "smart_money_bars_proxy",
-            "signal_engine.py",
-            "elite_dashboard.py",
-        ],
+        full_scanner_scripts(),
         publish_after=True,
     )
 
@@ -273,18 +302,21 @@ def run_signal_refresh() -> bool:
     Refresh already-picked scanner tickers only.
 
     Runs:
-    - smart_money_bars_proxy
+    - smart_money_bars_proxy.py
     - signal_engine.py
     - elite_dashboard.py
 
-    Does NOT run elite_scanner.py.
+    Does NOT run:
+    - macro_calendar.py
+    - elite_scanner.py
+    - sector_rotation.py
     """
     return run_script_sequence(
         "SIGNAL_REFRESH",
         [
-            "smart_money_bars_proxy",
-            "signal_engine.py",
-            "elite_dashboard.py",
+            SMART_MONEY_SCRIPT,
+            SIGNAL_ENGINE_SCRIPT,
+            DASHBOARD_SCRIPT,
         ],
         publish_after=True,
     )
@@ -295,8 +327,10 @@ def run_dashboard_only_refresh(reason: str = "SESSION_STATUS") -> bool:
     Dashboard-only refresh.
 
     Strict rule:
+    - NO macro_calendar.py
     - NO elite_scanner.py
-    - NO smart_money_bars_proxy
+    - NO sector_rotation.py
+    - NO smart_money_bars_proxy.py
     - NO signal_engine.py
     - NO Signal Desk promotion/change
     - NO TRIGGER_READY changes
@@ -311,7 +345,7 @@ def run_dashboard_only_refresh(reason: str = "SESSION_STATUS") -> bool:
     return run_script_sequence(
         f"DASHBOARD_ONLY_{reason}",
         [
-            "elite_dashboard.py",
+            DASHBOARD_SCRIPT,
         ],
         publish_after=True,
     )
@@ -321,52 +355,33 @@ def run_dashboard_only_refresh(reason: str = "SESSION_STATUS") -> bool:
 # Publishing
 # =========================
 
-def _copy_file(src: Path, dst: Path) -> bool:
-    try:
-        dst.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(src, dst)
-        return True
-    except PermissionError:
-        logging.error("Permission denied publishing %s -> %s", src, dst)
-    except Exception as exc:
-        logging.error("Failed publishing %s -> %s: %s", src, dst, exc)
-    return False
-
-
 def publish_dashboard() -> None:
     """
     Copy dashboard output files into Nginx web directory.
 
-    Also forces dashboard.html to:
-    - project index.html
-    - web index.html
-    - web dashboard.html
+    This does not change scanner/signal state.
 
-    This prevents the root URL from serving stale index.html.
-    Publishing does not change scanner/signal state.
+    Also forces dashboard.html to index.html in both project root and web root,
+    so http://IP/ and /dashboard.html always serve the latest dashboard.
     """
     try:
         WEB_DIR.mkdir(parents=True, exist_ok=True)
 
+        project_dashboard = PROJECT_DIR / "dashboard.html"
+        project_index = PROJECT_DIR / "index.html"
+        web_dashboard = WEB_DIR / "dashboard.html"
+        web_index = WEB_DIR / "index.html"
+
+        if project_dashboard.exists():
+            try:
+                shutil.copy2(project_dashboard, project_index)
+                shutil.copy2(project_dashboard, web_dashboard)
+                shutil.copy2(project_dashboard, web_index)
+                logging.info("Forced dashboard.html to project/web index.html and dashboard.html")
+            except Exception as exc:
+                logging.error("Failed forcing dashboard.html to index/dashboard outputs: %s", exc)
+
         copied = 0
-
-        # Force dashboard.html to index.html in project and web root.
-        dashboard_src = PROJECT_DIR / "dashboard.html"
-        if dashboard_src.exists():
-            project_index = PROJECT_DIR / "index.html"
-            if _copy_file(dashboard_src, project_index):
-                copied += 1
-                logging.info("Forced dashboard.html -> %s", project_index)
-
-            web_index = WEB_DIR / "index.html"
-            if _copy_file(dashboard_src, web_index):
-                copied += 1
-                logging.info("Forced dashboard.html -> %s", web_index)
-
-            web_dashboard = WEB_DIR / "dashboard.html"
-            if _copy_file(dashboard_src, web_dashboard):
-                copied += 1
-                logging.info("Forced dashboard.html -> %s", web_dashboard)
 
         for pattern in PUBLISH_PATTERNS:
             for src in PROJECT_DIR.glob(pattern):
@@ -374,8 +389,14 @@ def publish_dashboard() -> None:
                     continue
 
                 dst = WEB_DIR / src.name
-                if _copy_file(src, dst):
+
+                try:
+                    shutil.copy2(src, dst)
                     copied += 1
+                except PermissionError:
+                    logging.error("Permission denied publishing %s -> %s", src, dst)
+                except Exception as exc:
+                    logging.error("Failed publishing %s -> %s: %s", src, dst, exc)
 
         logging.info("Published %s files to %s", copied, WEB_DIR)
 
@@ -409,8 +430,8 @@ class EliteRunner:
 
         try:
             logging.info("Job start: %s", job_name)
-            ok = func()
-            logging.info("Job end: %s | ok=%s", job_name, ok)
+            func()
+            logging.info("Job end: %s", job_name)
         finally:
             self.active_job = False
 
@@ -480,6 +501,8 @@ class EliteRunner:
             SIGNAL_REFRESH_INTERVAL_SECONDS,
         )
         logging.info("Dashboard-only times ET: %s", sorted(DASHBOARD_ONLY_TIMES_ET))
+        logging.info("Smart Money script: %s", SMART_MONEY_SCRIPT)
+        logging.info("Sector rotation script: %s optional=%s", SECTOR_ROTATION_SCRIPT, not script_exists(SECTOR_ROTATION_SCRIPT))
 
         while not self.stop_requested:
             current = now_et()
@@ -511,7 +534,26 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--once-signal", action="store_true", help="Run one signal refresh cycle and exit")
     parser.add_argument("--once-dashboard", action="store_true", help="Run one dashboard-only refresh and exit")
     parser.add_argument("--publish-only", action="store_true", help="Publish current output files and exit")
+    parser.add_argument("--print-plan", action="store_true", help="Print planned script sequences and exit")
     return parser.parse_args()
+
+
+def print_plan() -> None:
+    print("FULL_SCANNER:")
+    for script in full_scanner_scripts():
+        print(f"  {script}")
+
+    print("\nSIGNAL_REFRESH:")
+    for script in [SMART_MONEY_SCRIPT, SIGNAL_ENGINE_SCRIPT, DASHBOARD_SCRIPT]:
+        print(f"  {script}")
+
+    print("\nDASHBOARD_ONLY:")
+    print(f"  {DASHBOARD_SCRIPT}")
+
+    print("\nSCHEDULE:")
+    print(f"  scanner={sorted(SCANNER_TIMES_ET)}")
+    print(f"  signal_refresh={SIGNAL_REFRESH_START_ET}-{SIGNAL_REFRESH_END_ET} every {SIGNAL_REFRESH_INTERVAL_SECONDS}s")
+    print(f"  dashboard_only={sorted(DASHBOARD_ONLY_TIMES_ET)}")
 
 
 def main() -> int:
@@ -523,6 +565,10 @@ def main() -> int:
         return 1
 
     os.chdir(PROJECT_DIR)
+
+    if args.print_plan:
+        print_plan()
+        return 0
 
     if args.publish_only:
         publish_dashboard()
