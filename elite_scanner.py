@@ -994,35 +994,62 @@ def assign_tier(score):
     return "—"
 
 
+def boolish(value):
+    """Robust bool conversion for scanner fields."""
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    return text in {"true", "1", "yes", "y"}
+
+
 def classify_setup_bucket(stock):
     """
-    Classify stocks into useful trading buckets.
-    Main goal: separate potential movers from already-extended movers.
+    Long-only bucket classifier.
+
+    User rule:
+    - This dashboard is for manual LONG trading only.
+    - Negative-change / short-biased tickers must NOT appear in Potential Movers
+      or Active Momentum.
+    - Downside movers can remain in raw diagnostics only, but not in the main
+      decision buckets.
+
+    Main decision buckets:
+    - POTENTIAL_MOVER: positive, earlier long setup.
+    - ACTIVE_MOMENTUM: positive, already-moving long momentum.
     """
-    change = abs(float(stock.get("change_pct", 0) or 0))
+    change_signed = float(stock.get("change_pct", 0) or 0)
+    change_abs = abs(change_signed)
+
     risk = stock.get("risk_category", "NORMAL")
     catalyst_sentiment = stock.get("catalyst_sentiment", "NONE")
 
-    above_vwap = bool(stock.get("above_vwap", False))
-    near_hod = bool(stock.get("near_hod", False))
+    above_vwap = boolish(stock.get("above_vwap", False))
+    near_hod = boolish(stock.get("near_hod", False))
     vwap_dist = float(stock.get("vwap_dist_pct", 999) or 999)
     recent_range = float(stock.get("recent_range_pct", 999) or 999)
+
+    # Hard long-only gate.
+    # No negative/flat movers are allowed into Potential or Active Momentum.
+    if change_signed <= 0:
+        return "MONITOR"
+
     if risk == "NEWS_RISK" or catalyst_sentiment == "NEGATIVE":
         return "HIGH_RISK_EXTREME"
-    # Highest risk first
+
+    # Highest risk first.
     if risk in ["HIGH_RISK", "EXTREME_MOVE"]:
         return "HIGH_RISK_EXTREME"
 
-    if risk == "EXTENDED" or change >= 25:
+    if risk == "EXTENDED" or change_abs >= 25:
         return "EXTENDED_CHASE_RISK"
 
-    # Active momentum = already moving, but not extreme
-    if 12 <= change < 25:
+    # Active momentum = already moving upward, but not extreme.
+    if 12 <= change_signed < 25:
         return "ACTIVE_MOMENTUM"
 
-    # Potential mover = cleaner, earlier setup
+    # Potential mover = cleaner, earlier upward setup.
     if (
-        change <= 12
+        0 < change_signed <= 12
         and above_vwap
         and vwap_dist <= 6
         and (near_hod or recent_range <= 1.8)
