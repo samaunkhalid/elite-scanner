@@ -212,7 +212,7 @@ def build_live_market_map(signal_payload):
     rows.extend(signal_payload.get("signals", []) or [])
 
     generated_at = safe_str(signal_payload.get("generated_at_et"), "")
-    feed = safe_str(signal_payload.get("alpaca_feed"), "IEX").upper()
+    feed = safe_str(signal_payload.get("alpaca_feed"), "SIP").upper()
 
     for row in rows:
         if not isinstance(row, dict):
@@ -1326,7 +1326,7 @@ def build_regime_html(regime):
     <div class="regime-banner {bias_class}">
         <div>
             <strong>{esc(label)}</strong>
-            <span>Bias: {esc(bias.replace("_", " "))} · Data: Yahoo + Alpaca IEX + Alpaca News</span>
+            <span>Bias: {esc(bias.replace("_", " "))} · Data: Yahoo + Alpaca SIP + Alpaca News</span>
         </div>
         <div class="regime-metrics">
             <span>SPY <b class="{'positive' if spy >= 0 else 'negative'}">{spy:+.2f}%</b></span>
@@ -4279,7 +4279,7 @@ td small {
     <div id="desk">$desk_table</div>
 
     <div class="footer-note">
-        VPS live dashboard. Data updates from Elite Runner during market hours; this page auto-refreshes every 60 seconds. Extended/high-risk names are saved in CSV but hidden from this decision view. Alpaca IEX volume is non-consolidated; confirm spread, liquidity, VWAP, and news manually before execution.
+        VPS live dashboard. Data updates from Elite Runner during market hours; this page auto-refreshes every 60 seconds. Extended/high-risk names are saved in CSV but hidden from this decision view. Alpaca SIP volume is non-consolidated; confirm spread, liquidity, VWAP, and news manually before execution.
     </div>
 </main>
 
