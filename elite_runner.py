@@ -74,6 +74,7 @@ SIGNAL_REFRESH_INTERVAL_SECONDS = 60
 # No 16:00 dashboard-only refresh because signal refresh runs until 16:05.
 DASHBOARD_ONLY_TIMES_ET = {
     "04:00",
+    "09:30",
     "20:01",
 }
 
