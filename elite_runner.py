@@ -222,6 +222,7 @@ def run_python_script(
     script_name: str,
     timeout_seconds: int = 1800,
     required: bool = True,
+    env_overrides: Optional[Dict[str, str]] = None,
 ) -> RunResult:
     script_path = PROJECT_DIR / script_name
     start = time.monotonic()
@@ -235,7 +236,14 @@ def run_python_script(
         return RunResult(script_name, True, 0, 0.0)
 
     cmd = [PYTHON_BIN, str(script_path)]
-    logging.info("Running: %s", " ".join(cmd))
+    child_env = os.environ.copy()
+    if env_overrides:
+        child_env.update({str(k): str(v) for k, v in env_overrides.items()})
+
+    if env_overrides:
+        logging.info("Running: %s | env_overrides=%s", " ".join(cmd), env_overrides)
+    else:
+        logging.info("Running: %s", " ".join(cmd))
 
     try:
         completed = subprocess.run(
@@ -246,6 +254,7 @@ def run_python_script(
             stderr=subprocess.STDOUT,
             timeout=timeout_seconds,
             check=False,
+            env=child_env,
         )
 
         duration = time.monotonic() - start
@@ -907,14 +916,14 @@ def run_premarket_scan() -> bool:
     all_ok = True
 
     sequence = [
-        (MACRO_SCRIPT, True),
-        (SCANNER_SCRIPT, True),
-        (SECTOR_ROTATION_SCRIPT, False),
-        (SMART_MONEY_SCRIPT, False),
+        (MACRO_SCRIPT, True, None),
+        (SCANNER_SCRIPT, True, {"ELITE_SCANNER_SESSION": "PREMARKET_MONITOR"}),
+        (SECTOR_ROTATION_SCRIPT, False, None),
+        (SMART_MONEY_SCRIPT, False, None),
     ]
 
-    for script, required in sequence:
-        result = run_python_script(script, required=required)
+    for script, required, env_overrides in sequence:
+        result = run_python_script(script, required=required, env_overrides=env_overrides)
         if not result.ok:
             all_ok = False
             if required:
@@ -952,14 +961,14 @@ def run_after_hours_scan() -> bool:
     all_ok = True
 
     sequence = [
-        (MACRO_SCRIPT, True),
-        (SCANNER_SCRIPT, True),
-        (SECTOR_ROTATION_SCRIPT, False),
-        (SMART_MONEY_SCRIPT, False),
+        (MACRO_SCRIPT, True, None),
+        (SCANNER_SCRIPT, True, {"ELITE_SCANNER_SESSION": "AFTER_HOURS_MONITOR"}),
+        (SECTOR_ROTATION_SCRIPT, False, None),
+        (SMART_MONEY_SCRIPT, False, None),
     ]
 
-    for script, required in sequence:
-        result = run_python_script(script, required=required)
+    for script, required, env_overrides in sequence:
+        result = run_python_script(script, required=required, env_overrides=env_overrides)
         if not result.ok:
             all_ok = False
             if required:
