@@ -1241,6 +1241,205 @@ def build_card(stock, signal=None):
     </div>
     """
 
+def format_compact_count(value):
+    val = safe_float(value, 0)
+    if val >= 1_000_000:
+        return f"{val / 1_000_000:.2f}".rstrip("0").rstrip(".") + "M"
+    if val >= 1_000:
+        return f"{val / 1_000:.0f}K"
+    if val > 0:
+        return f"{val:.0f}"
+    return "—"
+
+
+def format_money_raw(value):
+    val = safe_float(value, 0)
+    if val >= 1_000_000_000:
+        return f"${val / 1_000_000_000:.2f}".rstrip("0").rstrip(".") + "B"
+    if val >= 1_000_000:
+        return f"${val / 1_000_000:.2f}".rstrip("0").rstrip(".") + "M"
+    if val >= 1_000:
+        return f"${val / 1_000:.0f}K"
+    if val > 0:
+        return f"${val:.0f}"
+    return "—"
+
+
+def format_price_dash(value):
+    val = safe_float(value, 0)
+    if val > 0:
+        return f"${val:.2f}" if val >= 1 else f"${val:.4f}"
+    return "—"
+
+
+def build_monitor_tags(stock, max_tags=6):
+    raw_tags = safe_str(stock.get("tags"), "")
+    parts = [p.strip() for p in raw_tags.split(" · ") if p.strip()]
+
+    seen = set()
+    tags = []
+    for tag in parts:
+        key = tag.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+
+        if "monitor" in key:
+            cls = "tag-neutral"
+        elif "after-hours" in key or "pre-market" in key or "premarket" in key:
+            cls = "tag-positive"
+        elif "spread" in key or "gap" in key:
+            cls = "tag-caution"
+        elif "volume" in key or "notional" in key:
+            cls = "tag-tech"
+        else:
+            cls = "tag-neutral"
+
+        tags.append(f'<span class="tag {cls}">{esc(tag)}</span>')
+        if len(tags) >= max_tags:
+            break
+
+    return "".join(tags)
+
+
+def build_monitor_mover_card(stock):
+    """
+    Dedicated monitor-only card for pre-market / after-hours movers.
+
+    This intentionally hides regular-session fields such as ATR, VWAP distance,
+    HOD distance, sector "Unknown" strips, catalyst panels, and regular setup
+    language. Extended-hours movers are not Signal Desk candidates.
+    """
+    symbol = safe_str(stock.get("symbol"), "—").upper()
+    card_id = html_id_for_symbol(symbol)
+
+    session_raw = safe_str(stock.get("monitor_session"), "").upper()
+    if "PRE" in session_raw:
+        session_label = "Pre-Market"
+        move_label = "Pre-Market Move"
+        anchor_default = "Previous Close"
+        accent = "#38bdf8"
+    else:
+        session_label = "After-Hours"
+        move_label = "After-Hours Move"
+        anchor_default = "16:00 Close"
+        accent = "#f59e0b"
+
+    company_name = safe_str(stock.get("company_name"), symbol)
+    exchange = safe_str(stock.get("exchange"), "")
+    score = safe_int(stock.get("score"), 0)
+    tier = safe_str(stock.get("tier"), "—")
+
+    price = safe_float(stock.get("extended_latest_price") or stock.get("price"), 0)
+    change_pct = safe_float(stock.get("extended_change_pct") or stock.get("change_pct"), 0)
+    change_class = "positive" if change_pct >= 0 else "negative"
+    change_sign = "+" if change_pct >= 0 else ""
+
+    price_source = safe_str(stock.get("price_source") or "Alpaca SIP Extended")
+    price_time = compact_time_et(stock.get("price_updated_at"))
+    price_meta_html = f'<div class="price-meta">{esc(price_source)}{(" · " + esc(price_time)) if price_time else ""}</div>'
+
+    anchor_label = safe_str(stock.get("extended_anchor_label"), anchor_default)
+    anchor_price = safe_float(stock.get("extended_anchor_price"), 0)
+    ext_volume = safe_float(stock.get("extended_volume"), 0)
+    ext_notional = safe_float(stock.get("extended_notional"), 0)
+    ext_high = safe_float(stock.get("extended_high"), 0)
+    ext_low = safe_float(stock.get("extended_low"), 0)
+    ext_bars = safe_int(stock.get("extended_bar_count"), 0)
+    bid = safe_float(stock.get("bid"), 0)
+    ask = safe_float(stock.get("ask"), 0)
+    spread = safe_float(stock.get("spread_pct"), 0)
+
+    spread_text = f"{spread:.1f}%" if spread > 0 else "—"
+    bid_ask_text = f"{format_price_dash(bid)} / {format_price_dash(ask)}" if bid > 0 or ask > 0 else "—"
+
+    tags_html = build_monitor_tags(stock)
+    if not tags_html:
+        tags_html = (
+            status_chip("MONITOR ONLY", "status-neutral")
+            + status_chip(session_label, "status-positive")
+        )
+
+    volume_class = "metric-good" if ext_volume >= 100_000 else "metric-ok" if ext_volume >= 10_000 else "metric-neutral"
+    notional_class = "metric-good" if ext_notional >= 1_000_000 else "metric-ok" if ext_notional >= 100_000 else "metric-neutral"
+    spread_class = "metric-good" if 0 < spread <= 3 else "metric-ok" if 0 < spread <= 8 else "metric-caution" if spread > 0 else "metric-neutral"
+
+    exchange_html = f'<span class="sector-chip">{esc(exchange)}</span>' if exchange else ""
+
+    return f"""
+    <div class="stock-card extended-monitor-card" id="{esc(card_id)}" style="--accent:{accent};">
+        <div class="card-top">
+            <div class="card-id">
+                <div class="symbol-row">
+                    <span class="symbol">{esc(symbol)}</span>
+                    {exchange_html}
+                    <span class="tier">Tier {esc(tier)}</span>
+                </div>
+                <div class="company-name">{esc(company_name)}</div>
+            </div>
+            <div class="price-box">
+                <div class="price">{format_price_dash(price)}</div>
+                {price_meta_html}
+                <div class="change {change_class}">{change_sign}{change_pct:.2f}%</div>
+            </div>
+        </div>
+
+        <div class="score-risk-row">
+            <span class="score-pill">Score {score}/100</span>
+            <span class="risk-pill">MONITOR ONLY</span>
+            <span class="sector-status-pill sector-neutral">{esc(session_label)}</span>
+        </div>
+
+        <div class="extended-move-strip">
+            <div>
+                <span>{esc(move_label)}</span>
+                <strong class="{change_class}">{change_sign}{change_pct:.2f}%</strong>
+            </div>
+            <div>
+                <span>{esc(anchor_label)}</span>
+                <strong>{format_price_dash(anchor_price)}</strong>
+            </div>
+            <div>
+                <span>Latest Extended</span>
+                <strong>{format_price_dash(price)}</strong>
+            </div>
+        </div>
+
+        <div class="metrics-grid extended-metrics">
+            <div><span>Ext Vol</span><strong class="{volume_class}">{format_compact_count(ext_volume)}</strong></div>
+            <div><span>Ext $</span><strong class="{notional_class}">{format_money_raw(ext_notional)}</strong></div>
+            <div><span>Spread</span><strong class="{spread_class}">{esc(spread_text)}</strong></div>
+            <div><span>Bars</span><strong class="metric-neutral">{ext_bars if ext_bars > 0 else "—"}</strong></div>
+        </div>
+
+        <div class="metrics-grid extended-metrics secondary">
+            <div><span>Ext High</span><strong>{format_price_dash(ext_high)}</strong></div>
+            <div><span>Ext Low</span><strong>{format_price_dash(ext_low)}</strong></div>
+            <div><span>Bid / Ask</span><strong>{esc(bid_ask_text)}</strong></div>
+            <div><span>Mode</span><strong>Monitor</strong></div>
+        </div>
+
+        <div class="interpretation extended-interpretation">
+            Monitor-only extended-hours mover. This does not affect Signal Desk, regular Potential Movers, Active Momentum, or trade execution.
+        </div>
+
+        <div class="tags-row">{tags_html}</div>
+
+        <div class="card-actions">
+            <a class="action-btn action-chart" href="https://www.tradingview.com/chart/?symbol={esc(symbol)}" target="_blank">
+                <img src="assets/tradingview.png" alt="TradingView"> Chart
+            </a>
+            <a class="action-btn action-yahoo" href="https://finance.yahoo.com/quote/{esc(symbol)}" target="_blank">
+                <img src="assets/yahoo.png" alt="Yahoo Finance"> Yahoo
+            </a>
+            <a class="action-btn action-twits" href="https://stocktwits.com/symbol/{esc(symbol)}" target="_blank">
+                <img src="assets/stocktwits.png" alt="Stocktwits"> Twits
+            </a>
+        </div>
+    </div>
+    """
+
+
 def build_section(title, subtitle, stocks, class_name, max_cards=10, signal_map=None, collapse_empty=False):
     count = len(stocks)
     signal_map = signal_map or {}
@@ -2155,7 +2354,7 @@ def build_monitor_movers_section(title, subtitle, stocks, class_name, max_cards=
     or Active Signal candidates from dashboard display.
     """
     count = len(stocks)
-    cards = "".join(build_card(s, signal=None) for s in stocks[:max_cards])
+    cards = "".join(build_monitor_mover_card(s) for s in stocks[:max_cards])
 
     if not cards:
         cards = f"""
@@ -4447,6 +4646,56 @@ body {
 
 .metric-risk {
     color: #f87171 !important;
+}
+
+
+.extended-monitor-card {
+    border-top-color: var(--accent);
+}
+
+.extended-move-strip {
+    margin-top: 12px;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px;
+    padding: 9px;
+    border-radius: 10px;
+    border: 1px solid rgba(148, 163, 184, 0.12);
+    background: rgba(2, 6, 23, 0.42);
+}
+
+.extended-move-strip div {
+    min-width: 0;
+}
+
+.extended-move-strip span {
+    display: block;
+    color: #94a3b8;
+    font-size: 10px;
+    margin-bottom: 2px;
+}
+
+.extended-move-strip strong {
+    color: #e5e7eb;
+    font-size: 12px;
+    font-weight: 800;
+}
+
+.extended-metrics.secondary {
+    margin-top: 8px;
+}
+
+.extended-interpretation {
+    border-color: rgba(245, 158, 11, 0.18);
+    background: rgba(245, 158, 11, 0.06);
+}
+
+.extended-monitor-card .sector-chip {
+    color: #cbd5e1;
+}
+
+.extended-monitor-card .tags-row {
+    margin-top: 10px;
 }
 
 .status-row {
