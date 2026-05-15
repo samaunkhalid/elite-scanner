@@ -2027,6 +2027,164 @@ def build_waiting_first_scanner_panel(status, scanner_time_label):
     """
 
 
+
+# ==============================================================
+# EXTENDED-HOURS MONITOR-ONLY DISPLAY
+# ==============================================================
+
+PREMARKET_DISPLAY_START_HOUR = 7
+PREMARKET_DISPLAY_START_MINUTE = 0
+PREMARKET_DISPLAY_END_HOUR = 9
+PREMARKET_DISPLAY_END_MINUTE = 29
+
+AFTER_HOURS_DISPLAY_START_HOUR = 16
+AFTER_HOURS_DISPLAY_START_MINUTE = 0
+AFTER_HOURS_DISPLAY_END_HOUR = 20
+AFTER_HOURS_DISPLAY_END_MINUTE = 0
+
+
+def minutes_of_day(dt):
+    return dt.hour * 60 + dt.minute
+
+
+def is_premarket_monitor_window(status, now_ny):
+    """
+    Pre-market monitor-only window.
+
+    Shows premarket_movers.csv/json from 07:00 through 09:29 ET.
+    This is display-only and never promotes names into Signal Desk.
+    """
+    status = safe_str(status).upper()
+    mins = minutes_of_day(now_ny)
+    start = PREMARKET_DISPLAY_START_HOUR * 60 + PREMARKET_DISPLAY_START_MINUTE
+    end = PREMARKET_DISPLAY_END_HOUR * 60 + PREMARKET_DISPLAY_END_MINUTE
+    return status == "PRE-MARKET" and start <= mins <= end
+
+
+def is_after_hours_monitor_window(status, now_ny):
+    """
+    After-hours monitor-only window.
+
+    Shows after_hours_movers.csv/json from 16:00 through 20:00 ET.
+    This is display-only and never promotes names into Signal Desk.
+    """
+    status = safe_str(status).upper()
+    mins = minutes_of_day(now_ny)
+    start = AFTER_HOURS_DISPLAY_START_HOUR * 60 + AFTER_HOURS_DISPLAY_START_MINUTE
+    end = AFTER_HOURS_DISPLAY_END_HOUR * 60 + AFTER_HOURS_DISPLAY_END_MINUTE
+    return status == "AFTER-HOURS" and start <= mins <= end
+
+
+def load_monitor_mover_records(csv_path, json_path=None, limit=12):
+    """
+    Load monitor-only pre-market / after-hours mover snapshots.
+
+    Runner writes these files after extended-hours scanner snapshots:
+      - premarket_movers.csv/json
+      - after_hours_movers.csv/json
+
+    CSV is preferred because it preserves the same card schema as the scanner.
+    JSON fallback supports either a list or common object wrappers.
+    """
+    rows = load_csv_records(csv_path, limit=limit)
+    if rows:
+        return rows
+
+    if not json_path or not os.path.exists(json_path):
+        return []
+
+    try:
+        with open(json_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+
+        if isinstance(data, list):
+            rows = data
+        elif isinstance(data, dict):
+            rows = (
+                data.get("movers")
+                or data.get("rows")
+                or data.get("symbols")
+                or data.get("data")
+                or []
+            )
+        else:
+            rows = []
+
+        rows = rows if isinstance(rows, list) else []
+        clean_rows = [r for r in rows if isinstance(r, dict)]
+        return clean_rows[:limit]
+    except Exception as e:
+        print(f"  ⚠ Failed to load monitor movers {json_path}: {e}")
+        return []
+
+
+def build_monitor_only_signal_panel(status, title, subtitle):
+    """
+    Signal Desk shell for pre-market / after-hours monitor windows.
+
+    Keeps execution logic visibly disabled while allowing the separate
+    monitor-only mover section to appear below.
+    """
+    return f"""
+    <section class="signal-desk-panel signal-desk-compact" id="signals">
+        <div class="signal-desk-top">
+            <div>
+                <strong>Signal Desk Disabled</strong>
+                <span>{esc(title)}</span>
+            </div>
+            <div class="signal-desk-counts">
+                <span><b>0</b> Active</span>
+                <span><b>0</b> Ready</span>
+                <span><b>0</b> Watch</span>
+            </div>
+        </div>
+        <div class="signal-desk-empty">
+            <strong>Market is {esc(status)}.</strong>
+            <span>{esc(subtitle)}</span>
+        </div>
+    </section>
+    """
+
+
+def build_monitor_movers_section(title, subtitle, stocks, class_name, max_cards=12):
+    """
+    Monitor-only mover section for pre-market and after-hours snapshots.
+
+    These cards are ranked/replaced inside their own section only.
+    They do not become Potential Movers, Active Momentum, Trigger Ready,
+    or Active Signal candidates from dashboard display.
+    """
+    count = len(stocks)
+    cards = "".join(build_card(s, signal=None) for s in stocks[:max_cards])
+
+    if not cards:
+        cards = f"""
+        <div class="empty-section compact-empty">
+            <strong>No monitor-only movers yet.</strong>
+            <span>{esc(subtitle)}</span>
+        </div>
+        """
+
+    return f"""
+    <section class="desk-section {esc(class_name)}">
+        <div class="section-header">
+            <div>
+                <h2>{esc(title)}</h2>
+                <p>{esc(subtitle)}</p>
+            </div>
+            <span class="section-count">{count}</span>
+        </div>
+        <div class="signal-desk-empty" style="margin-bottom:14px;">
+            <strong>Monitor Only</strong>
+            <span>These names are ranked/replaced only inside this extended-hours section. They do not affect Signal Desk, regular Potential Movers, Active Momentum, or trade execution.</span>
+        </div>
+        <div class="cards-grid">
+            {cards}
+        </div>
+    </section>
+    """
+
+
 # ==============================================================
 # SIGNAL DESK SHELL
 # ==============================================================
@@ -2893,6 +3051,8 @@ def build_dashboard(potential, active, extended, highrisk, raw, active_watchlist
     now_utc, now_ny = get_times()
     status, status_class = get_market_status(now_ny)
     market_open = is_regular_market_open(status)
+    premarket_monitor = is_premarket_monitor_window(status, now_ny)
+    after_hours_monitor = is_after_hours_monitor_window(status, now_ny)
 
     scanner_meta = load_scanner_meta()
     scanner_time_label = header_time_label(scanner_meta.get("scanner_generated_at_et"))
@@ -2907,6 +3067,9 @@ def build_dashboard(potential, active, extended, highrisk, raw, active_watchlist
     macro_html = build_macro_html(macro)
 
     scanner_regular_ready = scanner_data_is_regular_session_ready(now_ny, scanner_meta)
+
+    premarket_section = ""
+    afterhours_section = ""
 
     if market_open and scanner_regular_ready:
         signals = signal_payload.get("signals", [])
@@ -2966,12 +3129,87 @@ def build_dashboard(potential, active, extended, highrisk, raw, active_watchlist
             <a href="#desk">Table View</a>
         </div>
         """
+
+    elif premarket_monitor:
+        # Pre-market monitor-only display.
+        # Shows ranked/replaced extended-hours snapshot files only.
+        # Does not run or display Signal Desk execution logic.
+        movers = load_monitor_mover_records(
+            "premarket_movers.csv",
+            "premarket_movers.json",
+            limit=12,
+        )
+
+        signal_desk_html = build_monitor_only_signal_panel(
+            status,
+            "Pre-market monitor window",
+            "Pre-market movers are monitor-only. No entries before regular market open; wait at least 15–30 minutes after 09:30 ET before execution.",
+        )
+        signal_outcomes_html = ""
+        potential_section = ""
+        active_section = ""
+        desk_table = ""
+        sector_snapshot = build_sector_rotation_json_panel(load_sector_rotation_payload())
+
+        premarket_section = build_monitor_movers_section(
+            "Pre-Market Movers",
+            "Visible 07:00–09:29 ET. Monitor Only — No Entries Before Regular Market Open.",
+            movers,
+            "section-premarket",
+            max_cards=12,
+        )
+
+        nav_tabs = """
+        <div class="nav-tabs">
+            <a href="#signals">Signal Desk Disabled</a>
+            <a href="#premarket">Pre-Market Movers</a>
+            <a href="#sectors">Sector Rotation</a>
+        </div>
+        """
+
+    elif after_hours_monitor:
+        # After-hours monitor-only display.
+        # Shows ranked/replaced extended-hours snapshot files only.
+        # Does not run or display Signal Desk execution logic.
+        movers = load_monitor_mover_records(
+            "after_hours_movers.csv",
+            "after_hours_movers.json",
+            limit=12,
+        )
+
+        signal_desk_html = build_monitor_only_signal_panel(
+            status,
+            "After-hours monitor window",
+            "After-hours movers are monitor-only. No after-hours entries; use this section for next-session watchlist preparation.",
+        )
+        signal_outcomes_html = ""
+        potential_section = ""
+        active_section = ""
+        desk_table = ""
+        sector_snapshot = build_sector_rotation_json_panel(load_sector_rotation_payload())
+
+        afterhours_section = build_monitor_movers_section(
+            "After-Hours Movers",
+            "Visible 16:00–20:00 ET. Monitor Only — No After-Hours Entries.",
+            movers,
+            "section-afterhours",
+            max_cards=12,
+        )
+
+        nav_tabs = """
+        <div class="nav-tabs">
+            <a href="#signals">Signal Desk Disabled</a>
+            <a href="#afterhours">After-Hours Movers</a>
+            <a href="#sectors">Sector Rotation</a>
+        </div>
+        """
+
     else:
         # Hard display gate outside regular market hours OR before the first
         # valid 09:45+ regular-market scanner has completed.
         #
-        # This prevents 09:00/09:01 pre-market scanner output from becoming
-        # visible after the 09:30 dashboard-only OPEN refresh.
+        # This prevents stale pre-market / after-hours scanner output from
+        # appearing in regular market decision sections.
         if market_open:
             signal_desk_html = build_waiting_first_scanner_panel(status, scanner_time_label)
         else:
@@ -5083,8 +5321,10 @@ td small {
 
     $nav_tabs
 
+    <div id="premarket">$premarket_section</div>
     <div id="potential">$potential_section</div>
     <div id="active">$active_section</div>
+    <div id="afterhours">$afterhours_section</div>
     <div id="sectors">$sector_snapshot</div>
     $signal_outcomes_html
     <div id="desk">$desk_table</div>
@@ -5109,8 +5349,10 @@ td small {
         signal_desk_html=signal_desk_html,
         signal_outcomes_html=signal_outcomes_html,
         nav_tabs=nav_tabs,
+        premarket_section=premarket_section,
         potential_section=potential_section,
         active_section=active_section,
+        afterhours_section=afterhours_section,
         desk_table=desk_table,
     )
 
