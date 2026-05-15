@@ -18,14 +18,15 @@ This script intentionally does NOT:
   - modify regular scanner candidate files
   - use elite_scanner.py filters
 
-Default filters are intentionally relaxed for monitor-only discovery:
+Default filters are built for high-volume extended-hours breakout/continuation monitoring:
   - price range
   - listed exchange
-  - valid extended-hours trade/quote timestamp
-  - minimum extended-hours % move
-  - minimum extended-hours volume / notional
+  - fresh current extended-hours price
+  - minimum current extended-hours % move versus regular close
+  - minimum total and recent extended-hours volume/notional
   - minimum extended-hours bar count
-  - common-stock cleanup to remove warrants, units, rights and funds
+  - price-adjusted spread control
+  - common-stock cleanup to remove ETFs, warrants, units, rights, funds and similar products
 """
 
 from __future__ import annotations
@@ -51,7 +52,7 @@ except Exception:  # pragma: no cover
     ZoneInfo = None
 
 
-VERSION = "extended_hours_movers_v1.1_liquidity_quality"
+VERSION = "extended_hours_movers_v1.2_current_breakout_continuation"
 
 PROJECT_DIR = Path(os.getenv("ELITE_PROJECT_DIR", Path(__file__).resolve().parent)).resolve()
 
@@ -65,20 +66,30 @@ ASSET_CACHE_MAX_AGE_SECONDS = int(os.getenv("EXTENDED_ASSET_CACHE_MAX_AGE_SECOND
 MIN_PRICE = float(os.getenv("EXTENDED_MIN_PRICE", "1.00"))
 MAX_PRICE = float(os.getenv("EXTENDED_MAX_PRICE", "200.00"))
 
-PREMARKET_MIN_MOVE_PCT = float(os.getenv("PREMARKET_MIN_MOVE_PCT", "1.5"))
-AFTER_HOURS_MIN_MOVE_PCT = float(os.getenv("AFTER_HOURS_MIN_MOVE_PCT", "1.0"))
+PREMARKET_MIN_MOVE_PCT = float(os.getenv("PREMARKET_MIN_MOVE_PCT", "2.0"))
+AFTER_HOURS_MIN_MOVE_PCT = float(os.getenv("AFTER_HOURS_MIN_MOVE_PCT", "2.0"))
 
-MIN_EXTENDED_VOLUME = int(os.getenv("EXTENDED_MIN_VOLUME", "5000"))
-MIN_EXTENDED_NOTIONAL = float(os.getenv("EXTENDED_MIN_NOTIONAL", "50000"))
-# Quality gates for monitor-only extended-hours movers.
-# These are intentionally separate from the regular-market scanner filters.
-# They remove fake 1-share/2-share extended-hours prints without restoring
-# strict regular-session filters such as market cap, ATR, SMA, EPS, or earnings.
+# Extended-hours scanner goal:
+#   high-volume breakouts and continuations that are still active now.
+# It should NOT rank stale spike highs, single-print movers, or wide-spread names.
+MIN_EXTENDED_VOLUME = int(os.getenv("EXTENDED_MIN_VOLUME", "50000"))
+MIN_EXTENDED_NOTIONAL = float(os.getenv("EXTENDED_MIN_NOTIONAL", "500000"))
 ABSOLUTE_MIN_EXTENDED_VOLUME = int(os.getenv("EXTENDED_ABSOLUTE_MIN_VOLUME", "1000"))
-MIN_EXTENDED_BARS = int(os.getenv("EXTENDED_MIN_BARS", "2"))
-MAX_QUOTE_SPREAD_PCT = float(os.getenv("EXTENDED_MAX_SPREAD_PCT", "15.0"))
-ALLOW_HIGH_MOVE_BYPASS = os.getenv("EXTENDED_ALLOW_HIGH_MOVE_BYPASS", "0").strip().lower() in {"1", "true", "yes", "y"}
-HIGH_MOVE_BYPASS_PCT = float(os.getenv("EXTENDED_HIGH_MOVE_BYPASS_PCT", "999.0"))
+MIN_EXTENDED_BARS = int(os.getenv("EXTENDED_MIN_BARS", "3"))
+
+PREMARKET_MAX_STALE_MINUTES = float(os.getenv("PREMARKET_MAX_STALE_MINUTES", "10"))
+AFTER_HOURS_MAX_STALE_MINUTES = float(os.getenv("AFTER_HOURS_MAX_STALE_MINUTES", "15"))
+
+RECENT_10_MIN_VOLUME = int(os.getenv("EXTENDED_RECENT_10_MIN_VOLUME", "3000"))
+RECENT_20_MIN_VOLUME = int(os.getenv("EXTENDED_RECENT_20_MIN_VOLUME", "8000"))
+RECENT_20_MIN_NOTIONAL = float(os.getenv("EXTENDED_RECENT_20_MIN_NOTIONAL", "50000"))
+
+# Price-adjusted spread tolerance. Low-priced stocks can have wider percentage
+# spreads after-hours; higher-priced stocks must be tighter.
+MAX_SPREAD_UNDER_5 = float(os.getenv("EXTENDED_MAX_SPREAD_UNDER_5", "12.0"))
+MAX_SPREAD_UNDER_10 = float(os.getenv("EXTENDED_MAX_SPREAD_UNDER_10", "10.0"))
+MAX_SPREAD_10_PLUS = float(os.getenv("EXTENDED_MAX_SPREAD_10_PLUS", "8.0"))
+
 EXCLUDE_NON_COMMON_STOCKS = os.getenv("EXTENDED_EXCLUDE_NON_COMMON", "1").strip().lower() in {"1", "true", "yes", "y"}
 
 MAX_OUTPUT_ROWS = int(os.getenv("EXTENDED_MAX_OUTPUT_ROWS", "30"))
@@ -244,11 +255,24 @@ NON_COMMON_NAME_KEYWORDS = (
     "debenture",
     "debentures",
     "etf",
+    "etfs",
     "etn",
+    "etns",
     "exchange traded",
+    "exchange-traded",
     "closed-end fund",
     "closed end fund",
     "fund",
+    "funds",
+    "trust",
+    "leveraged",
+    "leverage shares",
+    "inverse",
+    "2x",
+    "3x",
+    "ultra",
+    "daily bull",
+    "daily bear",
 )
 
 
@@ -402,12 +426,28 @@ def write_json(path: Path, payload: Dict[str, Any]) -> None:
 
 def read_asset_cache(path: Path) -> List[Asset]:
     assets: List[Asset] = []
+    seen = set()
     try:
         with path.open("r", encoding="utf-8", newline="") as f:
             for row in csv.DictReader(f):
                 sym = clean_symbol(row.get("symbol"))
-                if sym:
-                    assets.append(Asset(sym, row.get("name", ""), row.get("exchange", "")))
+                if not sym or sym in seen:
+                    continue
+
+                name = str(row.get("name") or sym)
+                exchange = str(row.get("exchange") or "").strip().upper()
+
+                # Re-apply the current common-stock and exchange rules to cached
+                # assets. This prevents old cache files from keeping ETFs,
+                # warrants, units, or other non-common products after filters are
+                # tightened.
+                if not is_allowed_extended_asset(sym, name):
+                    continue
+                if exchange and exchange not in VALID_EXCHANGES:
+                    continue
+
+                seen.add(sym)
+                assets.append(Asset(sym, name, exchange))
     except Exception:
         return []
     return assets
@@ -555,13 +595,16 @@ def fetch_regular_close_anchors(symbols: Sequence[str], session: str, current: O
     return anchors
 
 
-def fetch_extended_bar_stats(symbols: Sequence[str], session: str, current: Optional[datetime] = None) -> Dict[str, Dict[str, float]]:
+def fetch_extended_bar_stats(symbols: Sequence[str], session: str, current: Optional[datetime] = None) -> Dict[str, Dict[str, Any]]:
     start_et, end_et = session_window(session, current)
     now = current or now_et()
     if start_et <= now <= end_et:
         end_et = now
 
-    stats: Dict[str, Dict[str, float]] = {}
+    recent_10_start = now - timedelta(minutes=10)
+    recent_20_start = now - timedelta(minutes=20)
+
+    stats: Dict[str, Dict[str, Any]] = {}
 
     for group in chunks(list(symbols), BAR_CHUNK_SIZE):
         try:
@@ -589,9 +632,14 @@ def fetch_extended_bar_stats(symbols: Sequence[str], session: str, current: Opti
         for sym in group:
             total_vol = 0
             total_notional = 0.0
+            recent_10_vol = 0
+            recent_10_notional = 0.0
+            recent_20_vol = 0
+            recent_20_notional = 0.0
             high = 0.0
             low = 0.0
             latest_close = 0.0
+            latest_bar_time: Optional[datetime] = None
             bars_seen = 0
 
             for bar in bars_by_symbol.get(sym, []) or []:
@@ -606,17 +654,28 @@ def fetch_extended_bar_stats(symbols: Sequence[str], session: str, current: Opti
                 l = safe_float(bar.get("l") or bar.get("low"), c)
                 v = safe_int(bar.get("v") or bar.get("volume"), 0)
                 vw = safe_float(bar.get("vw") or bar.get("vwap"), c)
+                px_for_notional = vw if vw > 0 else c
+                notional = max(0, v) * px_for_notional
 
-                if c > 0:
+                if c > 0 and (latest_bar_time is None or ts is not None and ts >= latest_bar_time):
                     latest_close = c
+                    latest_bar_time = ts
+
                 if h > 0:
                     high = max(high, h)
                 if l > 0:
                     low = l if low <= 0 else min(low, l)
 
                 total_vol += max(0, v)
-                total_notional += max(0, v) * (vw if vw > 0 else c)
+                total_notional += notional
                 bars_seen += 1
+
+                if ts is not None and ts >= recent_10_start:
+                    recent_10_vol += max(0, v)
+                    recent_10_notional += notional
+                if ts is not None and ts >= recent_20_start:
+                    recent_20_vol += max(0, v)
+                    recent_20_notional += notional
 
             if bars_seen:
                 stats[sym] = {
@@ -625,27 +684,55 @@ def fetch_extended_bar_stats(symbols: Sequence[str], session: str, current: Opti
                     "extended_high": high,
                     "extended_low": low,
                     "extended_latest_bar_close": latest_close,
+                    "extended_latest_bar_time": latest_bar_time.isoformat(timespec="seconds") if latest_bar_time else "",
                     "extended_bar_count": float(bars_seen),
+                    "recent_10_min_volume": float(recent_10_vol),
+                    "recent_10_min_notional": float(recent_10_notional),
+                    "recent_20_min_volume": float(recent_20_vol),
+                    "recent_20_min_notional": float(recent_20_notional),
                 }
 
     return stats
 
-
-def latest_price_from_snapshot(snapshot: Dict[str, Any], session: str, current: Optional[datetime] = None) -> Tuple[float, str, Optional[datetime], int, float, float]:
+def snapshot_price_candidates(snapshot: Dict[str, Any], session: str, current: Optional[datetime] = None) -> List[Dict[str, Any]]:
     """
-    Return latest extended-hours price and source.
+    Return extended-hours price candidates from the Alpaca snapshot.
 
-    Prefer latest trade inside the extended-hours window. If unavailable, use
-    quote midpoint inside the window. This improves recall for thin movers
-    while keeping the timestamp gate strict.
+    These are used for broad recall and as fallback if the explicit 1-minute
+    extended bar request has no fresh bar. Final ranking still recalculates the
+    move from the freshest valid current price.
     """
+    out: List[Dict[str, Any]] = []
+
+    minute = snapshot.get("minuteBar") or snapshot.get("minute_bar") or {}
+    if isinstance(minute, dict):
+        price = safe_float(minute.get("c") or minute.get("close"), 0.0)
+        ts = parse_ts_to_et(minute.get("t") or minute.get("timestamp"))
+        vol = safe_int(minute.get("v") or minute.get("volume"), 0)
+        if price > 0 and in_session_window(ts, session, current):
+            out.append({
+                "price": price,
+                "source": "snapshot_minute_bar",
+                "timestamp": ts,
+                "size": vol,
+                "bid": 0.0,
+                "ask": 0.0,
+            })
+
     trade = snapshot.get("latestTrade") or snapshot.get("latest_trade") or {}
     if isinstance(trade, dict):
         price = safe_float(trade.get("p") or trade.get("price"), 0.0)
         ts = parse_ts_to_et(trade.get("t") or trade.get("timestamp"))
         size = safe_int(trade.get("s") or trade.get("size"), 0)
         if price > 0 and in_session_window(ts, session, current):
-            return price, "latest_trade", ts, size, 0.0, 0.0
+            out.append({
+                "price": price,
+                "source": "latest_trade",
+                "timestamp": ts,
+                "size": size,
+                "bid": 0.0,
+                "ask": 0.0,
+            })
 
     quote = snapshot.get("latestQuote") or snapshot.get("latest_quote") or {}
     if isinstance(quote, dict):
@@ -654,18 +741,37 @@ def latest_price_from_snapshot(snapshot: Dict[str, Any], session: str, current: 
         ts = parse_ts_to_et(quote.get("t") or quote.get("timestamp"))
         if bid > 0 and ask > 0 and ask >= bid and in_session_window(ts, session, current):
             mid = (bid + ask) / 2.0
-            return mid, "quote_mid", ts, 0, bid, ask
+            out.append({
+                "price": mid,
+                "source": "quote_mid",
+                "timestamp": ts,
+                "size": 0,
+                "bid": bid,
+                "ask": ask,
+            })
 
-    minute = snapshot.get("minuteBar") or snapshot.get("minute_bar") or {}
-    if isinstance(minute, dict):
-        price = safe_float(minute.get("c") or minute.get("close"), 0.0)
-        ts = parse_ts_to_et(minute.get("t") or minute.get("timestamp"))
-        vol = safe_int(minute.get("v") or minute.get("volume"), 0)
-        if price > 0 and in_session_window(ts, session, current):
-            return price, "minute_bar", ts, vol, 0.0, 0.0
+    out.sort(key=lambda item: item["timestamp"] or datetime.min.replace(tzinfo=et_tz()), reverse=True)
+    return out
 
+
+def latest_price_from_snapshot(snapshot: Dict[str, Any], session: str, current: Optional[datetime] = None) -> Tuple[float, str, Optional[datetime], int, float, float]:
+    """
+    Return the freshest valid extended-hours snapshot price.
+
+    This is only a fallback/rough-selection helper. The validation pass prefers
+    explicit extended-hours 1-minute bar close if a fresh bar exists.
+    """
+    for item in snapshot_price_candidates(snapshot, session, current):
+        if is_fresh_ts(item.get("timestamp"), session, current):
+            return (
+                safe_float(item.get("price"), 0.0),
+                str(item.get("source") or ""),
+                item.get("timestamp"),
+                safe_int(item.get("size"), 0),
+                safe_float(item.get("bid"), 0.0),
+                safe_float(item.get("ask"), 0.0),
+            )
     return 0.0, "", None, 0, 0.0, 0.0
-
 
 def snapshot_prev_close(snapshot: Dict[str, Any]) -> float:
     prev = snapshot.get("prevDailyBar") or snapshot.get("prev_daily_bar") or {}
@@ -685,6 +791,36 @@ def spread_pct(bid: float, ask: float, price: float) -> float:
     if bid <= 0 or ask <= 0 or price <= 0 or ask < bid:
         return 0.0
     return ((ask - bid) / price) * 100.0
+
+
+def max_spread_pct_for_price(price: float) -> float:
+    if price < 5:
+        return MAX_SPREAD_UNDER_5
+    if price < 10:
+        return MAX_SPREAD_UNDER_10
+    return MAX_SPREAD_10_PLUS
+
+
+def max_stale_minutes_for_session(session: str) -> float:
+    if str(session).lower() == "premarket":
+        return PREMARKET_MAX_STALE_MINUTES
+    return AFTER_HOURS_MAX_STALE_MINUTES
+
+
+def age_minutes(ts: Optional[datetime], current: Optional[datetime] = None) -> Optional[float]:
+    if ts is None:
+        return None
+    current = current or now_et()
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=et_tz())
+    return max(0.0, (current - ts.astimezone(et_tz())).total_seconds() / 60.0)
+
+
+def is_fresh_ts(ts: Optional[datetime], session: str, current: Optional[datetime] = None) -> bool:
+    age = age_minutes(ts, current)
+    if age is None:
+        return False
+    return age <= max_stale_minutes_for_session(session)
 
 
 def score_mover(change_pct: float, volume: float, notional: float, spread: float) -> int:
@@ -726,13 +862,23 @@ def tier_for_score(score: int) -> int:
     return 4
 
 
-def passes_liquidity(change_pct: float, volume: float, notional: float, bar_count: int) -> Tuple[bool, str]:
+def passes_liquidity(
+    change_pct: float,
+    volume: float,
+    notional: float,
+    bar_count: int,
+    recent_10_volume: float,
+    recent_20_volume: float,
+    recent_20_notional: float,
+) -> Tuple[bool, str]:
     """
-    Extended-hours quality gate.
+    Extended-hours quality gate for high-volume breakouts/continuations.
 
-    This is deliberately NOT the regular scanner quality filter. It only removes
-    fake extended-hours prints caused by 1-share/2-share trades, single-bar spikes,
-    and near-zero notional movers.
+    This is deliberately NOT the regular scanner quality filter. It removes:
+      - single-print spikes
+      - stale moves with no current participation
+      - low-volume fake movers
+      - names without meaningful extended-hours notional
     """
     if bar_count < MIN_EXTENDED_BARS:
         return False, "too_few_extended_bars"
@@ -740,13 +886,63 @@ def passes_liquidity(change_pct: float, volume: float, notional: float, bar_coun
     if volume < ABSOLUTE_MIN_EXTENDED_VOLUME:
         return False, "absolute_volume_too_low"
 
-    if ALLOW_HIGH_MOVE_BYPASS and change_pct >= HIGH_MOVE_BYPASS_PCT and volume >= ABSOLUTE_MIN_EXTENDED_VOLUME:
-        return True, "high_move_bypass"
+    if volume < MIN_EXTENDED_VOLUME:
+        return False, "total_volume_too_low"
 
-    if volume >= MIN_EXTENDED_VOLUME or notional >= MIN_EXTENDED_NOTIONAL:
-        return True, "passed"
+    if notional < MIN_EXTENDED_NOTIONAL:
+        return False, "total_notional_too_low"
 
-    return False, "liquidity_too_low"
+    if not (recent_10_volume >= RECENT_10_MIN_VOLUME or recent_20_volume >= RECENT_20_MIN_VOLUME):
+        return False, "recent_volume_too_low"
+
+    if recent_20_notional < RECENT_20_MIN_NOTIONAL:
+        return False, "recent_notional_too_low"
+
+    return True, "passed"
+
+def resolve_current_extended_price(
+    symbol: str,
+    snapshot_row: Dict[str, Any],
+    stats: Dict[str, Any],
+    session: str,
+    current: Optional[datetime] = None,
+) -> Tuple[float, str, Optional[datetime], float, float]:
+    """
+    Resolve the current extended-hours price used for ranking.
+
+    Priority:
+      1. Fresh explicit 1-minute extended bar close from /v2/stocks/bars.
+      2. Fresh latest trade/minute-bar snapshot fallback.
+      3. Fresh quote midpoint only if the spread is acceptable.
+
+    Never use the extended-hours high as the current price.
+    """
+    current = current or now_et()
+
+    latest_bar_close = safe_float(stats.get("extended_latest_bar_close"), 0.0)
+    latest_bar_time = parse_ts_to_et(stats.get("extended_latest_bar_time"))
+
+    if latest_bar_close > 0 and is_fresh_ts(latest_bar_time, session, current):
+        return latest_bar_close, "extended_bar_close", latest_bar_time, 0.0, 0.0
+
+    latest = safe_float(snapshot_row.get("latest_price"), 0.0)
+    latest_ts = snapshot_row.get("latest_time")
+    if isinstance(latest_ts, str):
+        latest_ts = parse_ts_to_et(latest_ts)
+
+    bid = safe_float(snapshot_row.get("bid"), 0.0)
+    ask = safe_float(snapshot_row.get("ask"), 0.0)
+    source = str(snapshot_row.get("price_source_detail") or "")
+
+    if latest > 0 and is_fresh_ts(latest_ts, session, current):
+        if source == "quote_mid":
+            spr = spread_pct(bid, ask, latest)
+            if spr > 0 and spr <= max_spread_pct_for_price(latest):
+                return latest, source, latest_ts, bid, ask
+        else:
+            return latest, source, latest_ts, bid, ask
+
+    return 0.0, "", None, 0.0, 0.0
 
 
 def build_movers(session: str) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
@@ -841,7 +1037,15 @@ def build_movers(session: str) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
 
     for r in validation_pool:
         symbol = str(r["symbol"])
-        latest = safe_float(r["latest_price"], 0.0)
+        stats = bar_stats.get(symbol, {})
+        latest, price_source_detail, latest_ts, bid, ask = resolve_current_extended_price(
+            symbol,
+            r,
+            stats,
+            session,
+            current,
+        )
+
         anchor = close_anchors.get(symbol, 0.0) if session == "afterhours" else safe_float(r["anchor_price"], 0.0)
         anchor_label = "regular_16_close" if session == "afterhours" and anchor > 0 else str(r["anchor_label"])
 
@@ -849,16 +1053,25 @@ def build_movers(session: str) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
             anchor = safe_float(r["anchor_price"], 0.0)
 
         if latest <= 0 or anchor <= 0:
+            skipped_no_price += 1
+            continue
+
+        if latest < MIN_PRICE or latest > MAX_PRICE:
+            skipped_price_range += 1
             continue
 
         change = ((latest - anchor) / anchor) * 100.0
         if change < min_move:
+            skipped_below_move += 1
             continue
 
-        stats = bar_stats.get(symbol, {})
         ext_volume = safe_float(stats.get("extended_volume"), 0.0)
         ext_notional = safe_float(stats.get("extended_notional"), 0.0)
         ext_bar_count = int(safe_float(stats.get("extended_bar_count"), 0.0))
+        recent_10_volume = safe_float(stats.get("recent_10_min_volume"), 0.0)
+        recent_10_notional = safe_float(stats.get("recent_10_min_notional"), 0.0)
+        recent_20_volume = safe_float(stats.get("recent_20_min_volume"), 0.0)
+        recent_20_notional = safe_float(stats.get("recent_20_min_notional"), 0.0)
 
         # If bar volume is missing but latest trade has size, preserve a minimal
         # datapoint for diagnostics, but do not allow it to bypass the minimum
@@ -868,7 +1081,15 @@ def build_movers(session: str) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
             ext_volume = float(latest_size)
             ext_notional = float(latest_size) * latest
 
-        liquidity_ok, liquidity_reason = passes_liquidity(change, ext_volume, ext_notional, ext_bar_count)
+        liquidity_ok, liquidity_reason = passes_liquidity(
+            change,
+            ext_volume,
+            ext_notional,
+            ext_bar_count,
+            recent_10_volume,
+            recent_20_volume,
+            recent_20_notional,
+        )
         if not liquidity_ok:
             if liquidity_reason == "too_few_extended_bars":
                 skipped_too_few_bars += 1
@@ -878,14 +1099,10 @@ def build_movers(session: str) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
                 skipped_liquidity += 1
             continue
 
-        bid = safe_float(r.get("bid"), 0.0)
-        ask = safe_float(r.get("ask"), 0.0)
         spr = spread_pct(bid, ask, latest)
+        max_allowed_spread = max_spread_pct_for_price(latest)
 
-        # Quote-only candidates with very wide spreads are usually bad
-        # extended-hours display names. Latest-trade candidates are not rejected
-        # by spread unless a usable quote exists and is extreme.
-        if spr > MAX_QUOTE_SPREAD_PCT:
+        if spr > 0 and spr > max_allowed_spread:
             skipped_wide_spread += 1
             continue
 
@@ -903,7 +1120,6 @@ def build_movers(session: str) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
         if spr > 0:
             tags.append(f"Spread {spr:.1f}%")
 
-        latest_ts = r.get("latest_time")
         latest_iso = latest_ts.isoformat(timespec="seconds") if isinstance(latest_ts, datetime) else ""
 
         row = {
@@ -921,7 +1137,9 @@ def build_movers(session: str) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
             "monitor_only": "true",
             "execution_allowed": "false",
             "price_source": f"Alpaca {DATA_FEED.upper()} Extended",
+            "price_source_detail": price_source_detail,
             "price_updated_at": latest_iso or generated,
+            "latest_age_minutes": round(age_minutes(latest_ts, current) or 0.0, 2),
             "extended_anchor_label": anchor_label,
             "extended_anchor_price": round(anchor, 4),
             "extended_latest_price": round(latest, 4),
@@ -931,9 +1149,14 @@ def build_movers(session: str) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
             "extended_high": round(safe_float(stats.get("extended_high"), 0.0), 4),
             "extended_low": round(safe_float(stats.get("extended_low"), 0.0), 4),
             "extended_bar_count": ext_bar_count,
+            "recent_10_min_volume": int(recent_10_volume),
+            "recent_10_min_notional": round(recent_10_notional, 2),
+            "recent_20_min_volume": int(recent_20_volume),
+            "recent_20_min_notional": round(recent_20_notional, 2),
             "bid": round(bid, 4) if bid else "",
             "ask": round(ask, 4) if ask else "",
             "spread_pct": round(spr, 2) if spr else "",
+            "max_allowed_spread_pct": round(max_allowed_spread, 2),
             "dollar_vol_M": round(ext_notional / 1_000_000, 3),
             "atr_pct": 0.0,
             "vwap_dist_pct": 0.0,
@@ -970,10 +1193,15 @@ def build_movers(session: str) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
         "min_extended_notional": MIN_EXTENDED_NOTIONAL,
         "absolute_min_extended_volume": ABSOLUTE_MIN_EXTENDED_VOLUME,
         "min_extended_bars": MIN_EXTENDED_BARS,
-        "max_quote_spread_pct": MAX_QUOTE_SPREAD_PCT,
+        "premarket_max_stale_minutes": PREMARKET_MAX_STALE_MINUTES,
+        "after_hours_max_stale_minutes": AFTER_HOURS_MAX_STALE_MINUTES,
+        "recent_10_min_volume": RECENT_10_MIN_VOLUME,
+        "recent_20_min_volume": RECENT_20_MIN_VOLUME,
+        "recent_20_min_notional": RECENT_20_MIN_NOTIONAL,
+        "max_spread_under_5": MAX_SPREAD_UNDER_5,
+        "max_spread_under_10": MAX_SPREAD_UNDER_10,
+        "max_spread_10_plus": MAX_SPREAD_10_PLUS,
         "exclude_non_common_stocks": EXCLUDE_NON_COMMON_STOCKS,
-        "allow_high_move_bypass": ALLOW_HIGH_MOVE_BYPASS,
-        "high_move_bypass_pct": HIGH_MOVE_BYPASS_PCT,
         "skipped_no_snapshot": skipped_no_snapshot,
         "skipped_no_price": skipped_no_price,
         "skipped_price_range": skipped_price_range,
@@ -984,9 +1212,9 @@ def build_movers(session: str) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
         "skipped_absolute_volume": skipped_absolute_volume,
         "skipped_wide_spread": skipped_wide_spread,
         "ranking_method": (
-            "latest pre-market trade/quote vs previous regular close"
+            "fresh current extended price vs previous regular close; high-volume breakout/continuation"
             if session == "premarket"
-            else "latest after-hours trade/quote vs regular 16:00 close"
+            else "fresh current extended price vs regular 16:00 close; high-volume breakout/continuation"
         ),
     }
 
