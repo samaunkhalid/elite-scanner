@@ -4915,7 +4915,7 @@ td small {
 </head>
 <body>
 
-<a class="floating-top" href="#top" title="Back to top">Top ↑</a>
+<a class="floating-top" href="javascript:void(0)" onclick="window.scrollTo({top:0,left:0,behavior:'smooth'});" title="Back to top">Top ↑</a>
 
 <header class="header" id="top">
     <div class="header-inner">
