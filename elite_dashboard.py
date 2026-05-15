@@ -1768,6 +1768,207 @@ def build_sector_snapshot(raw, focus_rows, regime):
     
     """
 
+
+def load_sector_rotation_payload():
+    """
+    Load standalone sector_rotation.py output.
+
+    Phase A rule:
+      - Display only.
+      - Does not affect scanner ranking, Signal Desk decisions, or Smart Money.
+    """
+    return load_json_object("sector_rotation.json", default={})
+
+
+def sector_rotation_rank_change_html(value):
+    change = safe_int(value, 0)
+    if change > 0:
+        return f'<span class="rank-change rank-up">↑ {change}</span>'
+    if change < 0:
+        return f'<span class="rank-change rank-down">↓ {abs(change)}</span>'
+    return '<span class="rank-change rank-flat">0</span>'
+
+
+def sector_rotation_label_class(label):
+    text = safe_str(label, "").lower()
+    if "strong" in text:
+        return "rotation-strong"
+    if "supportive" in text:
+        return "rotation-supportive"
+    if "weak" in text or "rotation out" in text:
+        return "rotation-weak"
+    if "soft" in text or "fading" in text:
+        return "rotation-soft"
+    return "rotation-neutral"
+
+
+def sector_rotation_volume_class(status):
+    text = safe_str(status, "").lower()
+    if "high volume" in text:
+        return "volume-confirmed"
+    if "low volume" in text:
+        return "volume-warning"
+    return "volume-normal"
+
+
+def pct_cell(value, show_sign=True):
+    val = safe_float(value, 0)
+    cls = "positive" if val >= 0 else "negative"
+    sign = "+" if show_sign and val >= 0 else ""
+    return f'<span class="{cls}">{sign}{val:.2f}%</span>'
+
+
+def build_sector_rotation_json_panel(payload):
+    """
+    Display-only sector rotation panel from sector_rotation.json.
+
+    This panel intentionally does not influence Signal Desk, scanner ranking,
+    Smart Money, or any trade decision. It is visual context only.
+    """
+    if not isinstance(payload, dict) or not payload:
+        return """
+        <section class="sector-snapshot sector-rotation-panel">
+            <div class="section-header">
+                <div>
+                    <h2>Sector Rotation</h2>
+                    <p>Standalone SIP sector rotation has not been generated yet. Run sector_rotation.py during FULL_SCANNER.</p>
+                </div>
+            </div>
+            <div class="empty-section compact-empty">
+                <strong>No sector_rotation.json found.</strong>
+                <span>Sector rotation display is waiting for the standalone Phase A output file.</span>
+            </div>
+        </section>
+        """
+
+    ranked = payload.get("ranked", []) or []
+    benchmarks = payload.get("benchmarks", {}) if isinstance(payload.get("benchmarks"), dict) else {}
+    errors = payload.get("errors", []) or []
+
+    generated = full_datetime_et_label(payload.get("generated_at_et"), "")
+    feed = safe_str(payload.get("feed"), "sip").upper()
+    market_phase = safe_str(payload.get("market_phase"), "UNKNOWN")
+    data_source = safe_str(payload.get("data_source"), "Alpaca SIP")
+
+    benchmark_bits = []
+    for symbol in ["SPY", "QQQ", "IWM"]:
+        row = benchmarks.get(symbol)
+        if not isinstance(row, dict):
+            continue
+        benchmark_bits.append(
+            f'<span>{esc(symbol)} {pct_cell(row.get("change_pct"))} '
+            f'<em>VWAP {safe_float(row.get("vwap_dist_pct"), 0):+.2f}%</em></span>'
+        )
+    benchmark_html = "".join(benchmark_bits) or '<span>Benchmarks unavailable</span>'
+
+    error_html = ""
+    if errors:
+        visible_errors = " | ".join(safe_str(e) for e in errors[:4])
+        error_html = f"""
+        <div class="sector-rotation-warning">
+            <strong>Warnings:</strong> {esc(visible_errors)}
+        </div>
+        """
+
+    if not ranked:
+        return f"""
+        <section class="sector-snapshot sector-rotation-panel">
+            <div class="section-header">
+                <div>
+                    <h2>Sector Rotation</h2>
+                    <p>Display-only SIP sector context. Feed: {esc(feed)} · Phase: {esc(market_phase)}{(" · " + esc(generated)) if generated else ""}</p>
+                </div>
+            </div>
+            <div class="rotation-benchmarks">{benchmark_html}</div>
+            {error_html}
+            <div class="empty-section compact-empty">
+                <strong>No ranked sector rows available.</strong>
+                <span>sector_rotation.json exists, but no sector ETF rows were produced.</span>
+            </div>
+        </section>
+        """
+
+    html_rows = ""
+
+    for row in ranked[:20]:
+        symbol = safe_str(row.get("symbol"), "—").upper()
+        sector_name = safe_str(row.get("sector_name"), symbol)
+        rank = safe_int(row.get("rank"), 0)
+        rank_change = sector_rotation_rank_change_html(row.get("rank_change"))
+        label = safe_str(row.get("rotation_label"), "Neutral")
+        trend = safe_str(row.get("rotation_trend"), "Stable")
+        volume_status = safe_str(row.get("volume_status"), "Normal Volume")
+        label_cls = sector_rotation_label_class(label)
+        trend_cls = sector_rotation_label_class(trend)
+        vol_cls = sector_rotation_volume_class(volume_status)
+
+        html_rows += f"""
+        <tr>
+            <td><strong>#{rank}</strong></td>
+            <td>{rank_change}</td>
+            <td><strong>{esc(symbol)}</strong><br><small>{esc(sector_name)}</small></td>
+            <td>{pct_cell(row.get("change_pct"))}</td>
+            <td>{pct_cell(row.get("vs_spy_pct"))}</td>
+            <td>{pct_cell(row.get("vs_qqq_pct"))}</td>
+            <td>{pct_cell(row.get("change_15m_pct"))}</td>
+            <td>{pct_cell(row.get("change_30m_pct"))}</td>
+            <td>{pct_cell(row.get("change_60m_pct"))}</td>
+            <td>{pct_cell(row.get("vwap_dist_pct"))}</td>
+            <td>{pct_cell(row.get("hod_distance_pct"))}</td>
+            <td><span class="volume-pill {vol_cls}">{safe_float(row.get("volume_ratio"), 0):.2f}x · {esc(volume_status)}</span></td>
+            <td><span class="rotation-pill {label_cls}">{esc(label)}</span></td>
+            <td><span class="rotation-pill {trend_cls}">{esc(trend)}</span></td>
+        </tr>
+        """
+
+    return f"""
+    <section class="sector-snapshot sector-rotation-panel">
+        <div class="section-header">
+            <div>
+                <h2>Sector Rotation</h2>
+                <p>Display-only SIP sector context. Does not change Smart Money, scanner ranking, or Signal Desk decisions.</p>
+            </div>
+        </div>
+
+        <div class="sector-rotation-meta">
+            <span>Source <strong>{esc(data_source)}</strong></span>
+            <span>Feed <strong>{esc(feed)}</strong></span>
+            <span>Phase <strong>{esc(market_phase)}</strong></span>
+            {f'<span>Generated <strong>{esc(generated)}</strong></span>' if generated else ''}
+        </div>
+
+        <div class="rotation-benchmarks">
+            {benchmark_html}
+        </div>
+
+        {error_html}
+
+        <div class="table-wrap compact-table sector-rotation-table">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Rank</th>
+                        <th>Change</th>
+                        <th>ETF / Sector</th>
+                        <th>Session</th>
+                        <th>Vs SPY</th>
+                        <th>Vs QQQ</th>
+                        <th>15m</th>
+                        <th>30m</th>
+                        <th>60m</th>
+                        <th>VWAP</th>
+                        <th>HOD Dist</th>
+                        <th>Volume</th>
+                        <th>Label</th>
+                        <th>Trend</th>
+                    </tr>
+                </thead>
+                <tbody>{html_rows}</tbody>
+            </table>
+        </div>
+    </section>
+    """
+
 def build_desk_table(rows):
     if not rows:
         return ""
@@ -2880,7 +3081,7 @@ def build_dashboard(potential, active, extended, highrisk, raw, active_watchlist
         focus_rows.extend(potential[:12])
         focus_rows.extend(active[:8])
 
-        sector_snapshot = build_sector_snapshot(raw, focus_rows, regime)
+        sector_snapshot = build_sector_rotation_json_panel(load_sector_rotation_payload())
 
         potential_section = build_section(
             "Primary Focus — Potential Movers",
@@ -3935,6 +4136,98 @@ body {
 }
 
 
+
+.sector-rotation-meta,
+.rotation-benchmarks {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-bottom: 10px;
+}
+
+.sector-rotation-meta span,
+.rotation-benchmarks span {
+    border: 1px solid rgba(148, 163, 184, 0.12);
+    background: rgba(15, 23, 42, 0.68);
+    border-radius: 999px;
+    padding: 6px 10px;
+    color: #94a3b8;
+    font-size: 11px;
+    line-height: 1.35;
+}
+
+.sector-rotation-meta strong,
+.rotation-benchmarks strong {
+    color: #e5e7eb;
+}
+
+.rotation-benchmarks em {
+    color: #94a3b8;
+    font-style: normal;
+    margin-left: 4px;
+}
+
+.rank-change,
+.volume-pill {
+    display: inline-flex;
+    align-items: center;
+    white-space: nowrap;
+    border-radius: 999px;
+    padding: 4px 8px;
+    font-size: 10px;
+    font-weight: 750;
+    border: 1px solid rgba(148, 163, 184, 0.16);
+    background: rgba(148, 163, 184, 0.07);
+}
+
+.rank-up {
+    color: #34d399;
+    border-color: rgba(16, 185, 129, 0.30);
+    background: rgba(16, 185, 129, 0.10);
+}
+
+.rank-down {
+    color: #f87171;
+    border-color: rgba(239, 68, 68, 0.30);
+    background: rgba(239, 68, 68, 0.10);
+}
+
+.rank-flat {
+    color: #94a3b8;
+}
+
+.volume-confirmed {
+    color: #34d399;
+    border-color: rgba(16, 185, 129, 0.30);
+    background: rgba(16, 185, 129, 0.10);
+}
+
+.volume-warning {
+    color: #fbbf24;
+    border-color: rgba(245, 158, 11, 0.30);
+    background: rgba(245, 158, 11, 0.10);
+}
+
+.volume-normal {
+    color: #cbd5e1;
+}
+
+.sector-rotation-warning {
+    margin-bottom: 10px;
+    border-radius: 10px;
+    padding: 9px 11px;
+    border: 1px solid rgba(245, 158, 11, 0.22);
+    background: rgba(245, 158, 11, 0.08);
+    color: #fde68a;
+    font-size: 11px;
+    line-height: 1.4;
+}
+
+.sector-rotation-table table {
+    min-width: 1180px;
+}
+
+
 .sector-strip {
     margin-top: 11px;
     display: flex;
@@ -4915,7 +5208,7 @@ td small {
 </head>
 <body>
 
-<a class="floating-top" href="javascript:void(0)" onclick="window.scrollTo({top:0,left:0,behavior:'smooth'});" title="Back to top">Top ↑</a>
+<a class="floating-top" href="#top" onclick="window.scrollTo({top:0,left:0,behavior:'smooth'}); return false;" title="Back to top">Top ↑</a>
 
 <header class="header" id="top">
     <div class="header-inner">
