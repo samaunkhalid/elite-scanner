@@ -3143,7 +3143,7 @@ def build_dashboard(potential, active, extended, highrisk, raw, active_watchlist
         signal_desk_html = build_monitor_only_signal_panel(
             status,
             "Pre-market monitor window",
-            "Pre-market movers are monitor-only. No entries before regular market open; wait at least 15–30 minutes after 09:30 ET before execution.",
+            "Pre-market movers are ranked by latest pre-market price versus the previous regular close. Monitor only — no entries before regular market open; wait at least 15–30 minutes after 09:30 ET before execution.",
         )
         signal_outcomes_html = ""
         potential_section = ""
@@ -3153,7 +3153,7 @@ def build_dashboard(potential, active, extended, highrisk, raw, active_watchlist
 
         premarket_section = build_monitor_movers_section(
             "Pre-Market Movers",
-            "Visible 07:00–09:29 ET. Monitor Only — No Entries Before Regular Market Open.",
+            "Visible 07:00–09:29 ET. Ranked by latest pre-market price vs previous regular close. Monitor Only — No Entries Before Regular Market Open.",
             movers,
             "section-premarket",
             max_cards=12,
@@ -3180,7 +3180,7 @@ def build_dashboard(potential, active, extended, highrisk, raw, active_watchlist
         signal_desk_html = build_monitor_only_signal_panel(
             status,
             "After-hours monitor window",
-            "After-hours movers are monitor-only. No after-hours entries; use this section for next-session watchlist preparation.",
+            "After-hours movers are ranked by latest after-hours price versus the regular 16:00 close. Monitor only — no after-hours entries; use this section for next-session watchlist preparation.",
         )
         signal_outcomes_html = ""
         potential_section = ""
@@ -3190,7 +3190,7 @@ def build_dashboard(potential, active, extended, highrisk, raw, active_watchlist
 
         afterhours_section = build_monitor_movers_section(
             "After-Hours Movers",
-            "Visible 16:00–20:00 ET. Monitor Only — No After-Hours Entries.",
+            "Visible 16:00–20:00 ET. Ranked by latest after-hours price vs regular 16:00 close. Monitor Only — No After-Hours Entries.",
             movers,
             "section-afterhours",
             max_cards=12,
