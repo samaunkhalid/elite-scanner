@@ -1789,6 +1789,70 @@ def build_market_inactive_signal_panel(status):
 
 
 # ==============================================================
+# MORNING SCANNER GUARD
+# ==============================================================
+
+FIRST_REGULAR_SCANNER_HOUR = 9
+FIRST_REGULAR_SCANNER_MINUTE = 45
+
+
+def scanner_data_is_regular_session_ready(now_ny, scanner_meta):
+    """
+    Only allow ticker cards/table/sector context after today's first valid
+    regular-market scanner has run at or after 09:45 ET.
+
+    This prevents stale 09:00/09:01 pre-market scanner files from appearing
+    after the 09:30 dashboard-only OPEN refresh.
+    """
+    scanner_dt = parse_et_datetime(scanner_meta.get("scanner_generated_at_et"))
+
+    if scanner_dt is None:
+        return False
+
+    try:
+        if scanner_dt.date() != now_ny.date():
+            return False
+    except Exception:
+        return False
+
+    scan_minutes = scanner_dt.hour * 60 + scanner_dt.minute
+    first_scan_minutes = FIRST_REGULAR_SCANNER_HOUR * 60 + FIRST_REGULAR_SCANNER_MINUTE
+
+    return scan_minutes >= first_scan_minutes
+
+
+def build_waiting_first_scanner_panel(status, scanner_time_label):
+    """
+    Signal Desk replacement when market is OPEN but the first valid 09:45+
+    regular-market scanner data is not available yet.
+
+    Strict rule:
+    - show no ticker symbols
+    - show no Signal Desk rows
+    - show no old pre-market candidates
+    """
+    return f"""
+    <section class="signal-desk-panel signal-desk-compact" id="signals">
+        <div class="signal-desk-top">
+            <div>
+                <strong>Signal Desk</strong>
+                <span>Intraday execution status</span>
+            </div>
+            <div class="signal-desk-counts">
+                <span><b>0</b> Active</span>
+                <span><b>0</b> Ready</span>
+                <span><b>0</b> Watch</span>
+            </div>
+        </div>
+        <div class="signal-desk-empty">
+            <strong>Market is {esc(status)}.</strong>
+            <span>Waiting for first regular-market scanner at 09:45 ET. Scanner candidates are hidden until valid 09:45+ scanner data is available. Last scanner data: {esc(scanner_time_label)}</span>
+        </div>
+    </section>
+    """
+
+
+# ==============================================================
 # SIGNAL DESK SHELL
 # ==============================================================
 
@@ -2667,7 +2731,9 @@ def build_dashboard(potential, active, extended, highrisk, raw, active_watchlist
     macro = load_macro_calendar()
     macro_html = build_macro_html(macro)
 
-    if market_open:
+    scanner_regular_ready = scanner_data_is_regular_session_ready(now_ny, scanner_meta)
+
+    if market_open and scanner_regular_ready:
         signals = signal_payload.get("signals", [])
         rejected_candidates = signal_payload.get("rejected_candidates", [])
         signal_map = build_signal_map(signals)
@@ -2726,9 +2792,16 @@ def build_dashboard(potential, active, extended, highrisk, raw, active_watchlist
         </div>
         """
     else:
-        # Hard display gate outside regular market hours.
-        # No ticker symbols should appear in Signal Desk, cards, table, or sector context.
-        signal_desk_html = build_market_inactive_signal_panel(status)
+        # Hard display gate outside regular market hours OR before the first
+        # valid 09:45+ regular-market scanner has completed.
+        #
+        # This prevents 09:00/09:01 pre-market scanner output from becoming
+        # visible after the 09:30 dashboard-only OPEN refresh.
+        if market_open:
+            signal_desk_html = build_waiting_first_scanner_panel(status, scanner_time_label)
+        else:
+            signal_desk_html = build_market_inactive_signal_panel(status)
+
         signal_outcomes_html = ""
         potential_section = ""
         active_section = ""
