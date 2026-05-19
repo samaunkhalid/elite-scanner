@@ -94,7 +94,16 @@ SCANNER_TIMES_ET = {
 }
 
 # After-hours monitor-only snapshots.
+#
+# Stale-snapshot protection:
+# - 16:02 gives the market data feed a short settlement buffer after the 16:00 close.
+# - 16:05 and 16:10 reduce the old 16:00-16:15 stale-display window.
+# - Dashboard still has a stale-file guard, so old after-hours movers are hidden until
+#   a same-day 16:00+ after-hours snapshot exists.
 AFTER_HOURS_SCAN_TIMES_ET = {
+    "16:02",
+    "16:05",
+    "16:10",
     "16:15",
     "16:30",
     "17:00",
