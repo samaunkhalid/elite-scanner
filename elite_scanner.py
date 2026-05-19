@@ -37,12 +37,60 @@ from yahooquery import Ticker
 import pandas as pd
 import requests
 import json
-from datetime import datetime, timedelta
+import os
+import math
+from pathlib import Path
+from datetime import datetime, timedelta, timezone
 
 try:
     from zoneinfo import ZoneInfo
 except Exception:
     ZoneInfo = None
+
+
+
+# ==============================================================
+# EARLY RECLAIM RUNNER LANE — Alpaca SIP intraday-first discovery
+# ==============================================================
+# Purpose:
+#   Catch GO/SFM-style early regular-session runners before they become
+#   late near-HOD continuation setups.
+#
+# Locked design:
+#   - Yahoo remains a seed/context source.
+#   - Alpaca SIP intraday behavior is allowed to force-include qualifying
+#     early reclaim runners even when Yahoo/base score is mediocre.
+#   - This lane is regular-market only and does not affect premarket /
+#     after-hours monitor-only scanners.
+#
+# User preference:
+#   Early-runner hard price filter is $2–$80.
+EARLY_RECLAIM_ENABLED = os.getenv("EARLY_RECLAIM_ENABLED", "1").strip().lower() not in {"0", "false", "no", "off"}
+EARLY_RECLAIM_MIN_PRICE = float(os.getenv("EARLY_RECLAIM_MIN_PRICE", "2"))
+EARLY_RECLAIM_MAX_PRICE = float(os.getenv("EARLY_RECLAIM_MAX_PRICE", "80"))
+EARLY_RECLAIM_MAX_SYMBOLS = int(os.getenv("EARLY_RECLAIM_MAX_SYMBOLS", "900"))
+EARLY_RECLAIM_FETCH_CHUNK = int(os.getenv("EARLY_RECLAIM_FETCH_CHUNK", "50"))
+EARLY_RECLAIM_MIN_5M_VOLUME = float(os.getenv("EARLY_RECLAIM_MIN_5M_VOLUME", "2000"))
+EARLY_RECLAIM_MIN_5M_NOTIONAL = float(os.getenv("EARLY_RECLAIM_MIN_5M_NOTIONAL", "15000"))
+EARLY_RECLAIM_MIN_15M_VOLUME = float(os.getenv("EARLY_RECLAIM_MIN_15M_VOLUME", "5000"))
+EARLY_RECLAIM_MIN_15M_NOTIONAL = float(os.getenv("EARLY_RECLAIM_MIN_15M_NOTIONAL", "35000"))
+EARLY_RECLAIM_MAX_VWAP_DIST_PCT = float(os.getenv("EARLY_RECLAIM_MAX_VWAP_DIST_PCT", "3.5"))
+EARLY_RECLAIM_MAX_BAR_AGE_MINUTES = float(os.getenv("EARLY_RECLAIM_MAX_BAR_AGE_MINUTES", "8"))
+EARLY_RECLAIM_MIN_SCORE = float(os.getenv("EARLY_RECLAIM_MIN_SCORE", "64"))
+EARLY_RECLAIM_FORCE_SCORE_FLOOR = float(os.getenv("EARLY_RECLAIM_FORCE_SCORE_FLOOR", "52"))
+EARLY_RECLAIM_OUTPUT_LIMIT = int(os.getenv("EARLY_RECLAIM_OUTPUT_LIMIT", "30"))
+
+OPTIONAL_STATIC_UNIVERSE_FILES = [
+    "static_liquid_universe.csv",
+    "liquid_universe.csv",
+    "regular_market_universe.csv",
+]
+OPTIONAL_SEED_FILES = [
+    "premarket_movers.csv",
+    "elite_watchlist_raw.csv",
+    "potential_movers.csv",
+    "active_momentum.csv",
+]
 
 
 def iso_now_et():
@@ -112,6 +160,562 @@ def get_dynamic_universe():
     universe.update(momentum_core)
     print(f"  Dynamic universe: {len(universe)} stocks")
     return list(universe)
+
+
+
+def normalize_symbol_for_scanner(symbol):
+    """Normalize symbols and remove obvious non-stock/index forms."""
+    sym = str(symbol or "").strip().upper()
+    if not sym:
+        return ""
+    if any(c in sym for c in ["^", "=", "/"]):
+        return ""
+    # Keep class shares such as BRK.B out of this low-priced early-runner lane;
+    # the regular scanner can still see them if needed.
+    if "." in sym:
+        return ""
+    return sym
+
+
+def read_symbol_seed_file(path):
+    """Read symbols from a CSV file if it exists. Tolerates many column names."""
+    try:
+        p = Path(path)
+        if not p.exists() or not p.is_file():
+            return []
+        df = pd.read_csv(p)
+        if df.empty:
+            return []
+        for col in ["symbol", "Symbol", "ticker", "Ticker"]:
+            if col in df.columns:
+                return [normalize_symbol_for_scanner(x) for x in df[col].dropna().tolist()]
+        # Fallback: first column.
+        return [normalize_symbol_for_scanner(x) for x in df.iloc[:, 0].dropna().tolist()]
+    except Exception:
+        return []
+
+
+def build_early_reclaim_candidate_pool(base_universe, existing_results=None):
+    """
+    Build a hybrid candidate pool for the early reclaim lane.
+
+    Important:
+      - Does not rely only on Yahoo score/top-100.
+      - Uses optional static liquid universe files when present.
+      - Keeps current scanner universe and current/previous watchlists as seeds.
+      - Caps total symbols to protect Alpaca.
+    """
+    ordered = []
+    seen = set()
+
+    def add_many(symbols, source_label):
+        for sym in symbols or []:
+            s = normalize_symbol_for_scanner(sym)
+            if not s or s in seen:
+                continue
+            seen.add(s)
+            ordered.append((s, source_label))
+
+    add_many(base_universe, "dynamic_universe")
+
+    if existing_results:
+        add_many([r.get("symbol") for r in existing_results], "scored_results")
+
+    for fname in OPTIONAL_STATIC_UNIVERSE_FILES:
+        add_many(read_symbol_seed_file(fname), fname)
+
+    for fname in OPTIONAL_SEED_FILES:
+        add_many(read_symbol_seed_file(fname), fname)
+
+    # Optional manual symbols for quick tests or user-curated names.
+    extra = os.getenv("EARLY_RECLAIM_EXTRA_SYMBOLS", "").strip()
+    if extra:
+        add_many([x.strip() for x in extra.split(",")], "env_extra")
+
+    # Stable ordering: dynamic/current universe first, static/old files later.
+    symbols = [s for s, _ in ordered]
+    return symbols[: max(50, EARLY_RECLAIM_MAX_SYMBOLS)]
+
+
+def _alpaca_headers():
+    key = (
+        os.getenv("ALPACA_API_KEY")
+        or os.getenv("APCA_API_KEY_ID")
+        or ""
+    ).strip()
+    secret = (
+        os.getenv("ALPACA_SECRET_KEY")
+        or os.getenv("APCA_API_SECRET_KEY")
+        or ""
+    ).strip()
+    if not key or not secret:
+        return None
+    return {
+        "APCA-API-KEY-ID": key,
+        "APCA-API-SECRET-KEY": secret,
+        "Accept": "application/json",
+    }
+
+
+def _to_utc_iso(dt):
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _parse_alpaca_time(value):
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except Exception:
+        return None
+
+
+def _safe_float_local(value, default=0.0):
+    try:
+        if value is None:
+            return default
+        v = float(value)
+        if math.isnan(v) or math.isinf(v):
+            return default
+        return v
+    except Exception:
+        return default
+
+
+def _session_vwap_from_bars(df):
+    if df.empty:
+        return 0.0
+    vol = pd.to_numeric(df.get("v", pd.Series([0] * len(df))), errors="coerce").fillna(0)
+    if "vw" in df.columns:
+        vw = pd.to_numeric(df["vw"], errors="coerce").fillna(0)
+        valid = (vol > 0) & (vw > 0)
+        if valid.any() and vol[valid].sum() > 0:
+            return float((vw[valid] * vol[valid]).sum() / vol[valid].sum())
+    high = pd.to_numeric(df.get("h", pd.Series(dtype=float)), errors="coerce")
+    low = pd.to_numeric(df.get("l", pd.Series(dtype=float)), errors="coerce")
+    close = pd.to_numeric(df.get("c", pd.Series(dtype=float)), errors="coerce")
+    typical = (high + low + close) / 3.0
+    valid = (vol > 0) & typical.notna()
+    if valid.any() and vol[valid].sum() > 0:
+        return float((typical[valid] * vol[valid]).sum() / vol[valid].sum())
+    return _safe_float_local(close.iloc[-1] if len(close) else 0, 0)
+
+
+def _ema(series, span):
+    return pd.to_numeric(series, errors="coerce").ewm(span=span, adjust=False).mean()
+
+
+def _macd_hist(close):
+    close = pd.to_numeric(close, errors="coerce")
+    macd = _ema(close, 12) - _ema(close, 26)
+    signal = _ema(macd, 9)
+    return macd - signal
+
+
+def fetch_alpaca_1min_bars_for_early_reclaim(symbols):
+    """
+    Fetch 1-minute regular-session bars for the candidate pool.
+
+    This is separate from the normal top-100 Alpaca enrichment because the
+    early lane must not let Yahoo/base score eliminate live intraday reclaimers.
+    """
+    headers = _alpaca_headers()
+    if not headers:
+        print("  ⚠️ Missing Alpaca credentials; skipping early reclaim lane")
+        return {}
+
+    if ZoneInfo:
+        now_et = datetime.now(ZoneInfo("America/New_York"))
+    else:
+        now_et = datetime.now()
+
+    # Early reclaim lane is regular-market only. Use 09:30 ET as session start.
+    session_start = now_et.replace(hour=9, minute=30, second=0, microsecond=0)
+    if now_et < session_start:
+        return {}
+
+    feed = os.getenv("ALPACA_DATA_FEED", "sip").strip().lower() or "sip"
+    base_url = os.getenv("ALPACA_DATA_BASE_URL", "https://data.alpaca.markets").rstrip("/")
+    out = {}
+
+    clean = []
+    seen = set()
+    for s in symbols or []:
+        sym = normalize_symbol_for_scanner(s)
+        if sym and sym not in seen:
+            seen.add(sym)
+            clean.append(sym)
+
+    for i in range(0, len(clean), EARLY_RECLAIM_FETCH_CHUNK):
+        chunk = clean[i:i + EARLY_RECLAIM_FETCH_CHUNK]
+        try:
+            params = {
+                "symbols": ",".join(chunk),
+                "timeframe": "1Min",
+                "start": _to_utc_iso(session_start),
+                "end": _to_utc_iso(now_et),
+                "limit": 10000,
+                "adjustment": "raw",
+                "sort": "asc",
+                "feed": feed,
+            }
+            r = requests.get(
+                f"{base_url}/v2/stocks/bars",
+                headers=headers,
+                params=params,
+                timeout=20,
+            )
+            if r.status_code >= 400:
+                print(f"  ⚠️ Early reclaim Alpaca chunk failed HTTP {r.status_code}: {','.join(chunk[:5])}...")
+                continue
+            payload = r.json() if r.content else {}
+            bars = payload.get("bars", {}) or {}
+            for sym, rows in bars.items():
+                if rows:
+                    out[str(sym).upper()] = rows
+        except Exception as exc:
+            print(f"  ⚠️ Early reclaim Alpaca chunk exception ({','.join(chunk[:5])}...): {exc}")
+
+    return out
+
+
+def analyze_early_reclaim_symbol(symbol, rows):
+    """
+    Return a dict if symbol qualifies as VWAP/EMA early reclaim runner.
+    Otherwise return None.
+    """
+    if not rows:
+        return None
+
+    df = pd.DataFrame(rows)
+    if df.empty or len(df) < 8:
+        return None
+
+    for col in ["o", "h", "l", "c", "v", "vw"]:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    df = df.dropna(subset=["c"]).copy()
+    if df.empty or len(df) < 8:
+        return None
+
+    # Convert timestamp for freshness and 5-minute resampling.
+    if "t" not in df.columns:
+        return None
+    df["ts"] = pd.to_datetime(df["t"], utc=True, errors="coerce")
+    df = df.dropna(subset=["ts"]).sort_values("ts")
+    if df.empty:
+        return None
+
+    latest = df.iloc[-1]
+    price = _safe_float_local(latest.get("c"), 0)
+    if price < EARLY_RECLAIM_MIN_PRICE or price > EARLY_RECLAIM_MAX_PRICE:
+        return None
+
+    now_utc = datetime.now(timezone.utc)
+    latest_ts = latest["ts"].to_pydatetime()
+    age_minutes = max(0.0, (now_utc - latest_ts).total_seconds() / 60.0)
+    if age_minutes > EARLY_RECLAIM_MAX_BAR_AGE_MINUTES:
+        return None
+
+    session_vwap = _session_vwap_from_bars(df)
+    if session_vwap <= 0:
+        return None
+
+    df["ema9_1m"] = _ema(df["c"], 9)
+    ema9_1m = _safe_float_local(df["ema9_1m"].iloc[-1], 0)
+    if ema9_1m <= 0:
+        return None
+
+    # 5-minute structure confirmation.
+    res = df.set_index("ts").resample("5min").agg({
+        "o": "first",
+        "h": "max",
+        "l": "min",
+        "c": "last",
+        "v": "sum",
+    }).dropna(subset=["c"])
+    if len(res) < 3:
+        return None
+
+    res["ema9_5m"] = _ema(res["c"], 9)
+    last5 = res.iloc[-1]
+    prev5 = res.iloc[-2] if len(res) >= 2 else last5
+
+    latest_5m_vol = _safe_float_local(last5.get("v"), 0)
+    latest_5m_notional = latest_5m_vol * price
+    last15 = res.tail(3)
+    last15_vol = _safe_float_local(last15["v"].sum(), 0)
+    last15_notional = float((last15["v"] * last15["c"]).sum())
+    prev_5m_vol = _safe_float_local(prev5.get("v"), 0)
+    prev_5m_notional = prev_5m_vol * _safe_float_local(prev5.get("c"), price)
+
+    # Light volume/notional gates designed to catch GO-type early runners.
+    if not (latest_5m_vol >= EARLY_RECLAIM_MIN_5M_VOLUME or latest_5m_notional >= EARLY_RECLAIM_MIN_5M_NOTIONAL):
+        return None
+    if not (last15_vol >= EARLY_RECLAIM_MIN_15M_VOLUME or last15_notional >= EARLY_RECLAIM_MIN_15M_NOTIONAL):
+        return None
+
+    # Require activity to be increasing or at least not dead.
+    accelerating = (
+        latest_5m_vol > prev_5m_vol
+        or latest_5m_notional > prev_5m_notional
+        or last15_vol >= max(EARLY_RECLAIM_MIN_15M_VOLUME * 1.5, 1)
+    )
+    if not accelerating:
+        return None
+
+    vwap_dist_pct = ((price - session_vwap) / session_vwap * 100.0) if session_vwap > 0 else 999
+    if price < session_vwap:
+        return None
+    if vwap_dist_pct > EARLY_RECLAIM_MAX_VWAP_DIST_PCT:
+        return None
+
+    if price < ema9_1m:
+        return None
+
+    # 1-minute early reclaim evidence:
+    recent_1m = df.tail(8).copy()
+    recent_below_vwap = bool((recent_1m["c"].iloc[:-1] < session_vwap).any())
+    recent_below_ema = bool((recent_1m["c"].iloc[:-1] < recent_1m["ema9_1m"].iloc[:-1]).any())
+    one_min_reclaim = (recent_below_vwap and price >= session_vwap) or (recent_below_ema and price >= ema9_1m)
+
+    # 5-minute confirmation:
+    ema9_5m = _safe_float_local(last5.get("ema9_5m"), 0)
+    prev_5m_close = _safe_float_local(prev5.get("c"), 0)
+    prev_5m_ema = _safe_float_local(prev5.get("ema9_5m"), 0)
+    five_min_above = price >= session_vwap and (ema9_5m <= 0 or price >= ema9_5m)
+    five_min_reclaim = (
+        five_min_above
+        and (
+            prev_5m_close < session_vwap
+            or (prev_5m_ema > 0 and prev_5m_close < prev_5m_ema)
+            or _safe_float_local(last5.get("l"), price) <= max(session_vwap, ema9_5m if ema9_5m > 0 else session_vwap) * 1.003
+        )
+    )
+
+    if not (one_min_reclaim and five_min_above):
+        return None
+
+    hist = _macd_hist(df["c"])
+    macd_rising = False
+    if len(hist.dropna()) >= 3:
+        h = hist.dropna().tail(3).tolist()
+        macd_rising = h[-1] > h[-2] or (h[-1] > h[-3] and h[-1] >= -0.01)
+
+    if not macd_rising:
+        return None
+
+    # Score prioritizes current, early reclaim quality — not near-HOD.
+    early_score = 45.0
+    reasons = []
+
+    if one_min_reclaim:
+        early_score += 8
+        reasons.append("1Min VWAP/EMA reclaim")
+    if five_min_reclaim:
+        early_score += 10
+        reasons.append("5Min reclaim/hold")
+    elif five_min_above:
+        early_score += 6
+        reasons.append("5Min above VWAP/EMA")
+    if macd_rising:
+        early_score += 7
+        reasons.append("MACD curling up")
+    if accelerating:
+        early_score += 7
+        reasons.append("Recent volume accelerating")
+    if 0 <= vwap_dist_pct <= 1.8:
+        early_score += 7
+        reasons.append("Not extended from VWAP")
+    elif vwap_dist_pct <= EARLY_RECLAIM_MAX_VWAP_DIST_PCT:
+        early_score += 3
+        reasons.append("Moderate VWAP extension")
+    if latest_5m_vol >= 5000 or latest_5m_notional >= 35000:
+        early_score += 4
+        reasons.append("Usable 5Min participation")
+
+    early_score = max(0, min(100, early_score))
+
+    if early_score < EARLY_RECLAIM_MIN_SCORE:
+        return None
+
+    hod = _safe_float_local(df["h"].max(), price)
+    lod = _safe_float_local(df["l"].min(), price)
+    from_hod_pct = ((price - hod) / hod * 100.0) if hod > 0 else 0.0
+    session_open = _safe_float_local(df.iloc[0].get("o"), price)
+    intraday_change_pct = ((price - session_open) / session_open * 100.0) if session_open > 0 else 0.0
+
+    return {
+        "symbol": symbol,
+        "price": round(price, 4),
+        "change_pct": round(intraday_change_pct, 2),
+        "early_reclaim_score": round(early_score, 1),
+        "early_reclaim_runner": True,
+        "early_reclaim_reason": " · ".join(reasons[:6]),
+        "early_reclaim_latest_5m_volume": int(latest_5m_vol),
+        "early_reclaim_latest_5m_notional": round(latest_5m_notional, 0),
+        "early_reclaim_last15_volume": int(last15_vol),
+        "early_reclaim_last15_notional": round(last15_notional, 0),
+        "early_reclaim_bar_age_minutes": round(age_minutes, 1),
+        "early_reclaim_vwap": round(session_vwap, 4),
+        "early_reclaim_ema9_1m": round(ema9_1m, 4),
+        "early_reclaim_ema9_5m": round(ema9_5m, 4),
+        "vwap": round(session_vwap, 4),
+        "vwap_dist_pct": round(vwap_dist_pct, 2),
+        "above_vwap": True,
+        "hod": round(hod, 4),
+        "lod": round(lod, 4),
+        "from_hod_pct": round(from_hod_pct, 2),
+        "near_hod": bool(from_hod_pct >= -2.0),
+        "intraday_volume": int(_safe_float_local(df["v"].sum(), 0)),
+        "price_source": "Alpaca SIP Early Reclaim",
+        "price_updated_at": latest.get("t", ""),
+        "data_source": "Alpaca SIP Early Reclaim",
+        "intraday_setup_type": "VWAP_EMA_RECLAIM_RUNNER",
+    }
+
+
+def build_early_reclaim_rows(base_universe, existing_results):
+    """
+    Return early reclaim rows keyed by symbol.
+
+    Existing normal scanner rows can be upgraded. New qualifying symbols can be
+    force-included so Yahoo/base scoring is not the first elimination gate.
+    """
+    if not EARLY_RECLAIM_ENABLED:
+        return {}
+
+    pool = build_early_reclaim_candidate_pool(base_universe, existing_results)
+    if not pool:
+        return {}
+
+    print(f"\n[Stage 6A] Alpaca SIP early reclaim lane...")
+    print(f"  Candidate pool: {len(pool)} symbols | price ${EARLY_RECLAIM_MIN_PRICE:g}-${EARLY_RECLAIM_MAX_PRICE:g}")
+
+    bars_by_symbol = fetch_alpaca_1min_bars_for_early_reclaim(pool)
+    if not bars_by_symbol:
+        print("  No Alpaca bars returned for early reclaim lane")
+        return {}
+
+    early = {}
+    checked = 0
+    for symbol, rows in bars_by_symbol.items():
+        checked += 1
+        try:
+            hit = analyze_early_reclaim_symbol(symbol, rows)
+            if hit:
+                early[symbol] = hit
+        except Exception:
+            continue
+
+    ranked = dict(sorted(early.items(), key=lambda kv: kv[1].get("early_reclaim_score", 0), reverse=True)[:EARLY_RECLAIM_OUTPUT_LIMIT])
+    print(f"  Early reclaim checked: {checked} | qualified: {len(ranked)}")
+    if ranked:
+        preview = ", ".join([f"{s}({v.get('early_reclaim_score')})" for s, v in list(ranked.items())[:10]])
+        print(f"  Early reclaim preview: {preview}")
+    return ranked
+
+
+def apply_early_reclaim_to_results(results, early_rows):
+    """
+    Merge early reclaim hits into normal scanner results.
+
+    Existing rows are upgraded. New rows are force-included as Potential Movers
+    with enough structure for signal_engine.py to evaluate them.
+    """
+    if not early_rows:
+        return results, 0, 0
+
+    by_symbol = {str(r.get("symbol", "")).upper(): r for r in results}
+    upgraded = 0
+    added = 0
+
+    for symbol, er in early_rows.items():
+        if symbol in by_symbol:
+            stock = by_symbol[symbol]
+            stock["early_reclaim_runner"] = True
+            stock["intraday_setup_type"] = "VWAP_EMA_RECLAIM_RUNNER"
+            stock["early_reclaim_score"] = er.get("early_reclaim_score", 0)
+            stock["early_reclaim_reason"] = er.get("early_reclaim_reason", "")
+            stock["price"] = er.get("price", stock.get("price", 0))
+            stock["intraday_last_price"] = er.get("price", stock.get("price", 0))
+            stock["price_source"] = er.get("price_source", stock.get("price_source", "Alpaca SIP"))
+            stock["price_updated_at"] = er.get("price_updated_at", stock.get("price_updated_at", ""))
+            stock["vwap"] = er.get("vwap", stock.get("vwap", 0))
+            stock["vwap_dist_pct"] = er.get("vwap_dist_pct", stock.get("vwap_dist_pct", 0))
+            stock["above_vwap"] = True
+            stock["hod"] = er.get("hod", stock.get("hod", 0))
+            stock["lod"] = er.get("lod", stock.get("lod", 0))
+            stock["from_hod_pct"] = er.get("from_hod_pct", stock.get("from_hod_pct", 0))
+            stock["near_hod"] = er.get("near_hod", stock.get("near_hod", False))
+            stock["intraday_volume"] = er.get("intraday_volume", stock.get("intraday_volume", 0))
+            stock["data_source"] = "Yahoo + Alpaca SIP Early Reclaim"
+            stock["score"] = min(100, max(float(stock.get("score", 0) or 0), EARLY_RECLAIM_FORCE_SCORE_FLOOR) + 4)
+            existing_tags = str(stock.get("tags", "") or "")
+            prefix = f"VWAP/EMA reclaim runner · {er.get('early_reclaim_reason', '')}"
+            stock["tags"] = " · ".join([x for x in [prefix, existing_tags] if x])[:500]
+            upgraded += 1
+        else:
+            row = {
+                "tier": "2" if er.get("early_reclaim_score", 0) >= 70 else "3",
+                "symbol": symbol,
+                "company_name": symbol,
+                "sector": "Unknown",
+                "sector_etf": "SPY",
+                "sector_change_pct": 0,
+                "stock_vs_sector_pct": 0,
+                "sector_vs_spy_pct": 0,
+                "sector_status": "UNKNOWN",
+                "sector_score": 0,
+                "price": er.get("price", 0),
+                "change_pct": er.get("change_pct", 0),
+                "score": max(EARLY_RECLAIM_FORCE_SCORE_FLOOR, er.get("early_reclaim_score", 0)),
+                "base_score": 0,
+                "ext_penalty": 0,
+                "regime_penalty": 0,
+                "risk_category": "NORMAL",
+                "is_earnings_reaction": False,
+                "catalyst": 0,
+                "momentum": 0,
+                "execution": 0,
+                "squeeze": 0,
+                "strength": 0,
+                "technical": 0,
+                "participation": 0,
+                "social": 0,
+                "short_pct": 0,
+                "float_M": 0,
+                "days_to_cover": 0,
+                "atr_pct": 0,
+                "dollar_vol_M": round(er.get("intraday_volume", 0) * er.get("price", 0) / 1e6, 2),
+                "market_cap_B": 0,
+                "days_to_earnings": "—",
+                "tags": f"VWAP/EMA reclaim runner · {er.get('early_reclaim_reason', '')}",
+                "early_reclaim_runner": True,
+                "intraday_setup_type": "VWAP_EMA_RECLAIM_RUNNER",
+                "early_reclaim_score": er.get("early_reclaim_score", 0),
+                "early_reclaim_reason": er.get("early_reclaim_reason", ""),
+                "intraday_last_price": er.get("price", 0),
+                "price_source": er.get("price_source", "Alpaca SIP Early Reclaim"),
+                "price_updated_at": er.get("price_updated_at", ""),
+                "vwap": er.get("vwap", 0),
+                "vwap_dist_pct": er.get("vwap_dist_pct", 0),
+                "above_vwap": True,
+                "hod": er.get("hod", 0),
+                "lod": er.get("lod", 0),
+                "from_hod_pct": er.get("from_hod_pct", 0),
+                "near_hod": er.get("near_hod", False),
+                "intraday_volume": er.get("intraday_volume", 0),
+                "data_source": "Alpaca SIP Early Reclaim",
+            }
+            results.append(row)
+            by_symbol[symbol] = row
+            added += 1
+
+    return results, upgraded, added
 
 
 # ==============================================================
@@ -1043,6 +1647,20 @@ def classify_setup_bucket(stock):
     if risk == "EXTENDED" or change_abs >= 25:
         return "EXTENDED_CHASE_RISK"
 
+    # Early reclaim runner lane:
+    # This is deliberately allowed into Potential Movers without near-HOD.
+    # It is designed to catch GO-style VWAP/EMA reclaim runners before they are
+    # already obvious/extended. Signal Engine still controls WATCH/TRIGGER/ACTIVE.
+    if boolish(stock.get("early_reclaim_runner", False)):
+        price = float(stock.get("price", 0) or 0)
+        if (
+            EARLY_RECLAIM_MIN_PRICE <= price <= EARLY_RECLAIM_MAX_PRICE
+            and above_vwap
+            and vwap_dist <= EARLY_RECLAIM_MAX_VWAP_DIST_PCT
+            and risk == "NORMAL"
+        ):
+            return "POTENTIAL_MOVER"
+
     # Active momentum = already moving upward, but not extreme.
     if 12 <= change_signed < 25:
         return "ACTIVE_MOMENTUM"
@@ -1435,6 +2053,18 @@ def main():
         # Re-sort with intraday scores
         results = sorted(results, key=lambda x: x["score"], reverse=True)
         
+        # -------------------------------------------------------------
+        # Stage 6A: Early VWAP/EMA reclaim lane.
+        # This runs after normal Alpaca enrichment is initialized, but it
+        # uses a broader candidate pool and is not limited to the Yahoo/top-100
+        # score path. Qualified symbols are force-included as Potential Movers.
+        # -------------------------------------------------------------
+        early_rows = build_early_reclaim_rows(universe, results)
+        results, early_upgraded_count, early_added_count = apply_early_reclaim_to_results(results, early_rows)
+        if early_rows:
+            results = sorted(results, key=lambda x: x["score"], reverse=True)
+            print(f"  ✓ Early reclaim lane merged: upgraded={early_upgraded_count}, added={early_added_count}")
+
     except ImportError:
         print(f"  ⚠️ Alpaca not available - skipping real-time enrichment")
         print(f"  Install: pip install alpaca-py")
@@ -1519,6 +2149,9 @@ def main():
             "extended_count": 0,
             "highrisk_count": 0,
             "alpaca_enriched_count": int(enriched_count) if "enriched_count" in locals() else 0,
+            "early_reclaim_count": int(len(early_rows)) if "early_rows" in locals() else 0,
+            "early_reclaim_upgraded": int(early_upgraded_count) if "early_upgraded_count" in locals() else 0,
+            "early_reclaim_added": int(early_added_count) if "early_added_count" in locals() else 0,
         })
 
         return
@@ -1600,6 +2233,9 @@ def main():
         "extended_count": int(len(extended_df)),
         "highrisk_count": int(len(highrisk_df)),
         "alpaca_enriched_count": int(enriched_count) if "enriched_count" in locals() else 0,
+        "early_reclaim_count": int(len(early_rows)) if "early_rows" in locals() else 0,
+        "early_reclaim_upgraded": int(early_upgraded_count) if "early_upgraded_count" in locals() else 0,
+        "early_reclaim_added": int(early_added_count) if "early_added_count" in locals() else 0,
     })
 
     print(f"\n  Saved: elite_watchlist_raw.csv ({len(df)} stocks - full diagnostic)")
