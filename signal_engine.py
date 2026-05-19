@@ -78,7 +78,7 @@ SIGNAL_STATE_FILE = "signal_state.json"
 SUPPRESSED_SIGNALS_FILE = "suppressed_signals.csv"
 SIGNAL_OUTCOMES_FILE = "signal_outcomes.csv"
 SIGNAL_OUTCOMES_SUMMARY_FILE = "signal_outcomes_summary.json"
-SIGNAL_ENGINE_STRATEGY_VERSION = "v2.4_sector_rotation_support"
+SIGNAL_ENGINE_STRATEGY_VERSION = "v2.5_trigger_ready_hold_confirmation"
 
 # State retention.
 ACTIVE_STALE_MINUTES = 10
@@ -142,6 +142,18 @@ VWAP_RECLAIM_MAX_EXTENSION_PCT = 2.0
 RECLAIM_PULLBACK_MAX_EXTENSION_PCT = 3.0
 RECLAIM_PULLBACK_SUPPORT_BUFFER_PCT = 0.50
 MIN_CONF_RECLAIM_PULLBACK_READY = 68.0
+
+# Trigger Ready discipline for VWAP/reclaim lifecycle setups.
+# These settings prevent a ticker from being tagged TRIGGER_READY while it is
+# still merely pulling back toward VWAP/EMA support and the breakout trigger is
+# far above current price. UMC/FIG exposed this issue: the plan was a breakout
+# trigger, but the card looked like a VWAP pullback entry.
+READY_TRIGGER_MAX_DISTANCE_PCT = float(os.getenv("READY_TRIGGER_MAX_DISTANCE_PCT", "0.75"))
+READY_TRIGGER_MAX_DISTANCE_STRONG_VOLUME_PCT = float(os.getenv("READY_TRIGGER_MAX_DISTANCE_STRONG_VOLUME_PCT", "1.00"))
+VWAP_READY_MIN_HOLD_BARS = int(os.getenv("VWAP_READY_MIN_HOLD_BARS", "2"))
+VWAP_READY_MIN_GREEN_OR_FLAT_BARS = int(os.getenv("VWAP_READY_MIN_GREEN_OR_FLAT_BARS", "1"))
+VWAP_READY_VWAP_LOW_BUFFER_PCT = float(os.getenv("VWAP_READY_VWAP_LOW_BUFFER_PCT", "0.20"))
+RECLAIM_READY_MIN_HOLD_MINUTES = float(os.getenv("RECLAIM_READY_MIN_HOLD_MINUTES", "1.0"))
 
 # Earnings-day reaction handling.
 # We do not treat earnings-day moves as normal setups. They are allowed only as
@@ -3725,6 +3737,142 @@ def setup_ready_conf_required(setup_type: str, phase: str) -> float:
     return ready_confidence_required(phase)
 
 
+def recent_execution_bars(metrics: IntradayMetrics, count: int = 3) -> List[Dict[str, Any]]:
+    bars = clean_bars(metrics.execution_bars or [])
+    if count <= 0:
+        return bars
+    return bars[-count:]
+
+
+def ready_trigger_distance_pct(metrics: IntradayMetrics, setup_type: str) -> Tuple[float, float]:
+    """
+    Return (trigger, distance_pct) where distance_pct is how far the locked
+    breakout trigger is above current price. Positive means price is below the
+    trigger; negative means price is already above it.
+    """
+    trigger = trigger_level_for_setup(setup_type, metrics)
+    if trigger <= 0 or metrics.price <= 0:
+        return trigger, 999.0
+    return trigger, pct(trigger - metrics.price, metrics.price)
+
+
+def ready_trigger_proximity_ok(metrics: IntradayMetrics, setup_type: str) -> Tuple[bool, str]:
+    """
+    TRIGGER_READY should mean the setup is close enough to the planned breakout
+    trigger to be actionable. If the trigger is still far above current price,
+    keep it as WATCH.
+
+    This prevents cases like UMC:
+      - VWAP near current price
+      - breakout trigger much higher
+      - system incorrectly labels it ready before VWAP hold / micro reclaim is proven.
+    """
+    trigger, distance_pct = ready_trigger_distance_pct(metrics, setup_type)
+    if trigger <= 0:
+        return False, "No valid breakout trigger"
+
+    max_distance = READY_TRIGGER_MAX_DISTANCE_PCT
+    if metrics.recent_volume_expanding and not metrics.volume_fading_vs_morning:
+        max_distance = READY_TRIGGER_MAX_DISTANCE_STRONG_VOLUME_PCT
+
+    if distance_pct > max_distance:
+        return (
+            False,
+            f"Trigger {trigger:.2f} is {distance_pct:.2f}% above current price; "
+            "keep WATCH until VWAP/EMA hold forms closer to trigger",
+        )
+
+    # If price is already materially above the trigger before a fresh state is
+    # created, do not mark it ready as a fresh entry. The process_new_or_watch
+    # path will convert a recent touch into TRIGGER_TOUCHED when appropriate.
+    if distance_pct < -0.75:
+        return False, f"Price already extended {abs(distance_pct):.2f}% above trigger; no fresh Trigger Ready"
+
+    return True, f"Trigger proximity acceptable: {distance_pct:.2f}% from entry"
+
+
+def vwap_hold_confirmed_for_ready(metrics: IntradayMetrics, setup_type: str) -> Tuple[bool, str]:
+    """
+    Confirm that VWAP/EMA support is actually holding before allowing a
+    VWAP/reclaim setup to become TRIGGER_READY.
+
+    WATCH = pullback/reclaim forming.
+    TRIGGER_READY = hold/reclaim confirmed and trigger is nearby.
+    ACTIVE_SIGNAL = trigger breaks and later confirms.
+    """
+    if not metrics.has_data:
+        return False, "No intraday bars"
+
+    if not metrics.above_vwap:
+        return False, "Price is not above VWAP"
+
+    bars = recent_execution_bars(metrics, max(3, VWAP_READY_MIN_HOLD_BARS))
+    if len(bars) < VWAP_READY_MIN_HOLD_BARS:
+        return False, "Not enough recent 1-minute bars to confirm VWAP hold"
+
+    recent = bars[-VWAP_READY_MIN_HOLD_BARS:]
+    closes = [safe_float(b.get("c"), 0) for b in recent]
+    lows = [safe_float(b.get("l"), 0) for b in recent]
+    opens = [safe_float(b.get("o"), safe_float(b.get("c"), 0)) for b in recent]
+
+    if metrics.vwap > 0:
+        close_holds = sum(1 for c in closes if c >= metrics.vwap)
+        low_buffer = metrics.vwap * (1.0 - VWAP_READY_VWAP_LOW_BUFFER_PCT / 100.0)
+        low_holds = sum(1 for low in lows if low >= low_buffer)
+        if close_holds < VWAP_READY_MIN_HOLD_BARS:
+            return False, f"VWAP hold not confirmed: only {close_holds}/{VWAP_READY_MIN_HOLD_BARS} recent closes above VWAP"
+        if low_holds < max(1, VWAP_READY_MIN_HOLD_BARS - 1):
+            return False, "Recent pullback is undercutting VWAP support"
+
+    if metrics.ema9 > 0:
+        if not metrics.price_above_ema9:
+            return False, "Price has not reclaimed EMA9"
+        if metrics.ema9_falling and not metrics.recent_volume_expanding:
+            return False, "EMA9 falling; wait for higher-low/reclaim confirmation"
+
+    green_or_flat = 0
+    for o, c in zip(opens, closes):
+        if c >= o or (metrics.vwap > 0 and c >= metrics.vwap):
+            green_or_flat += 1
+
+    if green_or_flat < VWAP_READY_MIN_GREEN_OR_FLAT_BARS:
+        return False, "Recent 1-minute candles do not show VWAP hold / stabilization"
+
+    if metrics.macd_1m_bearish_crossover_recent and metrics.macd_1m_histogram_falling:
+        return False, "1-minute MACD bearish after VWAP/reclaim attempt"
+
+    if (
+        metrics.macd_1m_curling_down
+        and metrics.macd_1m_histogram_falling
+        and not metrics.recent_volume_expanding
+    ):
+        return False, "1-minute MACD curling down; wait for reclaim/hold"
+
+    if metrics.volume_fading_vs_morning and not metrics.recent_volume_expanding:
+        return False, volume_fade_label(metrics)
+
+    return True, "VWAP/EMA hold confirmed by recent 1-minute structure"
+
+
+def vwap_lifecycle_ready_confirmation(metrics: IntradayMetrics, setup_type: str) -> Tuple[bool, str]:
+    """
+    Shared pre-TRIGGER_READY filter for VWAP reclaim / pullback lifecycle setups.
+    It combines:
+      1. actual VWAP/EMA hold,
+      2. nearby trigger,
+      3. no immediate 1-minute momentum failure.
+    """
+    hold_ok, hold_reason = vwap_hold_confirmed_for_ready(metrics, setup_type)
+    if not hold_ok:
+        return False, hold_reason
+
+    proximity_ok, proximity_reason = ready_trigger_proximity_ok(metrics, setup_type)
+    if not proximity_ok:
+        return False, proximity_reason
+
+    return True, f"{hold_reason}; {proximity_reason}"
+
+
 def setup_vwap_reclaim_ready(metrics: IntradayMetrics, rr: float, confidence: float) -> Tuple[bool, str]:
     """
     Detect high-volume VWAP reclaim from below.
@@ -3747,8 +3895,18 @@ def setup_vwap_reclaim_ready(metrics: IntradayMetrics, rr: float, confidence: fl
     if not metrics.vwap_reclaim_ready:
         return False, metrics.vwap_reclaim_reason or "VWAP reclaim not ready"
 
+    if metrics.vwap_reclaim_age_minutes < RECLAIM_READY_MIN_HOLD_MINUTES:
+        return False, (
+            f"VWAP reclaim is too fresh ({metrics.vwap_reclaim_age_minutes:.1f}m); "
+            "waiting for at least one hold/reclaim confirmation candle"
+        )
+
     if metrics.vwap_dist_pct > VWAP_RECLAIM_MAX_EXTENSION_PCT:
         return False, f"VWAP reclaim already extended {metrics.vwap_dist_pct:.2f}% > {VWAP_RECLAIM_MAX_EXTENSION_PCT:.1f}%"
+
+    lifecycle_ok, lifecycle_reason = vwap_lifecycle_ready_confirmation(metrics, "VWAP_RECLAIM_BREAKOUT")
+    if not lifecycle_ok:
+        return False, lifecycle_reason
 
     if not metrics.live_participation_ready_ok:
         return False, metrics.live_participation_reason
@@ -3798,6 +3956,10 @@ def setup_reclaim_pullback_ready(metrics: IntradayMetrics, rr: float, confidence
 
     if metrics.vwap_dist_pct > RECLAIM_PULLBACK_MAX_EXTENSION_PCT:
         return False, f"Reclaim pullback extended {metrics.vwap_dist_pct:.2f}% > {RECLAIM_PULLBACK_MAX_EXTENSION_PCT:.1f}%"
+
+    lifecycle_ok, lifecycle_reason = vwap_lifecycle_ready_confirmation(metrics, "RECLAIM_PULLBACK_HOLDING")
+    if not lifecycle_ok:
+        return False, lifecycle_reason
 
     if not metrics.live_participation_ready_ok:
         return False, metrics.live_participation_reason
@@ -3849,6 +4011,10 @@ def setup_vwap_pullback_ready(metrics: IntradayMetrics, rr: float, confidence: f
 
     if not metrics.pullback_holding_vwap:
         return False, "No clean 5-min VWAP hold"
+
+    lifecycle_ok, lifecycle_reason = vwap_lifecycle_ready_confirmation(metrics, "VWAP_PULLBACK_CONTINUATION")
+    if not lifecycle_ok:
+        return False, lifecycle_reason
 
     if metrics.volume_drying and not metrics.base_volume_constructive:
         return False, "Pullback volume not constructive"
@@ -5009,13 +5175,37 @@ def trigger_ready_reassessment(
         fail_reasons.extend(setup_fail_reasons)
 
     if fail_reasons:
-        # Protected Trigger Ready rule:
-        # Once a setup reaches TRIGGER_READY, do not quietly demote it back to
-        # WATCH. It must remain visible until it is promoted, invalidated by
-        # hard structure failure, target/stop is hit, or it expires. This avoids
-        # confusing cases where the Signal Desk shows a ticker as Ready and then
-        # later lists it as a normal Watch candidate without a clear invalidation.
         warning_text = "; ".join(dict.fromkeys(fail_reasons))
+
+        # v2.5 discipline:
+        # TRIGGER_READY must mean the setup is actually ready, not merely forming.
+        # If a protected VWAP/reclaim setup has not been touched yet and the new
+        # strict hold/proximity checks fail, invalidate it visibly so it can form
+        # a fresh WATCH/new-base later instead of lingering as a misleading Ready.
+        if (
+            is_reclaim_lifecycle_setup_type(setup_type)
+            and not trigger_was_touched_recently(existing, metrics)
+            and (
+                "keep WATCH" in warning_text
+                or "not confirmed" in warning_text
+                or "too fresh" in warning_text
+                or "has not reclaimed EMA9" in warning_text
+                or "Trigger " in warning_text
+            )
+        ):
+            decision_log(
+                normalize_symbol(row.get("symbol")),
+                "TRIGGER_READY_REMOVED_NOT_CONFIRMED",
+                reason=warning_text,
+                confidence=conf,
+                price=metrics.price,
+                phase=phase,
+            )
+            return False, {}, warning_text
+
+        # Protected Trigger Ready fallback:
+        # Hard non-lifecycle warnings remain visible, but lifecycle readiness
+        # failures above are no longer allowed to masquerade as Ready.
         out = dict(existing)
         out.update({
             "signal_status": "TRIGGER_READY",
@@ -5091,6 +5281,20 @@ def trigger_ready_reassessment(
             fail.extend(event_reasons)
 
         warning_text = "; ".join(dict.fromkeys(fail))
+        if (
+            is_reclaim_lifecycle_setup_type(setup_type)
+            and not trigger_was_touched_recently(existing, metrics)
+        ):
+            decision_log(
+                normalize_symbol(row.get("symbol")),
+                "TRIGGER_READY_REMOVED_EXACT_RECHECK_FAILED",
+                reason=warning_text,
+                confidence=exact_conf,
+                price=metrics.price,
+                phase=phase,
+            )
+            return False, {}, warning_text
+
         out = dict(existing)
         out.update({
             "signal_status": "TRIGGER_READY",
@@ -6213,7 +6417,7 @@ def process_new_or_watch(
             "MONITORING",
             conf,
             live,
-            "Clean candidate with usable 5-min trade plan. Waiting for VWAP pullback, base squeeze, or HOD breakout trigger.",
+            "Clean candidate with usable 5-min trade plan. Waiting for VWAP/EMA hold, higher-low/reclaim, base squeeze, or HOD breakout trigger confirmation.",
             phase,
             regime,
         )
