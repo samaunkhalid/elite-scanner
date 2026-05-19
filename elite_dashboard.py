@@ -25,7 +25,8 @@ Display:
   - Dashboard hides Extended / High Risk sections from the main decision screen
   - Full-width Signal Desk replaces KPI summary row
   - Signal Desk collapses when no live signals exist
-  - Potential Movers loads 12; Active Momentum loads 8
+  - Potential Movers loads 12; Early Reclaim Runners loads 12; Active Momentum loads 8
+  - Dedicated Early Reclaim Runners section reads early_reclaim_runner=True from elite_watchlist_raw.csv
   - WATCH rows are compact in Signal Desk to reduce height
   - Ticker sections are hidden outside regular market OPEN status
 """
@@ -1437,6 +1438,224 @@ def build_monitor_mover_card(stock):
             </a>
         </div>
     </div>
+    """
+
+
+
+def is_early_reclaim_row(stock):
+    """
+    True when elite_scanner.py marked the symbol as an early VWAP/EMA reclaim runner.
+    This is a regular-market discovery lane, not pre-market/after-hours monitor data.
+    """
+    setup = safe_str(stock.get("intraday_setup_type"), "").upper()
+    return truthy(stock.get("early_reclaim_runner")) or setup == "VWAP_EMA_RECLAIM_RUNNER"
+
+
+def early_reclaim_sort_key(stock):
+    early_score = safe_float(stock.get("early_reclaim_score"), 0)
+    scanner_score = safe_float(stock.get("score"), 0)
+    intraday_score = safe_float(stock.get("intraday_score"), 0)
+    volume = safe_float(stock.get("intraday_volume"), 0)
+    change_pct = safe_float(stock.get("change_pct"), 0)
+    return (early_score, scanner_score, intraday_score, volume, change_pct)
+
+
+def load_early_reclaim_rows(raw_rows):
+    """
+    Build the display list for the Early Reclaim Runners section.
+
+    Source:
+      elite_watchlist_raw.csv rows already passed into build_dashboard().
+
+    Display rule:
+      - Include early_reclaim_runner=True OR intraday_setup_type=VWAP_EMA_RECLAIM_RUNNER.
+      - Deduplicate by symbol.
+      - Sort by early reclaim score first, then scanner/intraday strength.
+    """
+    seen = set()
+    rows = []
+
+    for row in raw_rows or []:
+        symbol = safe_str(row.get("symbol"), "").upper()
+        if not symbol or symbol in seen:
+            continue
+        if not is_early_reclaim_row(row):
+            continue
+        seen.add(symbol)
+        rows.append(row)
+
+    rows.sort(key=early_reclaim_sort_key, reverse=True)
+    return rows
+
+
+def build_early_reclaim_card(stock, signal=None):
+    """
+    Regular-market Early Reclaim Runner card.
+
+    This section is intentionally separate from Potential Movers and Active Momentum.
+    It is not labeled "monitor only"; it is a live scanner lane showing whether
+    the early VWAP/EMA reclaim detection path is working.
+    """
+    symbol = safe_str(stock.get("symbol"), "—").upper()
+    card_id = html_id_for_symbol(symbol)
+
+    price = safe_float(stock.get("intraday_last_price") or stock.get("price"), 0)
+    change_pct = safe_float(stock.get("change_pct"), 0)
+    change_class = "positive" if change_pct >= 0 else "negative"
+    change_sign = "+" if change_pct >= 0 else ""
+
+    company_name = safe_str(stock.get("company_name"), symbol)
+    sector = safe_str(stock.get("sector"), "Unknown")
+    bucket = safe_str(stock.get("setup_bucket"), "MONITOR")
+    tier = safe_str(stock.get("tier"), "—")
+
+    scanner_score = safe_int(stock.get("score"), 0)
+    early_score = safe_float(stock.get("early_reclaim_score"), 0)
+    intraday_score = safe_float(stock.get("intraday_score"), 0)
+    intraday_volume = safe_float(stock.get("intraday_volume"), 0)
+    vwap_dist = safe_float(stock.get("vwap_dist_pct"), 0)
+    setup_type = safe_str(stock.get("intraday_setup_type"), "VWAP_EMA_RECLAIM_RUNNER")
+    reason = safe_str(stock.get("early_reclaim_reason"), "")
+    quality_label = safe_str(stock.get("vwap_reclaim_quality_label"), "")
+    quality_color = safe_str(stock.get("vwap_reclaim_quality_color"), "neutral").lower()
+    quality_warning = safe_str(stock.get("vwap_reclaim_quality_warning"), "")
+    attempt_count = safe_int(stock.get("vwap_reclaim_attempt_count"), 0)
+    failed_count = safe_int(stock.get("vwap_reclaim_failed_count"), 0)
+    current_attempt = safe_int(stock.get("vwap_reclaim_current_attempt"), 0)
+    bucket_promoted = str(stock.get("early_reclaim_bucket_promoted", "")).strip().lower() in {"true", "1", "yes"}
+    quality_class = {
+        "green": "metric-good",
+        "yellow": "metric-ok",
+        "red": "metric-bad",
+    }.get(quality_color, "metric-neutral")
+    badge_text = quality_label or "VWAP Reclaim"
+    badge_style = {
+        "green": "background:rgba(34,197,94,.16);color:#22c55e;border-color:rgba(34,197,94,.35);",
+        "yellow": "background:rgba(245,158,11,.16);color:#f59e0b;border-color:rgba(245,158,11,.35);",
+        "red": "background:rgba(239,68,68,.16);color:#ef4444;border-color:rgba(239,68,68,.35);",
+    }.get(quality_color, "background:rgba(148,163,184,.14);color:#94a3b8;border-color:rgba(148,163,184,.28);")
+    signal_eligible_text = "Signal Eligible" if bucket_promoted or bucket == "POTENTIAL_MOVER" else "Scanner Lane"
+    tags_html = build_tags(stock)
+
+    price_source = safe_str(stock.get("price_source") or stock.get("data_source") or "Alpaca SIP")
+    price_time = compact_time_et(stock.get("price_updated_at"))
+    price_meta_html = ""
+    if price_time:
+        price_meta_html = f'<div class="price-meta">{esc(price_source)} · {esc(price_time)}</div>'
+
+    vwap_class = metric_class_vwap(vwap_dist)
+    intraday_vol_class = "metric-good" if intraday_volume >= 100_000 else "metric-ok" if intraday_volume >= 10_000 else "metric-neutral"
+    early_score_class = "metric-good" if early_score >= 80 else "metric-ok" if early_score >= 65 else "metric-neutral"
+    intraday_score_class = "metric-good" if intraday_score >= 80 else "metric-ok" if intraday_score >= 65 else "metric-neutral"
+
+    signal_detail_html = build_signal_detail_html(signal)
+
+    return f"""
+    <div class="stock-card early-reclaim-card" id="{esc(card_id)}" style="--accent:#38bdf8;">
+        <div class="card-top">
+            <div class="card-id">
+                <div class="symbol-row">
+                    <span class="symbol">{esc(symbol)}</span>
+                    <span class="sector-chip">{esc(sector)}</span>
+                    <span class="tier">Tier {esc(tier)}</span>
+                </div>
+                <div class="company-name">{esc(company_name)}</div>
+            </div>
+            <div class="price-box">
+                <div class="price">${price:.2f}</div>
+                {price_meta_html}
+                <div class="change {change_class}">{change_sign}{change_pct:.2f}%</div>
+            </div>
+        </div>
+
+        <div class="score-risk-row">
+            <span class="score-pill">Scanner {scanner_score}/100</span>
+            <span class="risk-pill">Early Reclaim</span>
+            <span class="sector-status-pill sector-neutral">{esc(bucket)}</span>
+            <span class="sector-status-pill" style="{badge_style}">{esc(badge_text)}</span>
+        </div>
+
+        <div class="early-reclaim-strip">
+            <div>
+                <span>Setup</span>
+                <strong>{esc(setup_type)}</strong>
+            </div>
+            <div>
+                <span>Early Score</span>
+                <strong class="{early_score_class}">{early_score:.0f}</strong>
+            </div>
+            <div>
+                <span>VWAP Dist</span>
+                <strong class="{vwap_class}">{vwap_dist:+.1f}%</strong>
+            </div>
+        </div>
+
+        <div class="metrics-grid early-reclaim-metrics">
+            <div><span>Intraday Vol</span><strong class="{intraday_vol_class}">{format_compact_count(intraday_volume)}</strong></div>
+            <div><span>Intraday Score</span><strong class="{intraday_score_class}">{intraday_score:.0f}</strong></div>
+            <div><span>VWAP Attempts</span><strong class="{quality_class}">{attempt_count}</strong></div>
+            <div><span>Failed Reclaims</span><strong class="{quality_class}">{failed_count}</strong></div>
+            <div><span>Current Attempt</span><strong>{current_attempt or "—"}</strong></div>
+            <div><span>Engine Path</span><strong>{esc(signal_eligible_text)}</strong></div>
+        </div>
+
+        <div class="interpretation early-reclaim-interpretation">
+            {esc(reason or "VWAP/EMA reclaim lane candidate. Watch for hold, volume continuation, and clean reclaim structure before considering any trade decision.")}
+            {f'<br><strong>{esc(quality_warning)}</strong>' if quality_warning else ''}
+        </div>
+
+        <div class="tags-row">{tags_html}</div>
+
+        {signal_detail_html}
+
+        <div class="card-actions">
+            <a class="action-btn action-chart" href="https://www.tradingview.com/chart/?symbol={esc(symbol)}" target="_blank">
+                <img src="assets/tradingview.png" alt="TradingView"> Chart
+            </a>
+            <a class="action-btn action-yahoo" href="https://finance.yahoo.com/quote/{esc(symbol)}" target="_blank">
+                <img src="assets/yahoo.png" alt="Yahoo Finance"> Yahoo
+            </a>
+            <a class="action-btn action-twits" href="https://stocktwits.com/symbol/{esc(symbol)}" target="_blank">
+                <img src="assets/stocktwits.png" alt="Stocktwits"> Twits
+            </a>
+        </div>
+    </div>
+    """
+
+
+def build_early_reclaim_section(stocks, signal_map=None, max_cards=12):
+    signal_map = signal_map or {}
+    count = len(stocks)
+
+    cards = "".join(
+        build_early_reclaim_card(
+            s,
+            signal=signal_map.get(safe_str(s.get("symbol"), "").upper())
+        )
+        for s in stocks[:max_cards]
+    )
+
+    if not cards:
+        cards = """
+        <div class="empty-section compact-empty">
+            <strong>No Early Reclaim Runners detected.</strong>
+            <span>This section fills when the regular-market scanner detects VWAP/EMA reclaim candidates from the early reclaim lane.</span>
+        </div>
+        """
+
+    return f"""
+    <section class="desk-section section-early-reclaim">
+        <div class="section-header">
+            <div>
+                <h2>Early Reclaim Runners</h2>
+                <p>Regular-market VWAP/EMA reclaim lane. Shows up to {max_cards} candidates above Active Momentum with VWAP attempt quality badges.</p>
+            </div>
+            <span class="section-count">{count}</span>
+        </div>
+        <div class="cards-grid">
+            {cards}
+        </div>
+    </section>
     """
 
 
@@ -3269,6 +3488,7 @@ def build_dashboard(potential, active, extended, highrisk, raw, active_watchlist
 
     premarket_section = ""
     afterhours_section = ""
+    early_reclaim_section = ""
 
     if market_open and scanner_regular_ready:
         signals = signal_payload.get("signals", [])
@@ -3281,6 +3501,7 @@ def build_dashboard(potential, active, extended, highrisk, raw, active_watchlist
         potential = apply_live_market_overlay(potential, live_market_map)
         active = apply_live_market_overlay(active, live_market_map)
         raw = apply_live_market_overlay(raw, live_market_map)
+        early_reclaim = load_early_reclaim_rows(raw)
 
         signal_desk_html = build_signal_desk_panel(signals, rejected_candidates)
         outcome_summary = load_signal_outcomes_summary()
@@ -3306,6 +3527,12 @@ def build_dashboard(potential, active, extended, highrisk, raw, active_watchlist
             collapse_empty=True,
         )
 
+        early_reclaim_section = build_early_reclaim_section(
+            early_reclaim,
+            signal_map=signal_map,
+            max_cards=12,
+        )
+
         active_section = build_section(
             "Active Momentum",
             "Already moving. Wait for pullback or tight consolidation before entry.",
@@ -3322,6 +3549,7 @@ def build_dashboard(potential, active, extended, highrisk, raw, active_watchlist
         <div class="nav-tabs">
             <a href="#signals">Signal Desk</a>
             <a href="#potential">Potential Movers</a>
+            <a href="#early">Early Reclaim</a>
             <a href="#active">Active Momentum</a>
             <a href="#sectors">Sector Rotation</a>
             <a href="#outcomes">Outcomes</a>
@@ -4698,6 +4926,58 @@ body {
     margin-top: 10px;
 }
 
+
+.early-reclaim-card {
+    border-top-color: #38bdf8;
+}
+
+.early-reclaim-strip {
+    margin-top: 12px;
+    display: grid;
+    grid-template-columns: 1.5fr 0.7fr 0.8fr;
+    gap: 8px;
+    padding: 9px;
+    border-radius: 10px;
+    border: 1px solid rgba(56, 189, 248, 0.18);
+    background: rgba(14, 165, 233, 0.055);
+}
+
+.early-reclaim-strip div {
+    min-width: 0;
+}
+
+.early-reclaim-strip span {
+    display: block;
+    color: #94a3b8;
+    font-size: 10px;
+    margin-bottom: 2px;
+}
+
+.early-reclaim-strip strong {
+    color: #e5e7eb;
+    font-size: 12px;
+    font-weight: 800;
+    word-break: break-word;
+}
+
+.early-reclaim-metrics {
+    margin-top: 8px;
+}
+
+.early-reclaim-interpretation {
+    border-color: rgba(56, 189, 248, 0.18);
+    background: rgba(14, 165, 233, 0.055);
+}
+
+.section-early-reclaim .section-header {
+    border-color: rgba(56, 189, 248, 0.18);
+}
+
+.section-early-reclaim .section-count {
+    background: rgba(14, 165, 233, 0.12);
+    color: #bae6fd;
+}
+
 .status-row {
     display: flex;
     gap: 7px;
@@ -5572,6 +5852,7 @@ td small {
 
     <div id="premarket">$premarket_section</div>
     <div id="potential">$potential_section</div>
+    <div id="early">$early_reclaim_section</div>
     <div id="active">$active_section</div>
     <div id="afterhours">$afterhours_section</div>
     <div id="sectors">$sector_snapshot</div>
@@ -5600,6 +5881,7 @@ td small {
         nav_tabs=nav_tabs,
         premarket_section=premarket_section,
         potential_section=potential_section,
+        early_reclaim_section=early_reclaim_section,
         active_section=active_section,
         afterhours_section=afterhours_section,
         desk_table=desk_table,
@@ -5648,6 +5930,7 @@ def main():
 
     print(f"  Potential Movers:       {len(potential)}")
     print(f"  Active Momentum:        {len(active)}")
+    print(f"  Early Reclaim Runners:  {len(load_early_reclaim_rows(raw))} (visible section max 12)")
     print(f"  Extended / Chase Risk:  {len(extended)} (generated, hidden on dashboard)")
     print(f"  High Risk / Extreme:    {len(highrisk)} (generated, hidden on dashboard)")
     print(f"  Raw Scored:             {len(raw)}")
