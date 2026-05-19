@@ -79,6 +79,11 @@ EARLY_RECLAIM_MAX_BAR_AGE_MINUTES = float(os.getenv("EARLY_RECLAIM_MAX_BAR_AGE_M
 EARLY_RECLAIM_MIN_SCORE = float(os.getenv("EARLY_RECLAIM_MIN_SCORE", "64"))
 EARLY_RECLAIM_FORCE_SCORE_FLOOR = float(os.getenv("EARLY_RECLAIM_FORCE_SCORE_FLOOR", "52"))
 EARLY_RECLAIM_OUTPUT_LIMIT = int(os.getenv("EARLY_RECLAIM_OUTPUT_LIMIT", "30"))
+EARLY_RECLAIM_HIGH_QUALITY_SCORE = float(os.getenv("EARLY_RECLAIM_HIGH_QUALITY_SCORE", "84"))
+EARLY_RECLAIM_FIRST_ATTEMPT_BONUS = float(os.getenv("EARLY_RECLAIM_FIRST_ATTEMPT_BONUS", "7"))
+EARLY_RECLAIM_SECOND_ATTEMPT_PENALTY = float(os.getenv("EARLY_RECLAIM_SECOND_ATTEMPT_PENALTY", "3"))
+EARLY_RECLAIM_FAILED_ATTEMPT_PENALTY = float(os.getenv("EARLY_RECLAIM_FAILED_ATTEMPT_PENALTY", "7"))
+EARLY_RECLAIM_REJECTION_FAIL_COUNT = int(os.getenv("EARLY_RECLAIM_REJECTION_FAIL_COUNT", "3"))
 
 OPTIONAL_STATIC_UNIVERSE_FILES = [
     "static_liquid_universe.csv",
@@ -381,6 +386,108 @@ def fetch_alpaca_1min_bars_for_early_reclaim(symbols):
     return out
 
 
+def analyze_vwap_reclaim_attempt_quality(resampled_5m, session_vwap):
+    """
+    Classify current VWAP reclaim quality from today's 5-minute bars.
+
+    Purpose:
+      - A first clean VWAP reclaim is materially different from a third/fourth
+        reclaim after repeated VWAP rejections.
+      - This function tracks attempts and failed attempts so the early reclaim
+        lane does not treat repeated VWAP resistance as a clean runner.
+
+    Definitions:
+      - Attempt: a 5-minute close crosses from below VWAP to at/above VWAP.
+      - Failure: after an attempt, one of the next two completed 5-minute bars
+        closes back below VWAP. This avoids punishing a normal intrabar retest.
+      - Current attempt: the most recent attempt while the latest close is still
+        above VWAP.
+    """
+    default = {
+        "vwap_reclaim_attempt_count": 0,
+        "vwap_reclaim_failed_count": 0,
+        "vwap_reclaim_current_attempt": 0,
+        "vwap_reclaim_quality_label": "No VWAP Reclaim",
+        "vwap_reclaim_quality_color": "neutral",
+        "vwap_reclaim_quality_adjustment": 0.0,
+        "vwap_reclaim_quality_warning": "",
+    }
+
+    try:
+        if resampled_5m is None or len(resampled_5m) < 3 or session_vwap <= 0:
+            return default
+
+        closes = pd.to_numeric(resampled_5m["c"], errors="coerce").dropna()
+        if len(closes) < 3:
+            return default
+
+        above = closes >= session_vwap
+        attempt_indices = []
+        for i in range(1, len(closes)):
+            if (not bool(above.iloc[i - 1])) and bool(above.iloc[i]):
+                attempt_indices.append(i)
+
+        # If price is currently above VWAP and it was below earlier, but the
+        # first cross occurred before our available resample boundary, still
+        # treat it as one current reclaim attempt.
+        if not attempt_indices and bool(above.iloc[-1]) and bool((closes.iloc[:-1] < session_vwap).any()):
+            attempt_indices.append(len(closes) - 1)
+
+        attempt_count = len(attempt_indices)
+        if attempt_count == 0:
+            return default
+
+        failed_count = 0
+        latest_idx = len(closes) - 1
+        for idx in attempt_indices:
+            # Do not score the newest/incomplete attempt as failed yet.
+            if idx >= latest_idx:
+                continue
+            lookahead = closes.iloc[idx + 1:min(idx + 3, len(closes))]
+            if len(lookahead) and bool((lookahead < session_vwap).any()):
+                failed_count += 1
+
+        current_attempt = attempt_count if bool(above.iloc[-1]) else 0
+
+        if failed_count >= EARLY_RECLAIM_REJECTION_FAIL_COUNT:
+            label = "VWAP Rejection Pattern"
+            color = "red"
+            adj = -15.0
+            warning = f"{failed_count} failed VWAP reclaims today"
+        elif failed_count >= 2:
+            label = "Repeated VWAP Reclaims"
+            color = "red"
+            adj = -10.0
+            warning = f"{failed_count} failed VWAP reclaims today"
+        elif current_attempt <= 1 and failed_count == 0:
+            label = "1st VWAP Reclaim"
+            color = "green"
+            adj = EARLY_RECLAIM_FIRST_ATTEMPT_BONUS
+            warning = ""
+        elif current_attempt == 2 or failed_count == 1:
+            label = "2nd VWAP Attempt"
+            color = "yellow"
+            adj = -EARLY_RECLAIM_SECOND_ATTEMPT_PENALTY
+            warning = f"{failed_count} failed VWAP reclaim" if failed_count else "Second reclaim attempt"
+        else:
+            label = f"VWAP Attempt {current_attempt}"
+            color = "yellow"
+            adj = -EARLY_RECLAIM_SECOND_ATTEMPT_PENALTY
+            warning = ""
+
+        return {
+            "vwap_reclaim_attempt_count": int(attempt_count),
+            "vwap_reclaim_failed_count": int(failed_count),
+            "vwap_reclaim_current_attempt": int(current_attempt),
+            "vwap_reclaim_quality_label": label,
+            "vwap_reclaim_quality_color": color,
+            "vwap_reclaim_quality_adjustment": float(adj),
+            "vwap_reclaim_quality_warning": warning,
+        }
+    except Exception:
+        return default
+
+
 def analyze_early_reclaim_symbol(symbol, rows):
     """
     Return a dict if symbol qualifies as VWAP/EMA early reclaim runner.
@@ -508,9 +615,19 @@ def analyze_early_reclaim_symbol(symbol, rows):
     if not macd_rising:
         return None
 
+    reclaim_quality = analyze_vwap_reclaim_attempt_quality(res, session_vwap)
+    reclaim_quality_adj = _safe_float_local(reclaim_quality.get("vwap_reclaim_quality_adjustment"), 0)
+
     # Score prioritizes current, early reclaim quality — not near-HOD.
-    early_score = 45.0
+    early_score = 45.0 + reclaim_quality_adj
     reasons = []
+
+    quality_label = str(reclaim_quality.get("vwap_reclaim_quality_label", "") or "")
+    quality_warning = str(reclaim_quality.get("vwap_reclaim_quality_warning", "") or "")
+    if quality_label and quality_label != "No VWAP Reclaim":
+        reasons.append(quality_label)
+    if quality_warning:
+        reasons.append(quality_warning)
 
     if one_min_reclaim:
         early_score += 8
@@ -554,7 +671,15 @@ def analyze_early_reclaim_symbol(symbol, rows):
         "change_pct": round(intraday_change_pct, 2),
         "early_reclaim_score": round(early_score, 1),
         "early_reclaim_runner": True,
-        "early_reclaim_reason": " · ".join(reasons[:6]),
+        "early_reclaim_reason": " · ".join(reasons[:8]),
+        "vwap_reclaim_attempt_count": reclaim_quality.get("vwap_reclaim_attempt_count", 0),
+        "vwap_reclaim_failed_count": reclaim_quality.get("vwap_reclaim_failed_count", 0),
+        "vwap_reclaim_current_attempt": reclaim_quality.get("vwap_reclaim_current_attempt", 0),
+        "vwap_reclaim_quality_label": reclaim_quality.get("vwap_reclaim_quality_label", ""),
+        "vwap_reclaim_quality_color": reclaim_quality.get("vwap_reclaim_quality_color", "neutral"),
+        "vwap_reclaim_quality_adjustment": reclaim_quality.get("vwap_reclaim_quality_adjustment", 0),
+        "vwap_reclaim_quality_warning": reclaim_quality.get("vwap_reclaim_quality_warning", ""),
+        "early_reclaim_high_quality": bool(early_score >= EARLY_RECLAIM_HIGH_QUALITY_SCORE and reclaim_quality.get("vwap_reclaim_quality_color") != "red"),
         "early_reclaim_latest_5m_volume": int(latest_5m_vol),
         "early_reclaim_latest_5m_notional": round(latest_5m_notional, 0),
         "early_reclaim_last15_volume": int(last15_vol),
@@ -640,6 +765,17 @@ def apply_early_reclaim_to_results(results, early_rows):
             stock["intraday_setup_type"] = "VWAP_EMA_RECLAIM_RUNNER"
             stock["early_reclaim_score"] = er.get("early_reclaim_score", 0)
             stock["early_reclaim_reason"] = er.get("early_reclaim_reason", "")
+            for _field in [
+                "vwap_reclaim_attempt_count",
+                "vwap_reclaim_failed_count",
+                "vwap_reclaim_current_attempt",
+                "vwap_reclaim_quality_label",
+                "vwap_reclaim_quality_color",
+                "vwap_reclaim_quality_adjustment",
+                "vwap_reclaim_quality_warning",
+                "early_reclaim_high_quality",
+            ]:
+                stock[_field] = er.get(_field, stock.get(_field, ""))
             stock["price"] = er.get("price", stock.get("price", 0))
             stock["intraday_last_price"] = er.get("price", stock.get("price", 0))
             stock["price_source"] = er.get("price_source", stock.get("price_source", "Alpaca SIP"))
@@ -698,6 +834,14 @@ def apply_early_reclaim_to_results(results, early_rows):
                 "intraday_setup_type": "VWAP_EMA_RECLAIM_RUNNER",
                 "early_reclaim_score": er.get("early_reclaim_score", 0),
                 "early_reclaim_reason": er.get("early_reclaim_reason", ""),
+                "vwap_reclaim_attempt_count": er.get("vwap_reclaim_attempt_count", 0),
+                "vwap_reclaim_failed_count": er.get("vwap_reclaim_failed_count", 0),
+                "vwap_reclaim_current_attempt": er.get("vwap_reclaim_current_attempt", 0),
+                "vwap_reclaim_quality_label": er.get("vwap_reclaim_quality_label", ""),
+                "vwap_reclaim_quality_color": er.get("vwap_reclaim_quality_color", "neutral"),
+                "vwap_reclaim_quality_adjustment": er.get("vwap_reclaim_quality_adjustment", 0),
+                "vwap_reclaim_quality_warning": er.get("vwap_reclaim_quality_warning", ""),
+                "early_reclaim_high_quality": er.get("early_reclaim_high_quality", False),
                 "intraday_last_price": er.get("price", 0),
                 "price_source": er.get("price_source", "Alpaca SIP Early Reclaim"),
                 "price_updated_at": er.get("price_updated_at", ""),
@@ -1648,18 +1792,28 @@ def classify_setup_bucket(stock):
         return "EXTENDED_CHASE_RISK"
 
     # Early reclaim runner lane:
-    # This is deliberately allowed into Potential Movers without near-HOD.
-    # It is designed to catch GO-style VWAP/EMA reclaim runners before they are
-    # already obvious/extended. Signal Engine still controls WATCH/TRIGGER/ACTIVE.
+    # - All detected early reclaim names can be displayed in the dashboard lane.
+    # - Only high-quality names are force-promoted into POTENTIAL_MOVER so
+    #   signal_engine.py can create a new WATCH candidate.
+    # - Lower-quality or repeated VWAP rejection names remain MONITOR unless they
+    #   also qualify through the normal continuation rules below.
     if boolish(stock.get("early_reclaim_runner", False)):
         price = float(stock.get("price", 0) or 0)
+        early_score = float(stock.get("early_reclaim_score", 0) or 0)
+        failed_reclaims = int(float(stock.get("vwap_reclaim_failed_count", 0) or 0))
+        quality_color = str(stock.get("vwap_reclaim_quality_color", "") or "").lower()
         if (
             EARLY_RECLAIM_MIN_PRICE <= price <= EARLY_RECLAIM_MAX_PRICE
             and above_vwap
             and vwap_dist <= EARLY_RECLAIM_MAX_VWAP_DIST_PCT
             and risk == "NORMAL"
+            and early_score >= EARLY_RECLAIM_HIGH_QUALITY_SCORE
+            and failed_reclaims < 2
+            and quality_color != "red"
         ):
+            stock["early_reclaim_bucket_promoted"] = True
             return "POTENTIAL_MOVER"
+        stock["early_reclaim_bucket_promoted"] = False
 
     # Active momentum = already moving upward, but not extreme.
     if 12 <= change_signed < 25:
