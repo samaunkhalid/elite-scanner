@@ -2492,6 +2492,186 @@ def is_after_hours_monitor_window(status, now_ny):
     end = AFTER_HOURS_DISPLAY_END_HOUR * 60 + AFTER_HOURS_DISPLAY_END_MINUTE
     return status == "AFTER-HOURS" and start <= mins <= end
 
+def ensure_et_aware(dt, now_ny=None):
+    """
+    Normalize a datetime to ET-aware when possible.
+
+    Some files store naive ET timestamps. Treat naive values as ET so freshness
+    checks do not accidentally pass stale snapshots from another session.
+    """
+    if not dt:
+        return None
+
+    if dt.tzinfo is None:
+        if now_ny is not None and getattr(now_ny, "tzinfo", None) is not None:
+            return dt.replace(tzinfo=now_ny.tzinfo)
+        if ZoneInfo:
+            return dt.replace(tzinfo=ZoneInfo("America/New_York"))
+        return dt
+
+    if ZoneInfo:
+        return dt.astimezone(ZoneInfo("America/New_York"))
+    return dt
+
+
+def file_mtime_et(path):
+    """
+    Return file modification time as ET-aware datetime when possible.
+    """
+    try:
+        ts = os.path.getmtime(path)
+    except Exception:
+        return None
+
+    dt_utc = datetime.fromtimestamp(ts, timezone.utc)
+    if ZoneInfo:
+        return dt_utc.astimezone(ZoneInfo("America/New_York"))
+    return dt_utc
+
+
+def json_monitor_generated_time_et(json_path, now_ny=None):
+    """
+    Extract a generated/as-of time from monitor mover JSON if available.
+
+    extended_hours_movers.py has used object wrappers such as:
+      {"metadata": {...}, "symbols": [...], "movers": [...]}
+
+    If no usable timestamp exists, caller should fall back to file mtime.
+    """
+    if not json_path or not os.path.exists(json_path):
+        return None
+
+    try:
+        with open(json_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception:
+        return None
+
+    if not isinstance(data, dict):
+        return None
+
+    candidates = []
+
+    for key in (
+        "generated_at_et",
+        "generated_at",
+        "created_at_et",
+        "created_at",
+        "asof_et",
+        "as_of_et",
+        "snapshot_time_et",
+        "snapshot_time",
+        "latest_extended_time",
+    ):
+        if data.get(key):
+            candidates.append(data.get(key))
+
+    metadata = data.get("metadata")
+    if isinstance(metadata, dict):
+        for key in (
+            "generated_at_et",
+            "generated_at",
+            "created_at_et",
+            "created_at",
+            "asof_et",
+            "as_of_et",
+            "snapshot_time_et",
+            "snapshot_time",
+            "latest_extended_time",
+        ):
+            if metadata.get(key):
+                candidates.append(metadata.get(key))
+
+    for value in candidates:
+        dt = parse_et_datetime(value)
+        dt = ensure_et_aware(dt, now_ny)
+        if dt:
+            return dt
+
+    return None
+
+
+def monitor_snapshot_fresh_for_afterhours(csv_path, json_path, now_ny):
+    """
+    Guard against stale after-hours files during the 16:00-16:15 transition.
+
+    Problem fixed:
+    - At 16:00 ET the dashboard market state becomes AFTER-HOURS.
+    - Before the first fresh after-hours scan, old after_hours_movers files can
+      still exist from a prior after-hours run.
+    - Without this guard, stale cards can appear until the 16:15 scan replaces them.
+
+    Rule:
+    - During AFTER-HOURS, only display after_hours_movers when the freshest CSV/JSON
+      timestamp is from the current ET date and at/after today's 16:00 ET.
+    - Otherwise show a waiting message and hide old rows.
+    """
+    if not now_ny:
+        return False, "Current ET time unavailable."
+
+    session_start = now_ny.replace(
+        hour=AFTER_HOURS_DISPLAY_START_HOUR,
+        minute=AFTER_HOURS_DISPLAY_START_MINUTE,
+        second=0,
+        microsecond=0,
+    )
+
+    times = []
+
+    csv_mtime = file_mtime_et(csv_path)
+    if csv_mtime:
+        times.append(csv_mtime)
+
+    json_mtime = file_mtime_et(json_path) if json_path else None
+    if json_mtime:
+        times.append(json_mtime)
+
+    json_generated = json_monitor_generated_time_et(json_path, now_ny)
+    if json_generated:
+        times.append(json_generated)
+
+    if not times:
+        return False, "Waiting for first same-day after-hours scan."
+
+    newest = max(times)
+    newest = ensure_et_aware(newest, now_ny)
+
+    # Same ET date + generated/modified after 16:00 ET.
+    if newest.date() != now_ny.date():
+        return False, f"Waiting for today's after-hours scan; latest snapshot is {newest.strftime('%Y-%m-%d %H:%M ET')}."
+
+    if newest < session_start:
+        return False, f"Waiting for fresh after-hours scan after 16:00 ET; latest snapshot is {newest.strftime('%H:%M ET')}."
+
+    # Defensive future-time guard: if system clock / metadata is badly ahead,
+    # do not display impossible after-hours rows.
+    if newest > now_ny.replace(second=59, microsecond=999999):
+        return False, f"After-hours snapshot timestamp is ahead of current ET time: {newest.strftime('%H:%M ET')}."
+
+    return True, f"Fresh after-hours snapshot: {newest.strftime('%H:%M ET')}."
+
+
+def build_monitor_snapshot_waiting_section(title, subtitle, reason, class_name):
+    """
+    Explicit waiting section used when extended-hours files are stale or missing.
+    This avoids showing stale cards during session transitions.
+    """
+    return f"""
+    <section class="desk-section {esc(class_name)}">
+        <div class="section-header">
+            <div>
+                <h2>{esc(title)}</h2>
+                <p>{esc(subtitle)}</p>
+            </div>
+            <span class="section-count">0</span>
+        </div>
+        <div class="empty-section compact-empty">
+            <strong>Waiting for fresh after-hours scan.</strong>
+            <span>{esc(reason)}</span>
+        </div>
+    </section>
+    """
+
 
 def load_monitor_mover_records(csv_path, json_path=None, limit=12):
     """
@@ -3598,11 +3778,25 @@ def build_dashboard(potential, active, extended, highrisk, raw, active_watchlist
         # After-hours monitor-only display.
         # Shows ranked/replaced extended-hours snapshot files only.
         # Does not run or display Signal Desk execution logic.
-        movers = load_monitor_mover_records(
+        #
+        # Stale-file guard:
+        # At 16:00 ET, the market status changes to AFTER-HOURS while the first
+        # fresh after-hours scan may not have run yet. Hide old after-hours files
+        # until a same-day 16:00+ snapshot exists.
+        afterhours_fresh, afterhours_fresh_reason = monitor_snapshot_fresh_for_afterhours(
             "after_hours_movers.csv",
             "after_hours_movers.json",
-            limit=12,
+            now_ny,
         )
+
+        if afterhours_fresh:
+            movers = load_monitor_mover_records(
+                "after_hours_movers.csv",
+                "after_hours_movers.json",
+                limit=12,
+            )
+        else:
+            movers = []
 
         signal_desk_html = build_monitor_only_signal_panel(
             status,
@@ -3615,13 +3809,21 @@ def build_dashboard(potential, active, extended, highrisk, raw, active_watchlist
         desk_table = ""
         sector_snapshot = build_sector_rotation_json_panel(load_sector_rotation_payload())
 
-        afterhours_section = build_monitor_movers_section(
-            "After-Hours Movers",
-            "Visible 16:00–20:00 ET. Ranked by latest after-hours price vs regular 16:00 close. Monitor Only — No After-Hours Entries.",
-            movers,
-            "section-afterhours",
-            max_cards=12,
-        )
+        if afterhours_fresh:
+            afterhours_section = build_monitor_movers_section(
+                "After-Hours Movers",
+                "Visible 16:00–20:00 ET. Ranked by latest after-hours price vs regular 16:00 close. Monitor Only — No After-Hours Entries.",
+                movers,
+                "section-afterhours",
+                max_cards=12,
+            )
+        else:
+            afterhours_section = build_monitor_snapshot_waiting_section(
+                "After-Hours Movers",
+                "Visible 16:00–20:00 ET. Ranked by latest after-hours price vs regular 16:00 close. Monitor Only — No After-Hours Entries.",
+                afterhours_fresh_reason,
+                "section-afterhours",
+            )
 
         nav_tabs = """
         <div class="nav-tabs">
