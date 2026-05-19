@@ -74,7 +74,14 @@ PREMARKET_SCAN_TIMES_ET = {
 # Regular whole-market scanner schedule.
 SCANNER_TIMES_ET = {
     "09:45",
-    "10:30",
+    "09:55",
+    "10:05",
+    "10:15",
+    "10:25",
+    "10:35",
+    "10:45",
+    "11:00",
+    "11:15",
     "11:30",
     "13:30",
     "14:30",
