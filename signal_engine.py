@@ -5487,12 +5487,7 @@ def trigger_fired(existing: Dict[str, Any], metrics: IntradayMetrics) -> bool:
 
 
 def active_invalidated(signal: Dict[str, Any], metrics: IntradayMetrics) -> Tuple[bool, str, str]:
-       if not metrics.has_data:
-        # Defensive data-gap grace:
-        # If Alpaca bars are temporarily missing but quote/trade data is still fresh,
-        # keep the protected signal alive instead of falsely invalidating it.
-        if quote_or_trade_fresh(metrics, DATA_GAP_GRACE_SECONDS):
-            return False, "", ""
+    if not metrics.has_data:
         return True, "No intraday data available", "EXTERNAL_RISK"
 
     trigger = safe_float(signal.get("entry_trigger"), 0)
@@ -5537,12 +5532,7 @@ def active_invalidated(signal: Dict[str, Any], metrics: IntradayMetrics) -> Tupl
 
 
 def ready_invalidated(signal: Dict[str, Any], metrics: IntradayMetrics) -> Tuple[bool, str, str]:
-        if not metrics.has_data:
-        # Defensive data-gap grace:
-        # If Alpaca bars are temporarily missing but quote/trade data is still fresh,
-        # keep the protected signal alive instead of falsely invalidating it.
-        if quote_or_trade_fresh(metrics, DATA_GAP_GRACE_SECONDS):
-            return False, "", ""
+    if not metrics.has_data:
         return True, "No intraday data available", "EXTERNAL_RISK"
 
     support = safe_float(signal.get("support_level"), 0)
