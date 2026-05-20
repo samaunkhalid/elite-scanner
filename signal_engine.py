@@ -78,12 +78,23 @@ SIGNAL_STATE_FILE = "signal_state.json"
 SUPPRESSED_SIGNALS_FILE = "suppressed_signals.csv"
 SIGNAL_OUTCOMES_FILE = "signal_outcomes.csv"
 SIGNAL_OUTCOMES_SUMMARY_FILE = "signal_outcomes_summary.json"
-SIGNAL_ENGINE_STRATEGY_VERSION = "v2.6_early_reclaim_ready_bypass"
+SIGNAL_ENGINE_STRATEGY_VERSION = "v2.7_structure_based_reclaim_audit"
 
 # State retention.
 ACTIVE_STALE_MINUTES = 10
 TRIGGER_READY_STALE_MINUTES = 45
 RECENT_INVALIDATED_KEEP_MINUTES = 30
+
+# v2.7 audit fixes:
+# - Do not invalidate protected signals only because 1-minute bars are briefly missing
+#   when quote/trade data is still fresh.
+# - Reclaim/pullback setups are judged by structure first; time is a warning, not
+#   an automatic failure while VWAP/EMA support still holds.
+# - Minor reclaim entry retests are normal and should not force NEW_BASE_REQUIRED
+#   unless structure also fails.
+DATA_GAP_GRACE_SECONDS = int(os.getenv("DATA_GAP_GRACE_SECONDS", "180"))
+RECLAIM_TRIGGER_RETEST_TOLERANCE_PCT = float(os.getenv("RECLAIM_TRIGGER_RETEST_TOLERANCE_PCT", "0.50"))
+RECLAIM_STRUCTURE_CONFIDENCE_PREMIUM_MAX = float(os.getenv("RECLAIM_STRUCTURE_CONFIDENCE_PREMIUM_MAX", "8.0"))
 
 # Quality thresholds.
 MIN_AVG_DOLLAR_VOL_M = 25.0
@@ -510,6 +521,62 @@ def retain_locked_signal_after_block(
     return out
 
 
+def retain_signal_during_data_gap(
+    existing: Dict[str, Any],
+    metrics: Any,
+    phase: str,
+) -> Dict[str, Any]:
+    """
+    Keep protected READY/TOUCHED/ACTIVE state alive through a temporary bar gap
+    when latest quote/trade is fresh. This is not a new signal generator; it only
+    prevents false terminal invalidations caused by missing 1-minute bars.
+    """
+    now_text = iso_now_et()
+    out = dict(existing)
+    prior_warning = safe_str(out.get("entry_warning"), "")
+
+    out.update({
+        "last_checked": now_text,
+        "updated_at": now_text,
+        "market_phase": phase,
+        "data_gap_grace": True,
+        "data_status": "DATA_STALE_BARS_QUOTE_TRADE_FRESH",
+        "entry_warning": combine_warning(
+            prior_warning,
+            "Temporary bar data gap. Latest quote/trade is fresh, so protected state is retained; manual chart confirmation required.",
+        ),
+        "reason": (
+            "Protected state retained during temporary bar data gap. "
+            f"Prior reason: {safe_str(out.get('reason'), '')}"
+        ).strip(),
+    })
+
+    if safe_float(getattr(metrics, "price", 0), 0) > 0:
+        out.update({
+            "price": round(safe_float(getattr(metrics, "price", 0), 0), 4),
+            "price_source": safe_str(getattr(metrics, "price_source", ""), out.get("price_source", "")),
+            "price_updated_at": safe_str(getattr(metrics, "price_updated_at", ""), out.get("price_updated_at", "")),
+            "bid": round(safe_float(getattr(metrics, "bid", 0), 0), 4),
+            "ask": round(safe_float(getattr(metrics, "ask", 0), 0), 4),
+            "quote_mid": round(safe_float(getattr(metrics, "quote_mid", 0), 0), 4),
+            "quote_time": safe_str(getattr(metrics, "quote_time", ""), out.get("quote_time", "")),
+            "trade_price": round(safe_float(getattr(metrics, "trade_price", 0), 0), 4),
+            "trade_time": safe_str(getattr(metrics, "trade_time", ""), out.get("trade_time", "")),
+        })
+
+    decision_log(
+        normalize_symbol(out.get("symbol", "")),
+        "DATA_GAP_GRACE_RETAINED",
+        status=out.get("signal_status"),
+        price=out.get("price"),
+        quote_time=out.get("quote_time"),
+        trade_time=out.get("trade_time"),
+        phase=phase,
+    )
+
+    return out
+
+
 def apply_state_transition_guard(
     symbol: str,
     existing: Dict[str, Any],
@@ -587,6 +654,33 @@ def minutes_since(dt_text: Any, now: Optional[datetime] = None) -> Optional[floa
         return (now - dt).total_seconds() / 60.0
     except Exception:
         return None
+
+
+def seconds_since(dt_text: Any, now: Optional[datetime] = None) -> Optional[float]:
+    mins = minutes_since(dt_text, now)
+    if mins is None:
+        return None
+    return max(0.0, mins * 60.0)
+
+
+def timestamp_fresh(dt_text: Any, max_age_seconds: int = DATA_GAP_GRACE_SECONDS) -> bool:
+    age = seconds_since(dt_text)
+    return age is not None and age <= max_age_seconds
+
+
+def quote_or_trade_fresh(metrics: Any, max_age_seconds: int = DATA_GAP_GRACE_SECONDS) -> bool:
+    """
+    True when Alpaca latest quote/trade is fresh enough to keep a protected
+    Signal Desk state alive during a temporary bar gap.
+
+    This does not allow new WATCH/READY signals. It only prevents false terminal
+    invalidations for already protected states.
+    """
+    return (
+        timestamp_fresh(getattr(metrics, "quote_time", ""), max_age_seconds)
+        or timestamp_fresh(getattr(metrics, "trade_time", ""), max_age_seconds)
+        or timestamp_fresh(getattr(metrics, "price_updated_at", ""), max_age_seconds)
+    )
 
 
 # ==============================================================
@@ -2939,13 +3033,12 @@ def apply_live_price_overlay(
       2. Latest trade price.
       3. Last 1-minute bar close.
 
-    VWAP/HOD still come from intraday bars, but after price overlay we recalculate
-    VWAP distance, HOD distance, above VWAP, and EMA9 price checks so trigger
-    promotion uses the same displayed/current price.
+    v2.7 data-gap rule:
+      Quote/trade fields are populated even when bar data is missing. metrics.has_data
+      remains False without bars, so new signals are still blocked, but protected
+      states can be retained when quote/trade is fresh instead of being falsely
+      invalidated for a temporary bar gap.
     """
-    if not metrics.has_data:
-        return metrics
-
     bid, ask, mid, quote_ts = quote_midpoint(quote or {})
     trade_px, trade_ts = trade_price_time(trade or {})
 
@@ -2982,6 +3075,11 @@ def apply_live_price_overlay(
     metrics.price_source = selected_source
     metrics.price_updated_at = selected_time or metrics.latest_bar_time
 
+    # If bars are missing, keep has_data=False. The price/quote/trade fields are
+    # still useful for data-gap grace on already protected signals.
+    if not metrics.has_data:
+        return metrics
+
     if metrics.session_open > 0:
         metrics.day_change_pct = pct_change(metrics.price, metrics.session_open)
 
@@ -2997,34 +3095,8 @@ def apply_live_price_overlay(
 
     if metrics.ema9 > 0:
         metrics.price_above_ema9 = metrics.price >= metrics.ema9
-        if metrics.price_above_ema9 and metrics.ema9_above_vwap and not metrics.ema9_falling:
-            metrics.ema9_status = "BULLISH_ALIGNMENT"
-        elif metrics.ema9_crossed_above_vwap_recent and metrics.price_above_ema9:
-            metrics.ema9_status = "RECENT_BULLISH_CROSS"
-        elif not metrics.price_above_ema9:
-            metrics.ema9_status = "PRICE_BELOW_EMA9"
-        elif metrics.ema9_falling:
-            metrics.ema9_status = "EMA9_FALLING"
-        elif not metrics.ema9_above_vwap:
-            metrics.ema9_status = "EMA9_BELOW_VWAP"
-        else:
-            metrics.ema9_status = "NEUTRAL"
-
-    if metrics.base_high > 0:
-        metrics.price_near_base_breakout = metrics.price >= metrics.base_high * 0.995
-        metrics.base_compression = (
-            metrics.base_range_pct <= 2.0
-            and metrics.higher_low_or_flat_base
-            and metrics.base_volume_constructive
-            and metrics.price_near_base_breakout
-        )
 
     return metrics
-
-
-# ==============================================================
-# RULEBOOK CALCULATIONS
-# ==============================================================
 
 def vwap_reclaim_zone(atr_pct: float) -> Tuple[float, float]:
     if atr_pct < 2.5:
@@ -3765,6 +3837,7 @@ def build_trade_plan(
             rejection_reason = "Target 1 R/R below 1.5"
 
     return {
+        "setup_type": setup_type,
         "valid": valid,
         "rejection_reason": rejection_reason,
         "entry_trigger": round(entry, 4),
@@ -3946,6 +4019,62 @@ def setup_ready_conf_required(setup_type: str, phase: str) -> float:
     if setup_type == "RECLAIM_PULLBACK_HOLDING":
         return MIN_CONF_RECLAIM_PULLBACK_READY
     return ready_confidence_required(phase)
+
+
+def reclaim_structure_confidence_premium(metrics: IntradayMetrics, setup_type: str = "") -> float:
+    """
+    Confidence formula fix for early reclaim setups.
+
+    We do NOT lower MIN_CONF_ACTIVE. Strong VWAP/EMA reclaim structure earns a
+    controlled live-score premium, which naturally lifts final confidence. Weak
+    reclaim attempts receive no override.
+    """
+    if not is_reclaim_lifecycle_setup_type(setup_type):
+        return 0.0
+
+    if not metrics.has_data:
+        return 0.0
+
+    # No premium if the setup has an obvious hard warning.
+    if metrics.bearish_momentum_divergence:
+        return 0.0
+    if not metrics.above_vwap:
+        return 0.0
+    if metrics.ema9 > 0 and not metrics.price_above_ema9:
+        return 0.0
+    if metrics.vwap_dist_pct > VWAP_RECLAIM_MAX_EXTENSION_PCT:
+        return 0.0
+
+    premium = 0.0
+
+    if metrics.vwap_reclaim_ready or metrics.reclaim_pullback_holding:
+        premium += 2.0
+    elif metrics.vwap_reclaim_recent and metrics.vwap_reclaim_lifecycle_active:
+        premium += 1.0
+
+    if metrics.ema9 > 0 and metrics.price_above_ema9:
+        premium += 1.5
+        if metrics.ema9_rising or metrics.ema9_crossed_above_vwap_recent:
+            premium += 1.0
+
+    if metrics.macd_1m_bullish_crossover_recent or metrics.macd_1m_curling_up:
+        premium += 1.5
+    elif metrics.macd_1m_above_signal and not metrics.macd_1m_histogram_falling:
+        premium += 1.0
+
+    if metrics.recent_volume_expanding or metrics.volume_stable_or_increasing:
+        premium += 1.0
+    if metrics.volume_fading_vs_morning:
+        premium -= 2.0
+
+    # Reject premium for an obvious wick/fakeout on the latest execution bar.
+    close, _low, high = latest_close_low_high(metrics)
+    if close > 0 and high > close:
+        upper_wick_pct = pct_change(high, close)
+        if upper_wick_pct >= TRIGGER_WICK_REJECTION_PCT and close <= metrics.price * 1.001:
+            premium -= 2.0
+
+    return round(clamp(premium, 0.0, RECLAIM_STRUCTURE_CONFIDENCE_PREMIUM_MAX), 2)
 
 
 def recent_execution_bars(metrics: IntradayMetrics, count: int = 3) -> List[Dict[str, Any]]:
@@ -4668,6 +4797,9 @@ def live_signal_score(
         time_score = 0
 
     # 7. Extension / touch penalty: up to -10
+    setup_type_for_score = safe_str(plan.get("setup_type"), "")
+    reclaim_premium = reclaim_structure_confidence_premium(metrics, setup_type_for_score)
+
     penalty = 0
     if metrics.vwap_dist_pct > 5.0:
         penalty += 7
@@ -4716,6 +4848,7 @@ def live_signal_score(
         + sector_score
         + market_score
         + time_score
+        + reclaim_premium
         - min(25, penalty)
     )
 
@@ -4730,7 +4863,19 @@ def final_confidence(scanner_score: float, live_score: float) -> float:
 # DIAGNOSTICS
 # ==============================================================
 
-def not_ready_reasons(metrics: IntradayMetrics, plan: Dict[str, Any], confidence: float) -> List[str]:
+def not_ready_reasons(
+    metrics: IntradayMetrics,
+    plan: Dict[str, Any],
+    confidence: float,
+    setup_type: str = "",
+) -> List[str]:
+    """
+    Setup-specific diagnostics.
+
+    v2.7 audit fix:
+    Do not list every possible setup failure for one ticker. Validate only the
+    active/provisional setup family when known.
+    """
     reasons: List[str] = []
 
     if not plan.get("valid"):
@@ -4746,36 +4891,32 @@ def not_ready_reasons(metrics: IntradayMetrics, plan: Dict[str, Any], confidence
 
     # Event-risk diagnostics. If this is an earnings-day name, Signal Desk
     # should make clear it is an earnings reaction trade only.
-    if plan.get("valid"):
-        # Row is not available here, so earnings-specific reasons are attached
-        # in diagnostic_candidate/signal_base. Setup-specific not-ready reasons
-        # remain focused on live technicals.
-        pass
+    setup = safe_str(setup_type or plan.get("setup_type"), "").upper()
 
-    _, reclaim_reason = setup_vwap_reclaim_ready(metrics, rr, confidence)
-    reasons.append(f"VWAP reclaim not ready: {reclaim_reason}")
+    if setup == "VWAP_EMA_RECLAIM_RUNNER":
+        _, reason = setup_early_reclaim_runner_ready(metrics, rr, confidence)
+        reasons.append(f"Early VWAP/EMA reclaim not ready: {reason}")
+    elif setup == "VWAP_RECLAIM_BREAKOUT":
+        _, reason = setup_vwap_reclaim_ready(metrics, rr, confidence)
+        reasons.append(f"VWAP reclaim not ready: {reason}")
+    elif setup == "RECLAIM_PULLBACK_HOLDING":
+        _, reason = setup_reclaim_pullback_ready(metrics, rr, confidence)
+        reasons.append(f"Reclaim pullback not ready: {reason}")
+    elif setup == "VWAP_PULLBACK_CONTINUATION":
+        _, reason = setup_vwap_pullback_ready(metrics, rr, confidence)
+        reasons.append(f"VWAP pullback not ready: {reason}")
+    elif setup == "BASE_SQUEEZE_BREAKOUT":
+        _, reason = setup_base_squeeze_ready(metrics, rr, confidence)
+        reasons.append(f"Base/flag squeeze not ready: {reason}")
+    elif setup == "HOD_BASE_BREAKOUT":
+        _, reason = setup_hod_breakout_ready(metrics, rr, confidence)
+        reasons.append(f"HOD breakout not ready: {reason}")
+    else:
+        # Unknown setup: show only the most relevant lifecycle family first.
+        _, reclaim_reason = setup_vwap_reclaim_ready(metrics, rr, confidence)
+        reasons.append(f"VWAP reclaim not ready: {reclaim_reason}")
 
-    _, reclaim_pullback_reason = setup_reclaim_pullback_ready(metrics, rr, confidence)
-    reasons.append(f"Reclaim pullback not ready: {reclaim_pullback_reason}")
-
-    _, vwap_reason = setup_vwap_pullback_ready(metrics, rr, confidence)
-    reasons.append(f"VWAP pullback not ready: {vwap_reason}")
-
-    _, base_reason = setup_base_squeeze_ready(metrics, rr, confidence)
-    reasons.append(f"Base/flag squeeze not ready: {base_reason}")
-
-    _, hod_reason = setup_hod_breakout_ready(metrics, rr, confidence)
-    reasons.append(f"HOD breakout not ready: {hod_reason}")
-
-    # De-duplicate while preserving order.
-    out = []
-    seen = set()
-    for r in reasons:
-        if r not in seen:
-            out.append(r)
-            seen.add(r)
-    return out
-
+    return list(dict.fromkeys([r for r in reasons if r]))
 
 def diagnostic_candidate(
     row: Dict[str, Any],
@@ -5363,7 +5504,13 @@ def active_invalidated(signal: Dict[str, Any], metrics: IntradayMetrics) -> Tupl
                 return True, "Active reclaim signal lost VWAP/reclaim support after falling below trigger", "FAILED_SETUP"
 
         if expired_by_age(signal, ACTIVE_STALE_MINUTES):
-            return True, "Active reclaim signal stale for more than 2 refresh cycles", "MISSED_WINDOW"
+            holding, _hold_reason = reclaim_lifecycle_holding(signal, metrics)
+            if not holding:
+                return True, "Active reclaim aged out after reclaim/VWAP structure failed", "MISSED_WINDOW"
+
+            # Time alone is no longer a terminal failure for reclaim runners.
+            # process_existing_signal will surface this as ACTIVE_AGED / monitoring.
+            return False, "", ""
 
         # Reclaim setups may wick under VWAP/EMA briefly. Keep tracking unless the
         # hard-failure rules above confirm support loss.
@@ -5806,6 +5953,7 @@ def locked_plan_from_signal(signal: Dict[str, Any]) -> Dict[str, Any]:
     valid = entry > 0 and stop > 0 and target_1 > entry and stop < entry and rr >= MIN_RR
 
     return {
+        "setup_type": safe_str(signal.get("setup_type"), ""),
         "valid": valid,
         "rejection_reason": "" if valid else "Locked Trigger Ready plan is invalid",
         "entry_trigger": round(entry, 4),
@@ -5957,13 +6105,41 @@ def trigger_is_above_current_price(signal: Dict[str, Any], metrics: IntradayMetr
     return entry > 0 and metrics.price > 0 and metrics.price < entry * (1.0 - TRIGGER_TOUCH_EPS_PCT / 100.0)
 
 
+def reclaim_retest_structure_ok(signal: Dict[str, Any], metrics: IntradayMetrics) -> Tuple[bool, str]:
+    """
+    Minor entry retests are acceptable for reclaim/pullback setups only while
+    VWAP/EMA structure still holds.
+    """
+    if not metrics.has_data:
+        return False, "No intraday bars to confirm reclaim retest structure"
+
+    holding, hold_reason = reclaim_lifecycle_holding(signal, metrics)
+    if not holding:
+        return False, hold_reason
+
+    if not metrics.above_vwap:
+        return False, "Price no longer holds VWAP during reclaim retest"
+
+    if metrics.ema9 > 0 and not metrics.price_above_ema9:
+        return False, "Price no longer holds EMA9 during reclaim retest"
+
+    if metrics.bearish_momentum_divergence:
+        return False, "Bearish momentum divergence during reclaim retest"
+
+    if metrics.macd_1m_curling_down and metrics.macd_1m_histogram_falling and not metrics.macd_1m_above_signal:
+        return False, "1-minute MACD weakening during reclaim retest"
+
+    return True, "Minor reclaim retest allowed while VWAP/EMA structure holds"
+
+
 def trigger_pullback_after_touch(signal: Dict[str, Any], metrics: IntradayMetrics) -> Tuple[bool, str]:
     """
     True when a trigger was touched/exceeded but the stock has since pulled away
-    enough that the old entry is stale. This avoids RIG/BN behavior:
-      Trigger Ready -> entry touched -> falls back to Watch / stale Ready.
+    enough that the old entry is stale.
 
-    A stale touched trigger should become NEW_BASE_REQUIRED / REJECTED_TRIGGER.
+    v2.7 audit fix:
+    VWAP/reclaim setups can retest the entry by up to
+    RECLAIM_TRIGGER_RETEST_TOLERANCE_PCT if VWAP/EMA structure still holds.
     """
     entry = safe_float(signal.get("entry_trigger"), 0)
     if entry <= 0 or not metrics.has_data:
@@ -5973,12 +6149,43 @@ def trigger_pullback_after_touch(signal: Dict[str, Any], metrics: IntradayMetric
         return False, ""
 
     pullback_pct = pct_change(entry, metrics.price)
+    setup_type = safe_str(signal.get("setup_type"), "")
+    reclaim_family = is_reclaim_lifecycle_setup_type(setup_type)
+
     bearish_confirmation = (
         (metrics.ema9 > 0 and not metrics.price_above_ema9)
         or metrics.macd_1m_curling_down
         or metrics.macd_histogram_falling
         or metrics.bearish_momentum_divergence
     )
+
+    if reclaim_family:
+        structure_ok, structure_reason = reclaim_retest_structure_ok(signal, metrics)
+
+        if pullback_pct <= RECLAIM_TRIGGER_RETEST_TOLERANCE_PCT and structure_ok:
+            decision_log(
+                normalize_symbol(signal.get("symbol", "")),
+                "RECLAIM_ENTRY_RETEST_ALLOWED",
+                pullback_pct=pullback_pct,
+                reason=structure_reason,
+                price=metrics.price,
+                trigger=entry,
+            )
+            return False, ""
+
+        if pullback_pct >= TRIGGER_PULLBACK_REJECT_PCT:
+            return True, (
+                f"Reclaim trigger was touched/exceeded, then price pulled back {pullback_pct:.2f}% below entry; "
+                f"structure_ok={structure_ok}. New base required."
+            )
+
+        if bearish_confirmation and pullback_pct >= TRIGGER_TOUCH_EPS_PCT:
+            return True, (
+                "Reclaim trigger was touched/exceeded, then price fell back below trigger with weakening EMA/MACD; "
+                "new base required."
+            )
+
+        return False, ""
 
     if pullback_pct >= TRIGGER_PULLBACK_REJECT_PCT:
         return True, (
@@ -5993,7 +6200,6 @@ def trigger_pullback_after_touch(signal: Dict[str, Any], metrics: IntradayMetric
         )
 
     return False, ""
-
 
 def keep_trigger_touched_pending(
     existing: Dict[str, Any],
@@ -6341,12 +6547,17 @@ def process_existing_signal(
     if is_previous_session(existing):
         return make_invalidated(existing, row, metrics, "Previous session signal expired.", "MISSED_WINDOW", phase)
 
+    if status in {"TRIGGER_READY", "TRIGGER_TOUCHED", "ACTIVE_SIGNAL"} and not metrics.has_data and quote_or_trade_fresh(metrics):
+        return retain_signal_during_data_gap(existing, metrics, phase)
+
     if status == "ACTIVE_SIGNAL":
         invalid, reason, category = active_invalidated(existing, metrics)
         if invalid:
             return make_invalidated(existing, row, metrics, reason, category, phase)
 
         out = dict(existing)
+        active_aged = bool(is_reclaim_lifecycle_setup(existing) and expired_by_age(existing, ACTIVE_STALE_MINUTES))
+
         out.update({
             "last_checked": now_text,
             "updated_at": now_text,
@@ -6374,7 +6585,12 @@ def process_existing_signal(
             "macd_status": metrics.macd_status,
             "momentum_status": metrics.momentum_status,
             "actionable": True,
-            "actionability": safe_str(existing.get("actionability"), "ACTIVE") or "ACTIVE",
+            "actionability": "ACTIVE_AGED_MONITORING" if active_aged else (safe_str(existing.get("actionability"), "ACTIVE") or "ACTIVE"),
+            "active_aged_monitoring": active_aged,
+            "entry_warning": combine_warning(
+                existing.get("entry_warning", ""),
+                "Active reclaim is older than the normal stale window but structure still holds; monitor by VWAP/EMA/stop, not time alone."
+            ) if active_aged else existing.get("entry_warning", ""),
         })
         return out
 
@@ -6745,7 +6961,7 @@ def process_new_or_watch(
         out["detected_at"] = iso_now_et()
         out["lunch_caution"] = True
         out["event_risk_warning"] = combine_warning(out.get("event_risk_warning", ""), LUNCH_CAUTION_WARNING)
-        out["not_ready_reasons"] = setup_fail_reasons or not_ready_reasons(metrics, plan, conf)
+        out["not_ready_reasons"] = setup_fail_reasons or not_ready_reasons(metrics, plan, conf, setup_type)
         log_watch_evaluated(symbol, out, metrics, phase)
         return out, None
 
