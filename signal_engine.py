@@ -78,7 +78,7 @@ SIGNAL_STATE_FILE = "signal_state.json"
 SUPPRESSED_SIGNALS_FILE = "suppressed_signals.csv"
 SIGNAL_OUTCOMES_FILE = "signal_outcomes.csv"
 SIGNAL_OUTCOMES_SUMMARY_FILE = "signal_outcomes_summary.json"
-SIGNAL_ENGINE_STRATEGY_VERSION = "v2.5_trigger_ready_hold_confirmation"
+SIGNAL_ENGINE_STRATEGY_VERSION = "v2.6_early_reclaim_ready_bypass"
 
 # State retention.
 ACTIVE_STALE_MINUTES = 10
@@ -164,6 +164,18 @@ VWAP_READY_MIN_HOLD_BARS = int(os.getenv("VWAP_READY_MIN_HOLD_BARS", "2"))
 VWAP_READY_MIN_GREEN_OR_FLAT_BARS = int(os.getenv("VWAP_READY_MIN_GREEN_OR_FLAT_BARS", "1"))
 VWAP_READY_VWAP_LOW_BUFFER_PCT = float(os.getenv("VWAP_READY_VWAP_LOW_BUFFER_PCT", "0.20"))
 RECLAIM_READY_MIN_HOLD_MINUTES = float(os.getenv("RECLAIM_READY_MIN_HOLD_MINUTES", "1.0"))
+# Early reclaim Trigger Ready bypass.
+# CCL exposed the timing problem: the scanner can correctly tag a fresh
+# VWAP/EMA reclaim, but the old generic lifecycle may still reject it as
+# "no recent reclaim", "no pullback hold", or "volume fading" until price is
+# already 2%+ above VWAP. This bypass is only for scanner-marked early reclaim
+# rows that are still near VWAP and structurally holding. It does NOT relax
+# ACTIVE confirmation.
+EARLY_RECLAIM_READY_MAX_VWAP_DIST_PCT = float(os.getenv("EARLY_RECLAIM_READY_MAX_VWAP_DIST_PCT", "1.35"))
+EARLY_RECLAIM_READY_MAX_HOD_DIST_PCT = float(os.getenv("EARLY_RECLAIM_READY_MAX_HOD_DIST_PCT", "-1.75"))
+EARLY_RECLAIM_READY_MIN_CONF = float(os.getenv("EARLY_RECLAIM_READY_MIN_CONF", str(MIN_CONF_RECLAIM_READY)))
+EARLY_RECLAIM_READY_MAX_FAILED_RECLAIMS = int(os.getenv("EARLY_RECLAIM_READY_MAX_FAILED_RECLAIMS", "1"))
+EARLY_RECLAIM_READY_REQUIRE_SCANNER_5M = os.getenv("EARLY_RECLAIM_READY_REQUIRE_SCANNER_5M", "1").strip() != "0"
 
 # Earnings-day reaction handling.
 # We do not treat earnings-day moves as normal setups. They are allowed only as
@@ -3327,6 +3339,154 @@ def scanner_marks_early_reclaim(row: Optional[Dict[str, Any]]) -> bool:
     )
 
 
+def scanner_reclaim_text(row: Optional[Dict[str, Any]]) -> str:
+    if not row:
+        return ""
+    parts = []
+    for key in (
+        "tags",
+        "early_reclaim_reason",
+        "intraday_setup_type",
+        "setup_type",
+        "setup_label",
+        "vwap_reclaim_quality_label",
+        "vwap_reclaim_quality_warning",
+    ):
+        val = safe_str(row.get(key), "")
+        if val:
+            parts.append(val)
+    return " | ".join(parts).lower()
+
+
+def scanner_has_1m_reclaim_tag(row: Optional[Dict[str, Any]]) -> bool:
+    text = scanner_reclaim_text(row)
+    return (
+        "1min vwap/ema reclaim" in text
+        or "1m vwap/ema reclaim" in text
+        or "1-min vwap/ema reclaim" in text
+        or "1 minute vwap/ema reclaim" in text
+        or "vwap/ema reclaim runner" in text
+        or "vwap_ema_reclaim_runner" in text
+    )
+
+
+def scanner_has_5m_reclaim_hold_tag(row: Optional[Dict[str, Any]]) -> bool:
+    text = scanner_reclaim_text(row)
+    return (
+        "5min reclaim/hold" in text
+        or "5m reclaim/hold" in text
+        or "5-min reclaim/hold" in text
+        or "5 minute reclaim/hold" in text
+        or "reclaim/hold" in text
+        or "vwap/ema reclaim runner" in text
+        or "vwap_ema_reclaim_runner" in text
+    )
+
+
+def scanner_reclaim_rejection_risk(row: Optional[Dict[str, Any]]) -> Tuple[bool, str]:
+    if not row:
+        return False, ""
+    failed_count = safe_int(row.get("vwap_reclaim_failed_count"), 0)
+    quality_text = scanner_reclaim_text(row)
+    color = safe_str(row.get("vwap_reclaim_quality_color"), "").lower()
+    label = safe_str(row.get("vwap_reclaim_quality_label"), "")
+    warning = safe_str(row.get("vwap_reclaim_quality_warning"), "")
+
+    if color == "red":
+        return True, label or warning or "VWAP reclaim quality is red"
+    if failed_count > EARLY_RECLAIM_READY_MAX_FAILED_RECLAIMS:
+        return True, f"Failed VWAP reclaims {failed_count} > {EARLY_RECLAIM_READY_MAX_FAILED_RECLAIMS}"
+    if "vwap rejection pattern" in quality_text:
+        return True, label or "VWAP rejection pattern"
+    return False, ""
+
+
+def early_reclaim_trigger_ready_bypass(
+    metrics: IntradayMetrics,
+    rr: float,
+    confidence: float,
+    row: Optional[Dict[str, Any]] = None,
+) -> Tuple[bool, str]:
+    """
+    Fast Trigger Ready lane for scanner-marked early VWAP/EMA reclaims.
+
+    Protected rules:
+      - This can only create TRIGGER_READY, never ACTIVE.
+      - ACTIVE still requires the later trigger-touch candle-close confirmation.
+      - Repeated VWAP rejection patterns stay blocked.
+      - Price must still be near VWAP; once extended, keep WATCH.
+    """
+    if not scanner_marks_early_reclaim(row):
+        return False, "Scanner did not mark early reclaim"
+
+    if not metrics.has_data:
+        return False, "No intraday bars"
+
+    rejection_risk, rejection_reason = scanner_reclaim_rejection_risk(row)
+    if rejection_risk:
+        return False, f"Scanner VWAP quality risk: {rejection_reason}"
+
+    if not metrics.above_vwap:
+        return False, "Early reclaim bypass blocked: price is below VWAP"
+
+    if metrics.vwap_dist_pct > EARLY_RECLAIM_READY_MAX_VWAP_DIST_PCT:
+        return False, (
+            f"Early reclaim bypass blocked: VWAP distance {metrics.vwap_dist_pct:.2f}% "
+            f"> {EARLY_RECLAIM_READY_MAX_VWAP_DIST_PCT:.2f}%"
+        )
+
+    if metrics.hod > 0 and metrics.hod_distance_pct < EARLY_RECLAIM_READY_MAX_HOD_DIST_PCT:
+        return False, (
+            f"Early reclaim bypass blocked: not close enough to HOD "
+            f"({metrics.hod_distance_pct:.2f}% < {EARLY_RECLAIM_READY_MAX_HOD_DIST_PCT:.2f}%)"
+        )
+
+    if metrics.ema9 > 0 and not metrics.price_above_ema9:
+        return False, "Early reclaim bypass blocked: price has not held EMA9"
+
+    latest_close, latest_low, latest_high = latest_close_low_high(metrics)
+    if latest_close <= 0:
+        return False, "Early reclaim bypass blocked: no latest 1-minute close"
+
+    if metrics.vwap > 0:
+        vwap_low_buffer = metrics.vwap * (1.0 - VWAP_READY_VWAP_LOW_BUFFER_PCT / 100.0)
+        if latest_close < metrics.vwap:
+            return False, f"Early reclaim bypass blocked: latest close {latest_close:.2f} below VWAP {metrics.vwap:.2f}"
+        if latest_low < vwap_low_buffer and not metrics.recent_volume_expanding:
+            return False, "Early reclaim bypass blocked: latest candle undercut VWAP without volume expansion"
+
+    has_1m = scanner_has_1m_reclaim_tag(row) or metrics.vwap_reclaim_recent or metrics.reclaim_pullback_holding
+    has_5m = scanner_has_5m_reclaim_hold_tag(row) or metrics.reclaim_pullback_holding
+
+    if not has_1m:
+        return False, "Early reclaim bypass blocked: no scanner/engine 1-minute reclaim confirmation"
+    if EARLY_RECLAIM_READY_REQUIRE_SCANNER_5M and not has_5m:
+        return False, "Early reclaim bypass blocked: no scanner 5-minute reclaim/hold confirmation"
+
+    macd_ok, macd_reason = vwap_lifecycle_macd_confirmation(metrics, "VWAP_EMA_RECLAIM_RUNNER")
+    if not macd_ok:
+        return False, macd_reason
+
+    if rr < MIN_RR:
+        return False, "R/R below 1.5"
+
+    if confidence < EARLY_RECLAIM_READY_MIN_CONF:
+        return False, f"Confidence below early reclaim bypass minimum {EARLY_RECLAIM_READY_MIN_CONF:.0f}"
+
+    if not metrics.live_participation_ready_ok and not metrics.recent_volume_expanding:
+        return False, metrics.live_participation_reason
+
+    return (
+        True,
+        (
+            "Early VWAP/EMA reclaim Trigger Ready near VWAP; "
+            f"VWAP dist {metrics.vwap_dist_pct:.2f}%, "
+            f"HOD dist {metrics.hod_distance_pct:.2f}%, "
+            "scanner 1m/5m reclaim confirmed. Active still requires candle-close confirmation."
+        ),
+    )
+
+
 def setup_display_label(row: Dict[str, Any], setup_type: str) -> str:
     if is_earnings_reaction_row(row) and setup_type and setup_type not in {"MONITORING", "PREMARKET_MONITOR", "BLACKOUT_MONITOR"}:
         return f"EARNINGS_REACTION_{setup_type}"
@@ -3646,6 +3806,15 @@ def choose_best_provisional_plan(
 
     valid_plans = [(s, p) for s, p in plans if p.get("valid") and safe_float(p.get("reward_risk"), 0) >= MIN_RR_WATCH]
 
+    if scanner_marks_early_reclaim(row):
+        # Do not let a generic VWAP pullback / HOD plan steal an early reclaim
+        # runner simply because it has a slightly better R/R. NU/CIFR/CCL showed
+        # that scanner-marked early reclaim rows need to stay in their dedicated
+        # lifecycle so entry stays near VWAP/EMA and ACTIVE confirmation remains strict.
+        for setup_name, setup_plan in valid_plans:
+            if setup_name == "VWAP_EMA_RECLAIM_RUNNER":
+                return setup_name, setup_plan
+
     if valid_plans:
         # Prefer better R/R, but keep setup order as tie-break.
         valid_plans.sort(key=lambda x: (-safe_float(x[1].get("reward_risk"), 0), setup_order.index(x[0])))
@@ -3944,9 +4113,13 @@ def setup_vwap_ema_reclaim_runner_ready(
     if metrics.ema9 > 0 and not metrics.price_above_ema9:
         return False, "Early reclaim runner has not held EMA9"
 
+    bypass_ok, bypass_reason = early_reclaim_trigger_ready_bypass(metrics, rr, confidence, row)
+    if bypass_ok:
+        return True, bypass_reason
+
     lifecycle_ok, lifecycle_reason = vwap_lifecycle_ready_confirmation(metrics, "VWAP_EMA_RECLAIM_RUNNER")
     if not lifecycle_ok:
-        return False, lifecycle_reason
+        return False, f"{lifecycle_reason}; early reclaim bypass not ready: {bypass_reason}"
 
     macd_ok, macd_reason = vwap_lifecycle_macd_confirmation(metrics, "VWAP_EMA_RECLAIM_RUNNER")
     if not macd_ok:
