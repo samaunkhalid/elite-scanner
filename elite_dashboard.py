@@ -2591,6 +2591,85 @@ def json_monitor_generated_time_et(json_path, now_ny=None):
     return None
 
 
+def monitor_scan_timestamp_label(csv_path, json_path, now_ny, fallback="waiting"):
+    """
+    Header timestamp for extended-hours monitor files.
+
+    During PRE-MARKET and AFTER-HOURS the dashboard should not display the
+    stale regular scanner timestamp. It should display the timestamp from the
+    monitor-only scan file instead:
+      - premarket_movers.json/csv during PRE-MARKET
+      - after_hours_movers.json/csv during AFTER-HOURS
+
+    Priority:
+      1. JSON generated/as-of timestamp.
+      2. Newest JSON/CSV file modification time.
+      3. Fallback text.
+    """
+    times = []
+
+    generated = json_monitor_generated_time_et(json_path, now_ny)
+    if generated:
+        times.append(generated)
+
+    csv_mtime = file_mtime_et(csv_path)
+    if csv_mtime:
+        times.append(csv_mtime)
+
+    json_mtime = file_mtime_et(json_path) if json_path else None
+    if json_mtime:
+        times.append(json_mtime)
+
+    if not times:
+        return fallback
+
+    newest = max(ensure_et_aware(dt, now_ny) for dt in times if dt)
+    if not newest:
+        return fallback
+
+    return newest.strftime("%d-%m-%Y at %H:%M ET")
+
+
+def build_header_scan_time_label(status, now_ny, scanner_meta):
+    """
+    Build the first header scan-time pill.
+
+    Regular market:
+      Scanner Data: <regular scanner time>
+
+    Premarket:
+      Premarket Scan: <premarket_movers timestamp>
+
+    After-hours:
+      After-Hours Scan: <after_hours_movers timestamp>
+
+    This prevents stale regular scanner timestamps, such as 15:31 ET, from being
+    shown as the primary scan time while the dashboard is displaying premarket
+    or after-hours monitor-only movers.
+    """
+    status_norm = safe_str(status).upper()
+
+    if status_norm == "PRE-MARKET":
+        ts = monitor_scan_timestamp_label(
+            "premarket_movers.csv",
+            "premarket_movers.json",
+            now_ny,
+            fallback="waiting",
+        )
+        return f"Premarket Scan: {ts}"
+
+    if status_norm == "AFTER-HOURS":
+        ts = monitor_scan_timestamp_label(
+            "after_hours_movers.csv",
+            "after_hours_movers.json",
+            now_ny,
+            fallback="waiting",
+        )
+        return f"After-Hours Scan: {ts}"
+
+    return f"Scanner Data: {header_time_label(scanner_meta.get('scanner_generated_at_et'))}"
+
+
 def monitor_snapshot_fresh_for_afterhours(csv_path, json_path, now_ny):
     """
     Guard against stale after-hours files during the 16:00-16:15 transition.
@@ -3654,6 +3733,7 @@ def build_dashboard(potential, active, extended, highrisk, raw, active_watchlist
 
     scanner_meta = load_scanner_meta()
     scanner_time_label = header_time_label(scanner_meta.get("scanner_generated_at_et"))
+    primary_scan_time_label = build_header_scan_time_label(status, now_ny, scanner_meta)
     dashboard_time_label = now_ny.strftime("%Y-%m-%d %H:%M ET")
 
     # Load once so header, Signal Desk, and live card overlay use the same payload.
@@ -6037,7 +6117,7 @@ td small {
             <p>Technical Potential Movers + Catalyst Confirmation + Sector Context</p>
         </div>
         <div class="header-meta">
-            <span class="scan-pill">Scanner Data: $scanner_time</span>
+            <span class="scan-pill">$primary_scan_time</span>
             <span class="scan-pill">Signal Refresh: $signal_refresh_time</span>
             <span class="scan-pill">Dashboard Built: $dashboard_time</span>
             <span class="status-pill $status_class">Market: $status</span>
@@ -6072,7 +6152,7 @@ td small {
     return page.safe_substitute(
         status=status,
         status_class=status_class,
-        scanner_time=scanner_time_label,
+        primary_scan_time=primary_scan_time_label,
         signal_refresh_time=signal_refresh_time_label,
         dashboard_time=dashboard_time_label,
         regime_html=regime_html,
