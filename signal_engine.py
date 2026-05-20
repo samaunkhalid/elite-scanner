@@ -78,7 +78,7 @@ SIGNAL_STATE_FILE = "signal_state.json"
 SUPPRESSED_SIGNALS_FILE = "suppressed_signals.csv"
 SIGNAL_OUTCOMES_FILE = "signal_outcomes.csv"
 SIGNAL_OUTCOMES_SUMMARY_FILE = "signal_outcomes_summary.json"
-SIGNAL_ENGINE_STRATEGY_VERSION = "v2.7_structure_based_reclaim_audit"
+SIGNAL_ENGINE_STRATEGY_VERSION = "v2.7.1_structure_based_reclaim_datagap"
 
 # State retention.
 ACTIVE_STALE_MINUTES = 10
@@ -5488,6 +5488,11 @@ def trigger_fired(existing: Dict[str, Any], metrics: IntradayMetrics) -> bool:
 
 def active_invalidated(signal: Dict[str, Any], metrics: IntradayMetrics) -> Tuple[bool, str, str]:
     if not metrics.has_data:
+        # Defensive data-gap grace:
+        # If Alpaca bars are temporarily missing but quote/trade data is still fresh,
+        # keep the protected signal alive instead of falsely invalidating it.
+        if quote_or_trade_fresh(metrics, DATA_GAP_GRACE_SECONDS):
+            return False, "", ""
         return True, "No intraday data available", "EXTERNAL_RISK"
 
     trigger = safe_float(signal.get("entry_trigger"), 0)
@@ -5533,6 +5538,11 @@ def active_invalidated(signal: Dict[str, Any], metrics: IntradayMetrics) -> Tupl
 
 def ready_invalidated(signal: Dict[str, Any], metrics: IntradayMetrics) -> Tuple[bool, str, str]:
     if not metrics.has_data:
+        # Defensive data-gap grace:
+        # If Alpaca bars are temporarily missing but quote/trade data is still fresh,
+        # keep the protected signal alive instead of falsely invalidating it.
+        if quote_or_trade_fresh(metrics, DATA_GAP_GRACE_SECONDS):
+            return False, "", ""
         return True, "No intraday data available", "EXTERNAL_RISK"
 
     support = safe_float(signal.get("support_level"), 0)
@@ -6547,7 +6557,7 @@ def process_existing_signal(
     if is_previous_session(existing):
         return make_invalidated(existing, row, metrics, "Previous session signal expired.", "MISSED_WINDOW", phase)
 
-    if status in {"TRIGGER_READY", "TRIGGER_TOUCHED", "ACTIVE_SIGNAL"} and not metrics.has_data and quote_or_trade_fresh(metrics):
+    if status in {"TRIGGER_READY", "TRIGGER_TOUCHED", "ACTIVE_SIGNAL"} and not metrics.has_data and quote_or_trade_fresh(metrics, DATA_GAP_GRACE_SECONDS):
         return retain_signal_during_data_gap(existing, metrics, phase)
 
     if status == "ACTIVE_SIGNAL":
