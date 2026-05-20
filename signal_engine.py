@@ -115,6 +115,16 @@ TRIGGER_TOUCH_CONFIRM_MIN_SECONDS = 45
 TRIGGER_TOUCH_MAX_MINUTES = 4
 TRIGGER_REJECT_BUFFER_PCT = 0.25
 TRIGGER_WICK_REJECTION_PCT = 0.75
+# Reclaim-runner confirmation and invalidation discipline.
+# NU/CIFR showed that a reclaim trigger touch alone is not enough: the latest
+# 1-minute close must still hold VWAP + EMA9 before ACTIVE, while ACTIVE reclaim
+# signals should not be invalidated on a single VWAP wick if reclaim support holds.
+RECLAIM_ACTIVE_CONFIRM_MIN_SECONDS = int(os.getenv("RECLAIM_ACTIVE_CONFIRM_MIN_SECONDS", "60"))
+RECLAIM_ACTIVE_REQUIRE_CLOSE_ABOVE_VWAP = os.getenv("RECLAIM_ACTIVE_REQUIRE_CLOSE_ABOVE_VWAP", "1").strip() != "0"
+RECLAIM_ACTIVE_REQUIRE_CLOSE_ABOVE_EMA9 = os.getenv("RECLAIM_ACTIVE_REQUIRE_CLOSE_ABOVE_EMA9", "1").strip() != "0"
+RECLAIM_ACTIVE_MAX_VWAP_UNDERCUT_PCT = float(os.getenv("RECLAIM_ACTIVE_MAX_VWAP_UNDERCUT_PCT", "0.20"))
+RECLAIM_ACTIVE_VWAP_LOSS_CLOSES = int(os.getenv("RECLAIM_ACTIVE_VWAP_LOSS_CLOSES", "2"))
+RECLAIM_ACTIVE_SUPPORT_BREAK_BUFFER_PCT = float(os.getenv("RECLAIM_ACTIVE_SUPPORT_BREAK_BUFFER_PCT", "0.25"))
 # If an entry has already traded and price falls away, do not recycle it as a fresh Trigger Ready.
 TRIGGER_TOUCH_EPS_PCT = 0.03
 TRIGGER_PULLBACK_REJECT_PCT = 0.20
@@ -3263,6 +3273,7 @@ def vwap_lifecycle_macd_confirmation(metrics: IntradayMetrics, setup_type: str) 
         return False, "Bearish MACD/momentum divergence"
 
     reclaim_family = setup_type in {
+        "VWAP_EMA_RECLAIM_RUNNER",
         "VWAP_RECLAIM_BREAKOUT",
         "RECLAIM_PULLBACK_HOLDING",
         "VWAP_PULLBACK_CONTINUATION",
@@ -3302,6 +3313,20 @@ def vwap_lifecycle_macd_confirmation(metrics: IntradayMetrics, setup_type: str) 
     return macd_ready_confirmation(metrics)
 
 
+def is_truthy_value(value: Any) -> bool:
+    return safe_str(value).strip().lower() in {"true", "1", "yes", "y"}
+
+
+def scanner_marks_early_reclaim(row: Optional[Dict[str, Any]]) -> bool:
+    if not row:
+        return False
+    intraday_setup = safe_str(row.get("intraday_setup_type"), "").upper()
+    return (
+        is_truthy_value(row.get("early_reclaim_runner"))
+        or intraday_setup == "VWAP_EMA_RECLAIM_RUNNER"
+    )
+
+
 def setup_display_label(row: Dict[str, Any], setup_type: str) -> str:
     if is_earnings_reaction_row(row) and setup_type and setup_type not in {"MONITORING", "PREMARKET_MONITOR", "BLACKOUT_MONITOR"}:
         return f"EARNINGS_REACTION_{setup_type}"
@@ -3309,7 +3334,7 @@ def setup_display_label(row: Dict[str, Any], setup_type: str) -> str:
 
 
 def is_reclaim_lifecycle_setup_type(setup_type: str) -> bool:
-    return setup_type in {"VWAP_RECLAIM_BREAKOUT", "RECLAIM_PULLBACK_HOLDING", "VWAP_PULLBACK_CONTINUATION"}
+    return setup_type in {"VWAP_EMA_RECLAIM_RUNNER", "VWAP_RECLAIM_BREAKOUT", "RECLAIM_PULLBACK_HOLDING", "VWAP_PULLBACK_CONTINUATION"}
 
 
 def is_relative_strength_long(row: Dict[str, Any], metrics: IntradayMetrics, regime: Dict[str, Any]) -> bool:
@@ -3368,6 +3393,21 @@ def watch_criteria_pass(
 # ==============================================================
 
 def trigger_level_for_setup(setup_type: str, metrics: IntradayMetrics) -> float:
+    if setup_type == "VWAP_EMA_RECLAIM_RUNNER":
+        # Early reclaim lane: entry should be near the VWAP/EMA reclaim base, not
+        # a late HOD-style continuation trigger. This addresses NU-type setups
+        # where the proper signal is the VWAP/EMA reclaim/hold area.
+        base_candidates = [
+            metrics.vwap,
+            metrics.ema9,
+            metrics.vwap_reclaim_support_level,
+            metrics.vwap_reclaim_bar_close,
+        ]
+        base_candidates = [x for x in base_candidates if x and x > 0]
+        if base_candidates:
+            return max(base_candidates) * 1.0005
+        level = max(metrics.vwap_reclaim_bar_high, metrics.price)
+        return level * 1.0002 if level > 0 else 0.0
     if setup_type == "VWAP_RECLAIM_BREAKOUT":
         level = max(metrics.vwap_reclaim_bar_high, metrics.price)
         return level * 1.0002 if level > 0 else 0.0
@@ -3390,7 +3430,7 @@ def support_level_for_setup(setup_type: str, metrics: IntradayMetrics, entry: fl
     """
     candidates: List[Tuple[float, str]] = []
 
-    if setup_type in {"VWAP_RECLAIM_BREAKOUT", "RECLAIM_PULLBACK_HOLDING"}:
+    if setup_type in {"VWAP_EMA_RECLAIM_RUNNER", "VWAP_RECLAIM_BREAKOUT", "RECLAIM_PULLBACK_HOLDING"}:
         if metrics.vwap > 0:
             candidates.append((metrics.vwap, "VWAP reclaim support"))
         if metrics.vwap_reclaim_support_level > 0:
@@ -3596,6 +3636,8 @@ def choose_best_provisional_plan(
         "HOD_BASE_BREAKOUT",
         "BASE_SQUEEZE_BREAKOUT",
     ]
+    if scanner_marks_early_reclaim(row):
+        setup_order.insert(0, "VWAP_EMA_RECLAIM_RUNNER")
 
     plans = []
     for setup in setup_order:
@@ -3730,7 +3772,7 @@ def setup_ready_conf_required(setup_type: str, phase: str) -> float:
     confidence threshold because the edge is the fresh reclaim candle itself.
     Other setup types keep the normal strict ready threshold.
     """
-    if setup_type == "VWAP_RECLAIM_BREAKOUT":
+    if setup_type in {"VWAP_EMA_RECLAIM_RUNNER", "VWAP_RECLAIM_BREAKOUT"}:
         return MIN_CONF_RECLAIM_READY
     if setup_type == "RECLAIM_PULLBACK_HOLDING":
         return MIN_CONF_RECLAIM_PULLBACK_READY
@@ -3871,6 +3913,59 @@ def vwap_lifecycle_ready_confirmation(metrics: IntradayMetrics, setup_type: str)
         return False, proximity_reason
 
     return True, f"{hold_reason}; {proximity_reason}"
+
+
+def setup_vwap_ema_reclaim_runner_ready(
+    metrics: IntradayMetrics,
+    rr: float,
+    confidence: float,
+    row: Optional[Dict[str, Any]] = None,
+) -> Tuple[bool, str]:
+    """
+    Scanner-provided early VWAP/EMA reclaim runner lifecycle.
+
+    This is distinct from a generic VWAP pullback:
+      - the scanner first identifies a 1m/5m reclaim lane,
+      - signal_engine then requires real VWAP/EMA hold before Trigger Ready,
+      - entry is built near the reclaim base instead of a late continuation high.
+    """
+    if not scanner_marks_early_reclaim(row):
+        return False, "Scanner did not mark early VWAP/EMA reclaim runner"
+
+    if not metrics.has_data:
+        return False, "No intraday bars"
+
+    if not metrics.above_vwap:
+        return False, "Early reclaim runner is below VWAP"
+
+    if metrics.vwap_dist_pct > VWAP_RECLAIM_MAX_EXTENSION_PCT:
+        return False, f"Early reclaim already extended {metrics.vwap_dist_pct:.2f}% > {VWAP_RECLAIM_MAX_EXTENSION_PCT:.1f}%"
+
+    if metrics.ema9 > 0 and not metrics.price_above_ema9:
+        return False, "Early reclaim runner has not held EMA9"
+
+    lifecycle_ok, lifecycle_reason = vwap_lifecycle_ready_confirmation(metrics, "VWAP_EMA_RECLAIM_RUNNER")
+    if not lifecycle_ok:
+        return False, lifecycle_reason
+
+    macd_ok, macd_reason = vwap_lifecycle_macd_confirmation(metrics, "VWAP_EMA_RECLAIM_RUNNER")
+    if not macd_ok:
+        return False, macd_reason
+
+    if rr < MIN_RR:
+        return False, "R/R below 1.5"
+
+    required_conf = MIN_CONF_RECLAIM_READY
+    if confidence < required_conf:
+        return False, f"Confidence below early reclaim minimum {required_conf:.0f}"
+
+    quality = safe_str((row or {}).get("vwap_reclaim_quality_label"), "")
+    score = safe_float((row or {}).get("early_reclaim_score"), 0)
+    suffix = f"; scanner early reclaim score {score:.0f}" if score else ""
+    if quality:
+        suffix += f"; {quality}"
+
+    return True, f"Early VWAP/EMA reclaim runner confirmed by VWAP/EMA hold{suffix}"
 
 
 def setup_vwap_reclaim_ready(metrics: IntradayMetrics, rr: float, confidence: float) -> Tuple[bool, str]:
@@ -4222,6 +4317,15 @@ def choose_setup(metrics: IntradayMetrics, plan: Dict[str, Any], confidence: flo
         if ok:
             return True, ""
         return False, "; ".join(event_reasons)
+
+    early_reclaim_ready, early_reclaim_reason = setup_vwap_ema_reclaim_runner_ready(metrics, rr, confidence, row)
+    if early_reclaim_ready:
+        event_ok, event_reason = _event_allowed("VWAP_EMA_RECLAIM_RUNNER")
+        if event_ok:
+            return "VWAP_EMA_RECLAIM_RUNNER", early_reclaim_reason, reasons
+        reasons.append(f"Earnings reaction filter: {event_reason}")
+    if scanner_marks_early_reclaim(row):
+        reasons.append(f"Early VWAP/EMA reclaim not ready: {early_reclaim_reason}")
 
     reclaim_ready, reclaim_reason = setup_vwap_reclaim_ready(metrics, rr, confidence)
     if reclaim_ready:
@@ -4708,6 +4812,15 @@ def signal_base(
         "dollar_vol_M": safe_float(row.get("dollar_vol_M"), 0),
         "risk_category": safe_str(row.get("risk_category"), "NORMAL"),
         "setup_bucket": safe_str(row.get("setup_bucket"), ""),
+        "intraday_setup_type": safe_str(row.get("intraday_setup_type"), ""),
+        "early_reclaim_runner": scanner_marks_early_reclaim(row),
+        "early_reclaim_score": safe_float(row.get("early_reclaim_score"), 0),
+        "early_reclaim_reason": safe_str(row.get("early_reclaim_reason"), ""),
+        "vwap_reclaim_quality_label": safe_str(row.get("vwap_reclaim_quality_label"), ""),
+        "vwap_reclaim_attempt_count": safe_int(row.get("vwap_reclaim_attempt_count"), 0),
+        "vwap_reclaim_failed_count": safe_int(row.get("vwap_reclaim_failed_count"), 0),
+        "vwap_reclaim_current_attempt": safe_int(row.get("vwap_reclaim_current_attempt"), 0),
+        "early_reclaim_bucket_promoted": is_truthy_value(row.get("early_reclaim_bucket_promoted")),
         "price": round(metrics.price, 4),
         "price_source": metrics.price_source,
         "price_updated_at": metrics.price_updated_at,
@@ -4888,10 +5001,133 @@ def expired_by_age(signal: Dict[str, Any], max_minutes: int, now: Optional[datet
 
 def is_reclaim_lifecycle_setup(signal: Dict[str, Any]) -> bool:
     return safe_str(signal.get("setup_type"), "").upper() in {
+        "VWAP_EMA_RECLAIM_RUNNER",
         "VWAP_RECLAIM_BREAKOUT",
         "RECLAIM_PULLBACK_HOLDING",
         "VWAP_PULLBACK_CONTINUATION",
     }
+
+
+def recent_closes_below_level(metrics: IntradayMetrics, level: float, count: int = 2) -> int:
+    if level <= 0:
+        return 0
+    bars = recent_execution_bars(metrics, count)
+    closes = [safe_float(b.get("c"), 0) for b in bars]
+    return sum(1 for c in closes if c > 0 and c < level)
+
+
+def latest_close_low_high(metrics: IntradayMetrics) -> Tuple[float, float, float]:
+    bar = latest_execution_bar(metrics)
+    close = safe_float(bar.get("c"), metrics.price)
+    low = safe_float(bar.get("l"), metrics.price)
+    high = safe_float(bar.get("h"), metrics.price)
+    return close, low, high
+
+
+def reclaim_active_confirmation_quality(
+    signal: Dict[str, Any],
+    metrics: IntradayMetrics,
+    setup_type: str = "",
+) -> Tuple[bool, str]:
+    """
+    Reclaim ACTIVE confirmation must be candle-close based.
+
+    CIFR exposed the problem: a current tick can touch/hold briefly, become ACTIVE,
+    then immediately lose VWAP. Require the latest 1-minute close to hold trigger,
+    VWAP, and EMA9 before activation.
+    """
+    trigger = safe_float(signal.get("entry_trigger"), 0)
+    if trigger <= 0:
+        return False, "No locked reclaim trigger"
+
+    close, low, high = latest_close_low_high(metrics)
+
+    if close <= 0:
+        return False, "No latest 1-minute close for reclaim confirmation"
+
+    if close < trigger:
+        return False, f"Latest 1-minute close {close:.2f} did not hold trigger {trigger:.2f}"
+
+    if RECLAIM_ACTIVE_REQUIRE_CLOSE_ABOVE_VWAP and metrics.vwap > 0 and close < metrics.vwap:
+        return False, f"Latest 1-minute close {close:.2f} did not hold VWAP {metrics.vwap:.2f}"
+
+    if RECLAIM_ACTIVE_REQUIRE_CLOSE_ABOVE_EMA9 and metrics.ema9 > 0 and close < metrics.ema9:
+        return False, f"Latest 1-minute close {close:.2f} did not hold EMA9 {metrics.ema9:.2f}"
+
+    if metrics.vwap > 0:
+        vwap_undercut = metrics.vwap * (1.0 - RECLAIM_ACTIVE_MAX_VWAP_UNDERCUT_PCT / 100.0)
+        if low < vwap_undercut and close <= metrics.vwap * 1.0005:
+            return False, "Reclaim confirmation candle undercut VWAP and did not reclaim strongly"
+
+    if (
+        metrics.macd_1m_curling_down
+        and metrics.macd_1m_histogram_falling
+        and not metrics.macd_1m_above_signal
+        and metrics.ema9 > 0
+        and close < metrics.ema9 * 1.001
+    ):
+        return False, "1-minute MACD curling down while confirmation candle is pressing EMA9"
+
+    if high > trigger and close > 0:
+        wick_reject_pct = pct_change(high, max(close, trigger))
+        if wick_reject_pct >= TRIGGER_WICK_REJECTION_PCT and close <= trigger * 1.002:
+            return False, f"Reclaim trigger wick rejected near entry ({wick_reject_pct:.2f}% upper rejection)"
+
+    return True, "Latest 1-minute close held trigger, VWAP, and EMA9"
+
+
+def reclaim_active_hard_failure(signal: Dict[str, Any], metrics: IntradayMetrics) -> Tuple[bool, str]:
+    """
+    Active reclaim invalidation is softer than old logic.
+
+    Do not invalidate on a single VWAP wick. Invalidate only if:
+      - stop is hit,
+      - real reclaim/support breaks,
+      - or 2 recent closes lose VWAP/EMA9 with weak momentum.
+    """
+    stop = safe_float(signal.get("stop_loss"), 0)
+    if stop > 0 and metrics.price <= stop:
+        return True, "Stop would have been hit"
+
+    vwap = safe_float(metrics.vwap, 0)
+    stored_vwap = safe_float(signal.get("vwap"), 0)
+    support_candidates = [
+        safe_float(signal.get("support_level"), 0),
+        safe_float(signal.get("vwap_reclaim_support_level"), 0),
+        safe_float(signal.get("vwap_reclaim_bar_low"), 0),
+        vwap,
+        stored_vwap,
+    ]
+    support_candidates = [x for x in support_candidates if x > 0]
+    support = max(support_candidates) if support_candidates else 0
+
+    if support > 0:
+        hard_support = support * (1.0 - RECLAIM_ACTIVE_SUPPORT_BREAK_BUFFER_PCT / 100.0)
+        if metrics.price < hard_support:
+            return True, f"Active reclaim signal broke reclaim support: price {metrics.price:.2f} < support {support:.2f}"
+
+    close, low, _high = latest_close_low_high(metrics)
+    closes_below_vwap = recent_closes_below_level(metrics, vwap, RECLAIM_ACTIVE_VWAP_LOSS_CLOSES) if vwap > 0 else 0
+    closes_below_ema9 = recent_closes_below_level(metrics, metrics.ema9, RECLAIM_ACTIVE_VWAP_LOSS_CLOSES) if metrics.ema9 > 0 else 0
+
+    if (
+        vwap > 0
+        and closes_below_vwap >= RECLAIM_ACTIVE_VWAP_LOSS_CLOSES
+        and (metrics.ema9 <= 0 or closes_below_ema9 >= RECLAIM_ACTIVE_VWAP_LOSS_CLOSES)
+    ):
+        return True, f"Active reclaim lost VWAP/EMA on {RECLAIM_ACTIVE_VWAP_LOSS_CLOSES} consecutive 1-minute closes"
+
+    if (
+        vwap > 0
+        and close > 0
+        and close < vwap
+        and metrics.macd_1m_curling_down
+        and metrics.macd_1m_histogram_falling
+        and not metrics.price_above_ema9
+    ):
+        return True, "Active reclaim closed below VWAP with weakening 1-minute MACD and EMA9 loss"
+
+    return False, ""
 
 
 def reclaim_lifecycle_holding(signal: Dict[str, Any], metrics: IntradayMetrics) -> Tuple[bool, str]:
@@ -4943,16 +5179,28 @@ def active_invalidated(signal: Dict[str, Any], metrics: IntradayMetrics) -> Tupl
     trigger = safe_float(signal.get("entry_trigger"), 0)
     stop = safe_float(signal.get("stop_loss"), 0)
 
+    if is_reclaim_lifecycle_setup(signal):
+        hard_fail, hard_reason = reclaim_active_hard_failure(signal, metrics)
+        if hard_fail:
+            return True, hard_reason, "FAILED_SETUP"
+
+        if trigger > 0 and metrics.price < trigger:
+            holding, _hold_reason = reclaim_lifecycle_holding(signal, metrics)
+            if not holding:
+                return True, "Active reclaim signal lost VWAP/reclaim support after falling below trigger", "FAILED_SETUP"
+
+        if expired_by_age(signal, ACTIVE_STALE_MINUTES):
+            return True, "Active reclaim signal stale for more than 2 refresh cycles", "MISSED_WINDOW"
+
+        # Reclaim setups may wick under VWAP/EMA briefly. Keep tracking unless the
+        # hard-failure rules above confirm support loss.
+        return False, "", ""
+
     if not metrics.above_vwap:
         return True, "Lost VWAP after active signal", "FAILED_SETUP"
 
     if trigger > 0 and metrics.price < trigger:
-        if is_reclaim_lifecycle_setup(signal):
-            holding, _hold_reason = reclaim_lifecycle_holding(signal, metrics)
-            if not holding:
-                return True, "Active reclaim signal lost VWAP/reclaim support after falling below trigger", "FAILED_SETUP"
-        else:
-            return True, "Price fell back below trigger", "FAILED_SETUP"
+        return True, "Price fell back below trigger", "FAILED_SETUP"
 
     if stop > 0 and metrics.price <= stop:
         return True, "Stop would have been hit", "FAILED_SETUP"
@@ -5456,7 +5704,8 @@ def trigger_hold_confirmation(
 
     # A trigger must survive at least one follow-up refresh before Active.
     age_seconds = trigger_touch_age_seconds(existing)
-    if age_seconds is not None and age_seconds < TRIGGER_TOUCH_CONFIRM_MIN_SECONDS:
+    min_confirm_seconds = RECLAIM_ACTIVE_CONFIRM_MIN_SECONDS if reclaim_family else TRIGGER_TOUCH_CONFIRM_MIN_SECONDS
+    if age_seconds is not None and age_seconds < min_confirm_seconds:
         return False, (
             f"Trigger touched {age_seconds:.0f}s ago; waiting for next 1-minute confirmation "
             f"before Active Signal"
@@ -5489,6 +5738,10 @@ def trigger_hold_confirmation(
                 return False, "Breakout trigger lacks fresh 1-minute volume expansion"
 
     else:
+        close_ok, close_reason = reclaim_active_confirmation_quality(existing, metrics, setup)
+        if not close_ok:
+            return False, close_reason
+
         holding, hold_reason = reclaim_lifecycle_holding(existing, metrics)
         if not holding:
             return False, hold_reason
@@ -5725,18 +5978,21 @@ def touched_trigger_rejected(existing: Dict[str, Any], metrics: IntradayMetrics)
     if trigger <= 0 or not metrics.has_data:
         return False, ""
 
-    if not metrics.above_vwap:
-        return True, "Trigger touched but price lost VWAP before active confirmation"
-
     stop = safe_float(existing.get("stop_loss"), 0)
     if stop > 0 and metrics.price <= stop:
         return True, "Trigger touched but stop level was hit before active confirmation"
 
     if is_reclaim_lifecycle_setup(existing):
+        # Do not reject a reclaim touch on one VWAP tick. Let
+        # trigger_hold_confirmation decide whether the latest candle actually
+        # confirmed; invalidate only on hard support failure.
         holding, hold_reason = reclaim_lifecycle_holding(existing, metrics)
         if not holding:
             return True, f"Trigger touched but reclaim structure failed: {hold_reason}"
         return False, ""
+
+    if not metrics.above_vwap:
+        return True, "Trigger touched but price lost VWAP before active confirmation"
 
     reject_level = trigger * (1.0 - TRIGGER_REJECT_BUFFER_PCT / 100.0)
     if metrics.price < reject_level and metrics.ema9 > 0 and not metrics.price_above_ema9:
@@ -5773,9 +6029,12 @@ def active_promotion_failure_reasons(
     reclaim_family = is_reclaim_lifecycle_setup_type(setup_type)
 
     if reclaim_family:
-        # VWAP reclaim/pullback continuation can dip around EMA9 during a normal
-        # pullback. Do not block solely for EMA9 unless VWAP/reclaim structure is
-        # also under pressure.
+        # Reclaim active signals need candle-close confirmation. A tick above the
+        # trigger is not enough.
+        close_ok, close_reason = reclaim_active_confirmation_quality(plan, metrics, setup_type)
+        if not close_ok:
+            reasons.append(close_reason)
+
         macd_ok, macd_reason = vwap_lifecycle_macd_confirmation(metrics, setup_type)
         if not macd_ok:
             reasons.append(macd_reason)
