@@ -3696,15 +3696,15 @@ def build_signal_outcomes_panel(summary):
     recent = summary.get("recent", []) if isinstance(summary.get("recent"), list) else []
 
     stat_items = [
-        ("Total", safe_int(today.get("total"), 0)),
+        ("Tracked Signals", safe_int(today.get("total"), 0)),
         ("Ready", safe_int(today.get("ready_events"), safe_int(today.get("trigger_ready"), 0))),
         ("Touched", safe_int(today.get("touched_events"), safe_int(today.get("trigger_touched"), 0))),
-        ("Active", safe_int(today.get("active_events"), safe_int(today.get("active_signal"), 0))),
-        ("R→Tch", f"{safe_float(today.get('ready_to_touched_pct'), 0):.0f}%"),
-        ("Tch→Act", f"{safe_float(today.get('touched_to_active_pct'), 0):.0f}%"),
-        ("T1", safe_int(today.get("t1_hit"), 0)),
-        ("Ready Win", safe_int(today.get("ready_only_success"), 0)),
-        ("Invalid", safe_int(today.get("invalidated_before_entry"), 0) + safe_int(today.get("invalidated_after_entry"), 0)),
+        ("Activated", safe_int(today.get("active_events"), 0)),
+        ("Still Active", safe_int(today.get("active_signal"), 0)),
+        ("T1 Hit", safe_int(today.get("t1_hit"), 0)),
+        ("T2 Hit", safe_int(today.get("t2_hit"), 0)),
+        ("Stop Loss Hit", safe_int(today.get("stop_hit"), 0)),
+        ("Invalidated", safe_int(today.get("invalidated_before_entry"), 0) + safe_int(today.get("invalidated_after_entry"), 0)),
     ]
 
     stats_html = "".join(
@@ -3734,6 +3734,7 @@ def build_signal_outcomes_panel(summary):
             cls = outcome_status_class(status)
             entry = format_signal_price(row.get("entry"))
             t1 = format_signal_price(row.get("target_1"))
+            t2 = format_signal_price(row.get("target_2"))
             stop = format_signal_price(row.get("stop"))
             best_r = safe_float(row.get("best_r_multiple"), 0)
             final_r = safe_float(row.get("final_r_multiple"), 0)
@@ -3769,6 +3770,7 @@ def build_signal_outcomes_panel(summary):
                     <div class="outcome-plan">
                         <span>E <b>{entry}</b></span>
                         <span>T1 <b>{t1}</b></span>
+                        <span>T2 <b>{t2}</b></span>
                         <span>S <b>{stop}</b></span>
                         <span>Best <b>{esc(r_text)}</b></span>
                         <span>Final <b>{esc(final_text)}</b></span>
@@ -3796,6 +3798,7 @@ def build_signal_outcomes_panel(summary):
                 {common_invalid_html}
             </div>
         </div>
+        <div class="outcome-section-label">TODAY</div>
         <div class="outcome-stats">
             {stats_html}
         </div>
@@ -6047,6 +6050,22 @@ td small {
     line-height: 1.35;
 }
 
+
+.outcome-section-label {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    margin: 8px 0 7px 0;
+    padding: 4px 10px;
+    border-radius: 999px;
+    border: 1px solid rgba(59, 130, 246, 0.28);
+    background: rgba(30, 64, 175, 0.20);
+    color: #bfdbfe;
+    font-size: 11px;
+    font-weight: 900;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+}
 
 .outcome-stats {
     display: grid;
