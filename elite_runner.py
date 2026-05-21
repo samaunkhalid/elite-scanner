@@ -67,21 +67,40 @@ PREMARKET_SCAN_TIMES_ET = {
     "07:30",
     "08:00",
     "08:30",
+    "08:45",
     "09:00",
     "09:15",
 }
 
 # Regular whole-market scanner schedule.
+#
+# Morning discovery update:
+# - Full scanner starts at 09:40 ET to allow the first 10 minutes of opening
+#   volatility to settle.
+# - Then it runs every 5 minutes from 09:40 through 11:00 ET.
+# - This improves early VWAP/EMA reclaim discovery without scanning the raw
+#   09:30 opening noise.
+# - Signal Desk still enforces its market-phase rules; opening entries remain blocked
+#   until the signal engine allows valid regular-market execution.
+# - After 11:00, the schedule relaxes back to the normal midday/afternoon cadence.
 SCANNER_TIMES_ET = {
+    "09:40",
     "09:45",
+    "09:50",
     "09:55",
+    "10:00",
     "10:05",
+    "10:10",
     "10:15",
+    "10:20",
     "10:25",
+    "10:30",
     "10:35",
+    "10:40",
     "10:45",
+    "10:50",
     "10:55",
-    "11:05",
+    "11:00",
     "11:15",
     "11:30",
     "13:30",
