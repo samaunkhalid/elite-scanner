@@ -3940,7 +3940,29 @@ def build_dashboard(potential, active, extended, highrisk, raw, active_watchlist
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<meta http-equiv="refresh" content="60">
+<meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
+<script>
+(function() {
+    "use strict";
+    var REFRESH_MS = 60000;
+
+    function cacheBustedUrl() {
+        var url = new URL(window.location.href);
+        url.searchParams.set("v", Date.now().toString());
+        return url.toString();
+    }
+
+    window.forceDashboardRefresh = function() {
+        window.location.replace(cacheBustedUrl());
+    };
+
+    window.setTimeout(function() {
+        window.location.replace(cacheBustedUrl());
+    }, REFRESH_MS);
+})();
+</script>
 <title>Elite Scanner — Pro Desk</title>
 <style>
 * {
@@ -6113,7 +6135,7 @@ td small {
 <header class="header" id="top">
     <div class="header-inner">
         <div class="title">
-            <h1><a class="title-refresh" href="" title="Refresh dashboard">Elite Scanner — Pro Desk</a></h1>
+            <h1><a class="title-refresh" href="#" onclick="window.forceDashboardRefresh(); return false;" title="Refresh dashboard">Elite Scanner — Pro Desk</a></h1>
             <p>Technical Potential Movers + Catalyst Confirmation + Sector Context</p>
         </div>
         <div class="header-meta">
@@ -6142,7 +6164,7 @@ td small {
     <div id="desk">$desk_table</div>
 
     <div class="footer-note">
-        © Elite Scanner Pro Desk. Data refreshes during market hours via Elite Runner; page auto-refreshes every 60 seconds. Extended/high-risk names are saved to CSV but hidden. Alpaca SIP data enabled; confirm spread, liquidity, VWAP, and news before execution.
+        © Elite Scanner Pro Desk. Data refreshes during market hours via Elite Runner; page auto-refreshes every 60 seconds with cache-busting. Extended/high-risk names are saved to CSV but hidden. Alpaca SIP data enabled; confirm spread, liquidity, VWAP, and news before execution.
     </div>
 </main>
 
