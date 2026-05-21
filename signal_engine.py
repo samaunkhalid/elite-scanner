@@ -78,7 +78,7 @@ SIGNAL_STATE_FILE = "signal_state.json"
 SUPPRESSED_SIGNALS_FILE = "suppressed_signals.csv"
 SIGNAL_OUTCOMES_FILE = "signal_outcomes.csv"
 SIGNAL_OUTCOMES_SUMMARY_FILE = "signal_outcomes_summary.json"
-SIGNAL_ENGINE_STRATEGY_VERSION = "v2.7.5_reclaim_quality_filter_outcome_sync"
+SIGNAL_ENGINE_STRATEGY_VERSION = "v2.7.6_morning_priority_reclaim_quality"
 
 # State retention.
 ACTIVE_STALE_MINUTES = 10
@@ -113,6 +113,22 @@ RECLAIM_ACTIVE_REQUIRE_VOLUME_CONFIRM = os.getenv("RECLAIM_ACTIVE_REQUIRE_VOLUME
 RECLAIM_ACTIVE_REQUIRE_TRUE_RECLAIM = os.getenv("RECLAIM_ACTIVE_REQUIRE_TRUE_RECLAIM", "1").strip() != "0"
 RECLAIM_ACTIVE_MAX_VWAP_DIST_PCT = float(os.getenv("RECLAIM_ACTIVE_MAX_VWAP_DIST_PCT", "3.00"))
 RECLAIM_ACTIVE_MIN_RECLAIM_VOLUME_RATIO = float(os.getenv("RECLAIM_ACTIVE_MIN_RECLAIM_VOLUME_RATIO", "1.15"))
+
+# Morning Priority Reclaim layer.
+# This does NOT replace the normal reclaim engine. It only tags and ranks the
+# best PLUG/NU-style reclaim candidates during the high-probability morning
+# window so the dashboard can show a max-3 focus list.
+MORNING_RECLAIM_PRIORITY_ENABLED = os.getenv("MORNING_RECLAIM_PRIORITY_ENABLED", "1").strip() != "0"
+MORNING_RECLAIM_START_ET = os.getenv("MORNING_RECLAIM_START_ET", "09:35")
+MORNING_RECLAIM_ACTIONABLE_START_ET = os.getenv("MORNING_RECLAIM_ACTIONABLE_START_ET", "09:40")
+MORNING_RECLAIM_END_ET = os.getenv("MORNING_RECLAIM_END_ET", "11:00")
+MORNING_RECLAIM_MAX_TICKERS = int(os.getenv("MORNING_RECLAIM_MAX_TICKERS", "3"))
+MORNING_RECLAIM_MIN_PRIORITY_SCORE = float(os.getenv("MORNING_RECLAIM_MIN_PRIORITY_SCORE", "80"))
+MORNING_RECLAIM_MIN_WATCH_SCORE = float(os.getenv("MORNING_RECLAIM_MIN_WATCH_SCORE", "70"))
+MORNING_RECLAIM_MAX_VWAP_DIST_PCT = float(os.getenv("MORNING_RECLAIM_MAX_VWAP_DIST_PCT", "1.75"))
+MORNING_RECLAIM_MAX_ENTRY_DIST_PCT = float(os.getenv("MORNING_RECLAIM_MAX_ENTRY_DIST_PCT", "0.60"))
+MORNING_RECLAIM_MAX_RECLAIM_AGE_MINUTES = float(os.getenv("MORNING_RECLAIM_MAX_RECLAIM_AGE_MINUTES", "30"))
+MORNING_RECLAIM_MIN_VOLUME_RATIO = float(os.getenv("MORNING_RECLAIM_MIN_VOLUME_RATIO", "1.10"))
 
 # Quality thresholds.
 MIN_AVG_DOLLAR_VOL_M = 25.0
@@ -3585,6 +3601,275 @@ def setup_display_label(row: Dict[str, Any], setup_type: str) -> str:
 
 def is_reclaim_lifecycle_setup_type(setup_type: str) -> bool:
     return setup_type in {"VWAP_EMA_RECLAIM_RUNNER", "VWAP_RECLAIM_BREAKOUT", "RECLAIM_PULLBACK_HOLDING", "VWAP_PULLBACK_CONTINUATION"}
+
+
+def parse_hhmm_config(value: str, default: dtime) -> dtime:
+    try:
+        parts = safe_str(value).split(":")
+        if len(parts) >= 2:
+            hour = int(parts[0])
+            minute = int(parts[1])
+            if 0 <= hour <= 23 and 0 <= minute <= 59:
+                return dtime(hour, minute)
+    except Exception:
+        pass
+    return default
+
+
+def morning_reclaim_start_time() -> dtime:
+    return parse_hhmm_config(MORNING_RECLAIM_START_ET, dtime(9, 35))
+
+
+def morning_reclaim_actionable_start_time() -> dtime:
+    return parse_hhmm_config(MORNING_RECLAIM_ACTIONABLE_START_ET, dtime(9, 40))
+
+
+def morning_reclaim_end_time() -> dtime:
+    return parse_hhmm_config(MORNING_RECLAIM_END_ET, dtime(11, 0))
+
+
+def is_morning_reclaim_window(now: Optional[datetime] = None) -> bool:
+    if not MORNING_RECLAIM_PRIORITY_ENABLED:
+        return False
+    now = now or ny_now()
+    t = now.time()
+    return morning_reclaim_start_time() <= t <= morning_reclaim_end_time()
+
+
+def is_morning_reclaim_actionable_window(now: Optional[datetime] = None) -> bool:
+    if not is_morning_reclaim_window(now):
+        return False
+    now = now or ny_now()
+    return now.time() >= morning_reclaim_actionable_start_time()
+
+
+def signal_plan_dict(signal: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "entry_trigger": signal.get("entry_trigger"),
+        "stop_loss": signal.get("stop_loss"),
+        "target_1": signal.get("target_1"),
+        "target_2": signal.get("target_2"),
+        "reward_risk": signal.get("reward_risk"),
+        "support_level": signal.get("support_level"),
+        "valid": True,
+    }
+
+
+def morning_reclaim_priority_score(
+    signal: Dict[str, Any],
+    row: Dict[str, Any],
+    metrics: IntradayMetrics,
+    phase: str,
+    now: Optional[datetime] = None,
+) -> Tuple[float, List[str], List[str]]:
+    """
+    Score PLUG/NU-style morning reclaim runners without changing the normal
+    after-11:00 reclaim engine.
+
+    The score is intentionally used for dashboard focus/ranking only. Existing
+    Watch / Ready / Active lifecycle rules still control signal status.
+    """
+    reasons: List[str] = []
+    blockers: List[str] = []
+    score = 0.0
+
+    now = now or ny_now()
+
+    if not is_morning_reclaim_window(now):
+        blockers.append("outside 09:35-11:00 morning reclaim window")
+        return 0.0, reasons, blockers
+
+    if safe_str(phase).upper() not in {"OPENING_BLACKOUT", "VALID_MORNING", "OPEN"}:
+        blockers.append(f"market phase {phase} not valid for morning priority")
+        return 0.0, reasons, blockers
+
+    status = normalize_status(signal.get("signal_status"))
+    if status not in {"WATCH", "TRIGGER_READY", "TRIGGER_TOUCHED", "ACTIVE_SIGNAL"}:
+        blockers.append(f"status {status or 'UNKNOWN'} is not focusable")
+        return 0.0, reasons, blockers
+
+    setup_type = safe_str(signal.get("setup_type"), "")
+    if not is_reclaim_lifecycle_setup_type(setup_type):
+        blockers.append(f"setup {setup_type or 'UNKNOWN'} is not reclaim family")
+        return 0.0, reasons, blockers
+
+    if not metrics.has_data:
+        blockers.append("no intraday bars")
+        return 0.0, reasons, blockers
+
+    true_reclaim = (
+        metrics.vwap_reclaim_ready
+        or metrics.vwap_reclaim_recent
+        or metrics.vwap_reclaim_lifecycle_active
+        or metrics.reclaim_pullback_holding
+        or scanner_has_1m_reclaim_tag(row)
+        or is_truthy_value(signal.get("early_reclaim_runner"))
+    )
+
+    vwap_value = safe_float(metrics.vwap, 0)
+    ema9_value = safe_float(metrics.ema9, 0)
+    reclaim_low = safe_float(metrics.vwap_reclaim_bar_low, 0)
+    recent_low = safe_float(metrics.recent_swing_low, 0)
+    opening_low = safe_float(metrics.opening_range_low, 0)
+
+    dipped_below_vwap_or_ema = False
+    if vwap_value > 0:
+        dipped_below_vwap_or_ema = dipped_below_vwap_or_ema or (reclaim_low > 0 and reclaim_low <= vwap_value * 1.002)
+        dipped_below_vwap_or_ema = dipped_below_vwap_or_ema or (recent_low > 0 and recent_low <= vwap_value * 1.002)
+        dipped_below_vwap_or_ema = dipped_below_vwap_or_ema or (opening_low > 0 and opening_low <= vwap_value * 1.002)
+    if ema9_value > 0:
+        dipped_below_vwap_or_ema = dipped_below_vwap_or_ema or (reclaim_low > 0 and reclaim_low <= ema9_value * 1.002)
+        dipped_below_vwap_or_ema = dipped_below_vwap_or_ema or (recent_low > 0 and recent_low <= ema9_value * 1.002)
+        dipped_below_vwap_or_ema = dipped_below_vwap_or_ema or (opening_low > 0 and opening_low <= ema9_value * 1.002)
+
+    if true_reclaim and dipped_below_vwap_or_ema:
+        score += 22
+        reasons.append("opening dip/reclaim from below")
+    elif true_reclaim:
+        score += 14
+        reasons.append("reclaim/pullback evidence")
+    else:
+        blockers.append("no true VWAP/EMA reclaim or pullback-hold evidence")
+
+    if metrics.above_vwap and metrics.price_above_ema9:
+        score += 20
+        reasons.append("holds above VWAP and EMA9")
+    else:
+        blockers.append("not holding above both VWAP and EMA9")
+
+    macd_ok = (
+        metrics.macd_1m_curling_up
+        or metrics.macd_1m_bullish_crossover_recent
+        or metrics.macd_1m_histogram_rising
+        or (metrics.macd_1m_above_signal and not metrics.macd_1m_histogram_falling)
+        or metrics.macd_histogram_rising
+    )
+    if macd_ok and not metrics.macd_1m_curling_down:
+        score += 16
+        reasons.append("1m MACD curling/improving")
+    else:
+        blockers.append("MACD not curling/improving")
+
+    volume_ratio = max(
+        safe_float(metrics.vwap_reclaim_volume_ratio, 0),
+        safe_float(metrics.recent_to_morning_volume_ratio, 0),
+    )
+    volume_ok = (
+        metrics.recent_volume_expanding
+        or metrics.volume_stable_or_increasing
+        or volume_ratio >= MORNING_RECLAIM_MIN_VOLUME_RATIO
+    )
+    if volume_ok and not metrics.volume_fading_vs_morning:
+        score += 14
+        reasons.append("volume confirms reclaim")
+    elif volume_ok:
+        score += 6
+        reasons.append("volume acceptable but fading risk")
+    else:
+        blockers.append("volume confirmation missing")
+
+    if 0 <= metrics.vwap_dist_pct <= MORNING_RECLAIM_MAX_VWAP_DIST_PCT:
+        score += 10
+        reasons.append(f"near VWAP ({metrics.vwap_dist_pct:.2f}%)")
+    else:
+        blockers.append(f"VWAP distance {metrics.vwap_dist_pct:.2f}% outside priority range")
+
+    plan = signal_plan_dict(signal)
+    late_reason = active_late_entry_guard_reason(plan, metrics)
+    entry = safe_float(plan.get("entry_trigger"), 0)
+    entry_dist = abs(pct_change(metrics.price, entry)) if entry > 0 and metrics.price > 0 else 999.0
+    if not late_reason and entry_dist <= MORNING_RECLAIM_MAX_ENTRY_DIST_PCT:
+        score += 8
+        reasons.append(f"near entry ({entry_dist:.2f}%)")
+    elif not late_reason:
+        score += 3
+        reasons.append(f"entry distance acceptable ({entry_dist:.2f}%)")
+    else:
+        blockers.append(late_reason)
+
+    rr = safe_float(signal.get("reward_risk"), 0)
+    if rr >= MIN_RR:
+        score += 8
+        reasons.append(f"R/R {rr:.1f}:1 valid")
+    else:
+        blockers.append(f"R/R {rr:.2f} below minimum")
+
+    if metrics.vwap_reclaim_age_minutes <= MORNING_RECLAIM_MAX_RECLAIM_AGE_MINUTES:
+        score += 2
+        reasons.append(f"fresh reclaim age {metrics.vwap_reclaim_age_minutes:.1f}m")
+
+    if metrics.bearish_momentum_divergence:
+        score -= 15
+        blockers.append("bearish momentum divergence")
+    if metrics.ema9_falling and not metrics.reclaim_pullback_holding:
+        score -= 8
+        blockers.append("EMA9 falling without clear pullback hold")
+    if metrics.macd_1m_curling_down and metrics.macd_1m_histogram_falling:
+        score -= 12
+        blockers.append("1m MACD curling down")
+
+    return round(clamp(score, 0, 100), 1), reasons, blockers
+
+
+def apply_morning_reclaim_priority_fields(
+    signal: Dict[str, Any],
+    row: Dict[str, Any],
+    metrics: IntradayMetrics,
+    phase: str,
+) -> Dict[str, Any]:
+    if not signal:
+        return signal
+
+    out = dict(signal)
+    score, reasons, blockers = morning_reclaim_priority_score(out, row, metrics, phase)
+
+    out["morning_reclaim_window"] = is_morning_reclaim_window()
+    out["morning_reclaim_actionable_window"] = is_morning_reclaim_actionable_window()
+    out["morning_reclaim_score"] = score
+    out["morning_reclaim_reasons"] = reasons[:8]
+    out["morning_reclaim_blockers"] = blockers[:8]
+    out["morning_reclaim_priority"] = "NONE"
+    out["priority_morning_reclaim"] = False
+
+    if score >= MORNING_RECLAIM_MIN_PRIORITY_SCORE and not blockers:
+        out["morning_reclaim_priority"] = "PRIORITY"
+        out["priority_morning_reclaim"] = True
+        out["morning_reclaim_label"] = "Priority Morning Reclaim"
+    elif score >= MORNING_RECLAIM_MIN_WATCH_SCORE:
+        out["morning_reclaim_priority"] = "CANDIDATE"
+        out["morning_reclaim_label"] = "Morning Reclaim Candidate"
+    elif is_morning_reclaim_window() and is_reclaim_lifecycle_setup_type(safe_str(out.get("setup_type"), "")):
+        out["morning_reclaim_label"] = "Morning Reclaim Not Priority"
+
+    if out.get("priority_morning_reclaim") and not out.get("morning_reclaim_actionable_window"):
+        out["morning_reclaim_note"] = "09:35 discovery only; wait for 09:40+ confirmation before acting."
+    elif out.get("priority_morning_reclaim"):
+        out["morning_reclaim_note"] = "Top morning reclaim focus; still requires manual chart confirmation."
+
+    return out
+
+
+def build_priority_morning_reclaim(signals: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    if not is_morning_reclaim_window():
+        return []
+
+    candidates = [
+        s for s in signals
+        if s.get("priority_morning_reclaim")
+        and safe_float(s.get("morning_reclaim_score"), 0) >= MORNING_RECLAIM_MIN_PRIORITY_SCORE
+    ]
+
+    candidates.sort(
+        key=lambda s: (
+            -safe_float(s.get("morning_reclaim_score"), 0),
+            {"ACTIVE_SIGNAL": 0, "TRIGGER_TOUCHED": 1, "TRIGGER_READY": 2, "WATCH": 3}.get(normalize_status(s.get("signal_status")), 9),
+            safe_float(s.get("vwap_dist_pct"), 99),
+            -safe_float(s.get("confidence"), 0),
+            safe_str(s.get("symbol"), ""),
+        )
+    )
+
+    return candidates[:max(0, MORNING_RECLAIM_MAX_TICKERS)]
 
 
 def is_relative_strength_long(row: Dict[str, Any], metrics: IntradayMetrics, regime: Dict[str, Any]) -> bool:
@@ -7514,6 +7799,7 @@ def run_signal_engine() -> None:
                     phase,
                     reason="existing_signal_processing",
                 )
+                processed = apply_morning_reclaim_priority_fields(processed, row, metrics, phase)
                 new_state[sym] = processed
                 continue
 
@@ -7535,6 +7821,7 @@ def run_signal_engine() -> None:
                     kept_status=existing_status,
                     reason="process_existing_signal returned empty",
                 )
+                retained = apply_morning_reclaim_priority_fields(retained, row, metrics, phase)
                 new_state[sym] = retained
                 continue
 
@@ -7556,6 +7843,7 @@ def run_signal_engine() -> None:
                 phase,
                 reason="new_or_watch_processing",
             )
+            signal = apply_morning_reclaim_priority_fields(signal, row, metrics, phase)
             new_state[sym] = signal
         elif diagnostic:
             if existing_status == "WATCH":
@@ -7578,7 +7866,9 @@ def run_signal_engine() -> None:
     new_state = remove_completed_outcome_signals(new_state)
 
     signals = build_signal_outputs(new_state)
+    priority_morning_reclaim = build_priority_morning_reclaim(signals)
     counts = summarize_signals(signals)
+    counts["priority_morning_reclaim"] = len(priority_morning_reclaim)
 
     rejected_candidates.sort(
         key=lambda x: (
@@ -7602,6 +7892,17 @@ def run_signal_engine() -> None:
         },
         "counts": counts,
         "outcomes": outcome_summary,
+        "morning_reclaim_window": {
+            "enabled": MORNING_RECLAIM_PRIORITY_ENABLED,
+            "active": is_morning_reclaim_window(),
+            "actionable": is_morning_reclaim_actionable_window(),
+            "start_et": MORNING_RECLAIM_START_ET,
+            "actionable_start_et": MORNING_RECLAIM_ACTIONABLE_START_ET,
+            "end_et": MORNING_RECLAIM_END_ET,
+            "max_tickers": MORNING_RECLAIM_MAX_TICKERS,
+            "min_priority_score": MORNING_RECLAIM_MIN_PRIORITY_SCORE,
+        },
+        "priority_morning_reclaim": priority_morning_reclaim,
         "signals": signals,
         "rejected_candidates": rejected_candidates,
     }
