@@ -78,7 +78,7 @@ SIGNAL_STATE_FILE = "signal_state.json"
 SUPPRESSED_SIGNALS_FILE = "suppressed_signals.csv"
 SIGNAL_OUTCOMES_FILE = "signal_outcomes.csv"
 SIGNAL_OUTCOMES_SUMMARY_FILE = "signal_outcomes_summary.json"
-SIGNAL_ENGINE_STRATEGY_VERSION = "v2.7.4_outcome_sync_late_guard_datagap"
+SIGNAL_ENGINE_STRATEGY_VERSION = "v2.7.5_reclaim_quality_filter_outcome_sync"
 
 # State retention.
 ACTIVE_STALE_MINUTES = 10
@@ -103,6 +103,16 @@ RECLAIM_STRUCTURE_CONFIDENCE_PREMIUM_MAX = float(os.getenv("RECLAIM_STRUCTURE_CO
 # retests within the normal confirmation window, it exits as a missed/failed entry.
 ACTIVE_LATE_ENTRY_MAX_ABOVE_ENTRY_PCT = float(os.getenv("ACTIVE_LATE_ENTRY_MAX_ABOVE_ENTRY_PCT", "0.50"))
 ACTIVE_LATE_ENTRY_MAX_R_MULTIPLE = float(os.getenv("ACTIVE_LATE_ENTRY_MAX_R_MULTIPLE", "0.50"))
+
+# Reclaim Active quality filter.
+# This is intentionally applied only when promoting TRIGGER_TOUCHED/READY into
+# ACTIVE_SIGNAL. Watch/Ready discovery remains broader, but a reclaim signal cannot
+# become an actionable Active trade unless momentum/structure/volume confirm.
+RECLAIM_ACTIVE_REQUIRE_MACD_IMPROVING = os.getenv("RECLAIM_ACTIVE_REQUIRE_MACD_IMPROVING", "1").strip() != "0"
+RECLAIM_ACTIVE_REQUIRE_VOLUME_CONFIRM = os.getenv("RECLAIM_ACTIVE_REQUIRE_VOLUME_CONFIRM", "1").strip() != "0"
+RECLAIM_ACTIVE_REQUIRE_TRUE_RECLAIM = os.getenv("RECLAIM_ACTIVE_REQUIRE_TRUE_RECLAIM", "1").strip() != "0"
+RECLAIM_ACTIVE_MAX_VWAP_DIST_PCT = float(os.getenv("RECLAIM_ACTIVE_MAX_VWAP_DIST_PCT", "3.00"))
+RECLAIM_ACTIVE_MIN_RECLAIM_VOLUME_RATIO = float(os.getenv("RECLAIM_ACTIVE_MIN_RECLAIM_VOLUME_RATIO", "1.15"))
 
 # Quality thresholds.
 MIN_AVG_DOLLAR_VOL_M = 25.0
@@ -6445,6 +6455,92 @@ def active_late_entry_guard_reason(plan: Dict[str, Any], metrics: IntradayMetric
     return "; ".join(pieces)
 
 
+def reclaim_active_quality_filter(
+    plan: Dict[str, Any],
+    metrics: IntradayMetrics,
+    setup_type: str = "",
+    row: Optional[Dict[str, Any]] = None,
+) -> Tuple[bool, str]:
+    """
+    Final quality gate before a reclaim-family setup becomes ACTIVE_SIGNAL.
+
+    This fixes the broad-reclaim problem seen in outcomes:
+      - ordinary VWAP holds / sideways chop should not become reclaim runners,
+      - weak MACD + VWAP/EMA structures should stay Watch/Trigger Touched,
+      - low-participation reclaims should wait for confirmation instead of
+        becoming actionable Active trades.
+
+    Discovery remains broad. This gate only blocks Active promotion.
+    """
+    if not is_reclaim_lifecycle_setup_type(setup_type):
+        return True, "Not a reclaim lifecycle setup"
+
+    if not metrics.has_data:
+        return False, "No intraday bars for reclaim Active quality check"
+
+    if metrics.vwap_dist_pct > RECLAIM_ACTIVE_MAX_VWAP_DIST_PCT:
+        return False, (
+            f"Reclaim Active quality blocked: VWAP distance {metrics.vwap_dist_pct:.2f}% "
+            f"> {RECLAIM_ACTIVE_MAX_VWAP_DIST_PCT:.2f}%"
+        )
+
+    if metrics.vwap > 0 and not metrics.above_vwap:
+        return False, "Reclaim Active quality blocked: price is not above VWAP"
+
+    if metrics.ema9 > 0 and not metrics.price_above_ema9:
+        return False, "Reclaim Active quality blocked: price is not above EMA9"
+
+    # Do not call a sideways VWAP hold a reclaim runner unless there is evidence
+    # of an actual reclaim lifecycle or a clean pullback-hold after reclaim.
+    true_reclaim_evidence = (
+        metrics.vwap_reclaim_ready
+        or metrics.vwap_reclaim_recent
+        or metrics.vwap_reclaim_lifecycle_active
+        or metrics.reclaim_pullback_holding
+        or scanner_has_1m_reclaim_tag(row)
+    )
+    if RECLAIM_ACTIVE_REQUIRE_TRUE_RECLAIM and not true_reclaim_evidence:
+        return False, (
+            "Reclaim Active quality blocked: no fresh VWAP/EMA reclaim-from-below "
+            "or clean reclaim pullback-hold evidence"
+        )
+
+    if metrics.bearish_momentum_divergence:
+        return False, "Reclaim Active quality blocked: bearish momentum divergence"
+
+    macd_improving = (
+        metrics.macd_1m_curling_up
+        or metrics.macd_1m_bullish_crossover_recent
+        or (metrics.macd_1m_above_signal and not metrics.macd_1m_histogram_falling)
+        or metrics.macd_histogram_rising
+        or metrics.macd_above_signal
+    )
+    macd_weakening_hard = (
+        metrics.macd_1m_curling_down
+        and metrics.macd_1m_histogram_falling
+        and not metrics.macd_1m_above_signal
+    )
+    if macd_weakening_hard:
+        return False, "Reclaim Active quality blocked: 1-minute MACD curling down/falling"
+    if RECLAIM_ACTIVE_REQUIRE_MACD_IMPROVING and not macd_improving:
+        return False, "Reclaim Active quality blocked: MACD is not curling/improving"
+
+    volume_confirmed = (
+        metrics.recent_volume_expanding
+        or metrics.volume_stable_or_increasing
+        or metrics.vwap_reclaim_volume_ratio >= RECLAIM_ACTIVE_MIN_RECLAIM_VOLUME_RATIO
+    )
+    if metrics.volume_fading_vs_morning and not metrics.recent_volume_expanding:
+        return False, f"Reclaim Active quality blocked: {volume_fade_label(metrics)}"
+    if RECLAIM_ACTIVE_REQUIRE_VOLUME_CONFIRM and not volume_confirmed:
+        return False, (
+            "Reclaim Active quality blocked: reclaim/confirmation volume is not expanding "
+            f"(reclaim vol ratio {metrics.vwap_reclaim_volume_ratio:.2f}x)"
+        )
+
+    return True, "Reclaim Active quality confirmed: true reclaim/pullback hold, MACD improving, volume confirmed"
+
+
 def active_promotion_failure_reasons(
     plan: Dict[str, Any],
     confidence: float,
@@ -6483,6 +6579,10 @@ def active_promotion_failure_reasons(
         macd_ok, macd_reason = vwap_lifecycle_macd_confirmation(metrics, setup_type)
         if not macd_ok:
             reasons.append(macd_reason)
+
+        quality_ok, quality_reason = reclaim_active_quality_filter(plan, metrics, setup_type, row)
+        if not quality_ok:
+            reasons.append(quality_reason)
 
         if metrics.ema9_falling and not metrics.reclaim_pullback_holding and metrics.vwap_dist_pct <= 0.35:
             reasons.append("EMA9 falling while reclaim support is not clearly holding")
