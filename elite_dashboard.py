@@ -3541,6 +3541,32 @@ def build_signal_diagnostics_panel(rejected_candidates, max_preview=3):
     """
 
 
+def is_market_close_expiry_outcome(row):
+    """
+    True when an outcome row represents end-of-session / after-hours expiry,
+    not a technical invalidation.
+
+    Some active signals are written as INVALIDATED_AFTER_ENTRY at market close
+    with a reason like "Market phase AFTERHOURS; signal expired." Those should
+    be tracked separately as Expired at Close, not Active Invalidated.
+    """
+    if not isinstance(row, dict):
+        return False
+    status = safe_str(row.get("outcome_status"), "").upper()
+    reason = safe_str(row.get("invalidation_reason") or row.get("outcome_detail"), "").lower()
+    if status in ["EXPIRED", "MISSED_WINDOW", "EXPIRED_AT_CLOSE"]:
+        return True
+    if "market phase afterhours" in reason and "expired" in reason:
+        return True
+    if "afterhours" in reason and "signal expired" in reason:
+        return True
+    if "after-hours" in reason and "signal expired" in reason:
+        return True
+    if "end of session" in reason or "session expired" in reason:
+        return True
+    return False
+
+
 def load_signal_outcomes_summary():
     # Always build dashboard outcome counts directly from signal_outcomes.csv.
     #
@@ -3605,6 +3631,7 @@ def load_signal_outcomes_summary():
             "pre_active_t1_hit": 0,
             "pre_active_t2_hit": 0,
             "active_invalidated": 0,
+            "expired_at_close": 0,
             "pre_active_invalidated": 0,
             "ready_to_touched_pct": 0.0,
             "touched_to_active_pct": 0.0,
@@ -3636,6 +3663,7 @@ def load_signal_outcomes_summary():
             "pre_active_t1_hit": set(),
             "pre_active_t2_hit": set(),
             "active_invalidated": set(),
+            "expired_at_close": set(),
             "pre_active_invalidated": set(),
         }
 
@@ -3709,11 +3737,16 @@ def load_signal_outcomes_summary():
 
             if status == "INVALIDATED_AFTER_ENTRY":
                 sets["invalidated_after_entry"].add(sid)
-                # Active Invalidated means the signal actually had active_time.
-                # If it invalidated after entry/touch but before active, it belongs to Pre-Active.
-                if active_time:
+                # Market-close / after-hours expiry is not a technical Active failure.
+                # Keep it as its own outcome bucket instead of inflating Active Invalidated.
+                if is_market_close_expiry_outcome(row):
+                    sets["expired_at_close"].add(sid)
+                elif active_time:
+                    # Active Invalidated means the signal actually had active_time
+                    # and then failed technical structure before target/stop.
                     sets["active_invalidated"].add(sid)
                 else:
+                    # If it invalidated after entry/touch but before active, it belongs to Pre-Active.
                     sets["pre_active_invalidated"].add(sid)
 
             if status == "INVALIDATED_BEFORE_ENTRY":
@@ -3759,7 +3792,7 @@ def outcome_status_class(status):
         return "outcome-good"
     if status in ["STOP_HIT"]:
         return "outcome-bad"
-    if status in ["INVALIDATED_BEFORE_ENTRY", "INVALIDATED_AFTER_ENTRY", "WATCH_REMOVED", "MISSED_WINDOW", "EXPIRED"]:
+    if status in ["INVALIDATED_BEFORE_ENTRY", "INVALIDATED_AFTER_ENTRY", "WATCH_REMOVED", "MISSED_WINDOW", "EXPIRED", "EXPIRED_AT_CLOSE"]:
         return "outcome-neutral"
     if status in ["ACTIVE_SIGNAL"]:
         return "outcome-active"
@@ -3774,6 +3807,7 @@ def short_outcome_status(status):
         "T1_HIT": "T1",
         "T2_HIT": "T2",
         "STOP_HIT": "STOP",
+        "EXPIRED_AT_CLOSE": "EXP CLOSE",
         "INVALIDATED_BEFORE_ENTRY": "INV BEFORE",
         "INVALIDATED_AFTER_ENTRY": "INV AFTER",
         "WATCH_REMOVED": "WATCH REMOVED",
@@ -3809,6 +3843,7 @@ def build_signal_outcomes_panel(summary):
         ("Active T2 Hit", safe_int(today.get("active_t2_hit"), 0)),
         ("Stop Loss Hit", safe_int(today.get("stop_hit"), 0)),
         ("Active Invalidated", safe_int(today.get("active_invalidated"), 0)),
+        ("Expired at Close", safe_int(today.get("expired_at_close"), 0)),
     ]
 
     pre_active_stat_items = [
@@ -3849,7 +3884,8 @@ def build_signal_outcomes_panel(summary):
             symbol = safe_str(row.get("symbol"), "—").upper()
             setup = safe_str(row.get("setup_type"), "—")
             status = safe_str(row.get("outcome_status"), "—").upper()
-            cls = outcome_status_class(status)
+            display_status = "EXPIRED_AT_CLOSE" if is_market_close_expiry_outcome(row) else status
+            cls = outcome_status_class(display_status)
             entry = format_signal_price(row.get("entry"))
             t1 = format_signal_price(row.get("target_1"))
             t2 = format_signal_price(row.get("target_2"))
@@ -3882,7 +3918,7 @@ def build_signal_outcomes_panel(summary):
                         <span>{esc(setup)}</span>
                     </div>
                     <div class="outcome-side">
-                        <b class="outcome-pill {cls}">{esc(short_outcome_status(status))}</b>
+                        <b class="outcome-pill {cls}">{esc(short_outcome_status(display_status))}</b>
                         <span>{esc(checked)}</span>
                     </div>
                     <div class="outcome-plan">
