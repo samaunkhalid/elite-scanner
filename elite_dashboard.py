@@ -3565,8 +3565,16 @@ def load_signal_outcomes_summary():
     last_7d_rows = [r for r in rows if row_date_value(r) and row_date_value(r).toordinal() >= cutoff]
 
     def counts_for(selected_rows):
+        """
+        Build TODAY / 7D outcome counters from signal_outcomes.csv.
+
+        Important:
+          - Dashboard tiles should count unique signal_ids, not duplicate refresh rows.
+          - Active-performance target counts are separated from pre-active target hits.
+          - T1/T2 totals still include both active and pre-active target hits for the 7D summary line.
+        """
         counts = {
-            "total": len(selected_rows),
+            "total": 0,
             "watch": 0,
             "trigger_ready": 0,
             "trigger_touched": 0,
@@ -3583,6 +3591,12 @@ def load_signal_outcomes_summary():
             "ready_events": 0,
             "touched_events": 0,
             "active_events": 0,
+            "active_t1_hit": 0,
+            "active_t2_hit": 0,
+            "pre_active_t1_hit": 0,
+            "pre_active_t2_hit": 0,
+            "active_invalidated": 0,
+            "pre_active_invalidated": 0,
             "ready_to_touched_pct": 0.0,
             "touched_to_active_pct": 0.0,
             "ready_to_t1_pct": 0.0,
@@ -3590,40 +3604,116 @@ def load_signal_outcomes_summary():
         }
 
         invalid_reasons = {}
+        sets = {
+            "tracked": set(),
+            "watch": set(),
+            "trigger_ready": set(),
+            "trigger_touched": set(),
+            "active_signal": set(),
+            "t1_hit": set(),
+            "t2_hit": set(),
+            "stop_hit": set(),
+            "invalidated_before_entry": set(),
+            "invalidated_after_entry": set(),
+            "watch_removed": set(),
+            "ready_only_success": set(),
+            "open": set(),
+            "completed": set(),
+            "ready_events": set(),
+            "touched_events": set(),
+            "active_events": set(),
+            "active_t1_hit": set(),
+            "active_t2_hit": set(),
+            "pre_active_t1_hit": set(),
+            "pre_active_t2_hit": set(),
+            "active_invalidated": set(),
+            "pre_active_invalidated": set(),
+        }
 
-        for row in selected_rows:
+        def signal_key(row, idx):
+            sid = safe_str(row.get("signal_id") or row.get("id") or row.get("outcome_id"), "")
+            if sid:
+                return sid
+            symbol = safe_str(row.get("symbol"), "").upper()
+            setup = safe_str(row.get("setup_type"), "")
+            ready_time = safe_str(row.get("trigger_ready_time") or row.get("detected_at") or row.get("created_at"), "")
+            if symbol or setup or ready_time:
+                return f"{symbol}|{setup}|{ready_time}"
+            return f"row-{idx}"
+
+        for idx, row in enumerate(selected_rows):
+            sid = signal_key(row, idx)
+            sets["tracked"].add(sid)
+
             status = safe_str(row.get("outcome_status")).upper()
-            ready_event = bool(safe_str(row.get("trigger_ready_time")))
+            active_time = safe_str(row.get("active_time"), "")
+            success_without_active = str(row.get("success_without_active", "")).strip().lower() in ["true", "1", "yes", "y"]
+
+            ready_event = (
+                bool(safe_str(row.get("trigger_ready_time")))
+                or status in ["TRIGGER_READY", "TRIGGER_TOUCHED", "ACTIVE_SIGNAL", "T1_HIT", "T2_HIT", "STOP_HIT", "INVALIDATED_AFTER_ENTRY"]
+            )
             touched_event = (
                 bool(safe_str(row.get("trigger_touched_time")))
                 or str(row.get("hit_entry", "")).strip().lower() in ["true", "1", "yes", "y"]
                 or str(row.get("entry_touched_before_active", "")).strip().lower() in ["true", "1", "yes", "y"]
                 or status in ["TRIGGER_TOUCHED", "ACTIVE_SIGNAL", "T1_HIT", "T2_HIT", "STOP_HIT", "INVALIDATED_AFTER_ENTRY"]
             )
-            active_event = bool(safe_str(row.get("active_time"))) or status in ["ACTIVE_SIGNAL", "T1_HIT", "T2_HIT", "STOP_HIT"]
+            active_event = bool(active_time) or status == "ACTIVE_SIGNAL"
 
             if ready_event:
-                counts["ready_events"] += 1
+                sets["ready_events"].add(sid)
             if touched_event:
-                counts["touched_events"] += 1
+                sets["touched_events"].add(sid)
             if active_event:
-                counts["active_events"] += 1
+                sets["active_events"].add(sid)
 
             key = status.lower()
-            if key in counts:
-                counts[key] += 1
-            if str(row.get("success_without_active", "")).strip().lower() in ["true", "1", "yes", "y"]:
-                counts["ready_only_success"] += 1
+            if key in sets:
+                sets[key].add(sid)
+
+            if success_without_active:
+                sets["ready_only_success"].add(sid)
+
             if status in ["WATCH", "TRIGGER_READY", "TRIGGER_TOUCHED", "ACTIVE_SIGNAL"]:
-                counts["open"] += 1
+                sets["open"].add(sid)
             if status not in ["", "WATCH", "TRIGGER_READY", "TRIGGER_TOUCHED", "ACTIVE_SIGNAL"]:
-                counts["completed"] += 1
+                sets["completed"].add(sid)
+
+            if status == "T1_HIT":
+                sets["t1_hit"].add(sid)
+                if active_event:
+                    sets["active_t1_hit"].add(sid)
+                else:
+                    sets["pre_active_t1_hit"].add(sid)
+
+            if status == "T2_HIT":
+                sets["t2_hit"].add(sid)
+                if active_event:
+                    sets["active_t2_hit"].add(sid)
+                else:
+                    sets["pre_active_t2_hit"].add(sid)
+
+            if status == "STOP_HIT":
+                sets["stop_hit"].add(sid)
+
+            if status == "INVALIDATED_AFTER_ENTRY":
+                sets["invalidated_after_entry"].add(sid)
+                sets["active_invalidated"].add(sid)
+
+            if status == "INVALIDATED_BEFORE_ENTRY":
+                sets["invalidated_before_entry"].add(sid)
+                sets["pre_active_invalidated"].add(sid)
 
             if status.startswith("INVALIDATED"):
                 reason = safe_str(row.get("invalidation_reason") or row.get("outcome_detail"), "")
                 if reason:
                     reason = reason[:120]
                     invalid_reasons[reason] = invalid_reasons.get(reason, 0) + 1
+
+        for key, values in sets.items():
+            if key in counts:
+                counts[key] = len(values)
 
         if counts["ready_events"]:
             counts["ready_to_touched_pct"] = round(counts["touched_events"] / counts["ready_events"] * 100, 1)
@@ -3695,21 +3785,32 @@ def build_signal_outcomes_panel(summary):
     last7 = summary.get("last_7_days", {}) if isinstance(summary.get("last_7_days"), dict) else {}
     recent = summary.get("recent", []) if isinstance(summary.get("recent"), list) else []
 
-    stat_items = [
+    active_stat_items = [
+        ("Activated", safe_int(today.get("active_events"), 0)),
+        ("Still Active", safe_int(today.get("active_signal"), 0)),
+        ("Active T1 Hit", safe_int(today.get("active_t1_hit"), 0)),
+        ("Active T2 Hit", safe_int(today.get("active_t2_hit"), 0)),
+        ("Stop Loss Hit", safe_int(today.get("stop_hit"), 0)),
+        ("Active Invalidated", safe_int(today.get("active_invalidated"), 0)),
+    ]
+
+    pre_active_stat_items = [
         ("Tracked Signals", safe_int(today.get("total"), 0)),
         ("Ready", safe_int(today.get("ready_events"), safe_int(today.get("trigger_ready"), 0))),
         ("Touched", safe_int(today.get("touched_events"), safe_int(today.get("trigger_touched"), 0))),
-        ("Activated", safe_int(today.get("active_events"), 0)),
-        ("Still Active", safe_int(today.get("active_signal"), 0)),
-        ("T1 Hit", safe_int(today.get("t1_hit"), 0)),
-        ("T2 Hit", safe_int(today.get("t2_hit"), 0)),
-        ("Stop Loss Hit", safe_int(today.get("stop_hit"), 0)),
-        ("Invalidated", safe_int(today.get("invalidated_before_entry"), 0) + safe_int(today.get("invalidated_after_entry"), 0)),
+        ("Pre-Active T1 Hit", safe_int(today.get("pre_active_t1_hit"), 0)),
+        ("Pre-Active T2 Hit", safe_int(today.get("pre_active_t2_hit"), 0)),
+        ("Pre-Active Invalidated", safe_int(today.get("pre_active_invalidated"), 0)),
     ]
 
-    stats_html = "".join(
+    active_stats_html = "".join(
         f'<span class="outcome-stat"><b>{esc(value)}</b>{esc(label)}</span>'
-        for label, value in stat_items
+        for label, value in active_stat_items
+    )
+
+    pre_active_stats_html = "".join(
+        f'<span class="outcome-stat"><b>{esc(value)}</b>{esc(label)}</span>'
+        for label, value in pre_active_stat_items
     )
 
     last7_line = (
@@ -3798,9 +3899,13 @@ def build_signal_outcomes_panel(summary):
                 {common_invalid_html}
             </div>
         </div>
-        <div class="outcome-section-label">TODAY</div>
+        <div class="outcome-section-label">TODAY — Active Signal Performance</div>
         <div class="outcome-stats">
-            {stats_html}
+            {active_stats_html}
+        </div>
+        <div class="outcome-section-label">TODAY — Pre-Active Setup Quality</div>
+        <div class="outcome-stats">
+            {pre_active_stats_html}
         </div>
         {body_html}
     </section>
@@ -6052,24 +6157,17 @@ td small {
 
 
 .outcome-section-label {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    margin: 8px 0 7px 0;
-    padding: 4px 10px;
-    border-radius: 999px;
-    border: 1px solid rgba(59, 130, 246, 0.28);
-    background: rgba(30, 64, 175, 0.20);
-    color: #bfdbfe;
+    margin: 10px 0 6px;
+    color: #cbd5e1;
     font-size: 11px;
-    font-weight: 900;
-    letter-spacing: 0.14em;
+    font-weight: 800;
+    letter-spacing: 0.08em;
     text-transform: uppercase;
 }
 
 .outcome-stats {
     display: grid;
-    grid-template-columns: repeat(9, minmax(72px, 1fr));
+    grid-template-columns: repeat(6, minmax(72px, 1fr));
     gap: 7px;
     margin-bottom: 10px;
 }
