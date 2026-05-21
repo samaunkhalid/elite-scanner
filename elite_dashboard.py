@@ -3542,13 +3542,22 @@ def build_signal_diagnostics_panel(rejected_candidates, max_preview=3):
 
 
 def load_signal_outcomes_summary():
-    summary = load_json_object("signal_outcomes_summary.json", default={})
-    if isinstance(summary, dict) and summary:
-        return summary
-
-    # Fallback: build a small summary directly from CSV if JSON has not been created yet.
+    # Always build dashboard outcome counts directly from signal_outcomes.csv.
+    #
+    # Reason:
+    #   signal_outcomes_summary.json can lag behind the CSV schema and may not include
+    #   dashboard-only split counters such as active_t1_hit / active_t2_hit /
+    #   pre_active_t1_hit / pre_active_t2_hit. Reading that older summary caused the
+    #   two-bar outcomes panel to show 0 for Active T1/T2 even when the CSV contained
+    #   valid T1_HIT / T2_HIT rows.
+    #
+    # The CSV is the source of truth for the dashboard outcomes panel. If CSV is
+    # temporarily missing, fall back to the JSON summary so the section does not vanish.
     rows = load_csv_records("signal_outcomes.csv")
     if not rows:
+        summary = load_json_object("signal_outcomes_summary.json", default={})
+        if isinstance(summary, dict) and summary:
+            return summary
         return {}
 
     now_utc, now_ny = get_times()
