@@ -3963,6 +3963,84 @@ def build_signal_outcomes_panel(summary):
         {body_html}
     </section>
     """
+def build_priority_morning_reclaim_section(priority_signals):
+    """
+    Dedicated max-3 PLUG/NU-style morning reclaim focus section.
+
+    It reads signal_engine.py's priority_morning_reclaim list only. If the
+    engine is outside the 09:35-11:00 window or no ticker qualifies, this
+    section stays hidden and all normal dashboard sections remain unchanged.
+    """
+    priority_signals = [s for s in (priority_signals or []) if isinstance(s, dict)]
+    if not priority_signals:
+        return ""
+
+    visible = priority_signals[:3]
+    cards = []
+
+    for s in visible:
+        symbol = safe_str(s.get("symbol"), "—").upper()
+        href = "#" + html_id_for_symbol(symbol)
+        status = normalize_signal_status(s.get("signal_status"))
+        status_class = get_signal_status_class(status)
+        status_text = "TOUCHED" if status == "TRIGGER_TOUCHED" else status.replace("_", " ")
+        setup_type = safe_str(s.get("setup_type"), "VWAP/EMA reclaim")
+        score = safe_float(s.get("morning_reclaim_score"), 0)
+        confidence = safe_float(s.get("confidence"), 0)
+        vwap_dist = safe_float(s.get("vwap_dist_pct"), 0)
+        rr = safe_float(s.get("reward_risk"), 0)
+        entry = format_signal_price(s.get("entry_trigger") or s.get("entry"))
+        stop = format_signal_price(s.get("stop_loss") or s.get("stop"))
+        t1 = format_signal_price(s.get("target_1") or s.get("target1"))
+        reasons = s.get("morning_reclaim_reasons") if isinstance(s.get("morning_reclaim_reasons"), list) else []
+        note = safe_str(s.get("morning_reclaim_note"), "")
+        reason_html = ""
+        if reasons:
+            reason_html = "".join(f'<span class="signal-chip">{esc(str(r))}</span>' for r in reasons[:4])
+            reason_html = f'<div class="morning-reclaim-reasons">{reason_html}</div>'
+        note_html = f'<div class="signal-desk-lunch-warning">{esc(note)}</div>' if note else ""
+
+        cards.append(f"""
+            <div class="signal-desk-item morning-reclaim-focus-card">
+                <div class="signal-desk-item-top">
+                    <a class="signal-desk-symbol" href="{esc(href)}">{esc(symbol)}</a>
+                    <span class="signal-status {status_class}">{esc(status_text)}</span>
+                </div>
+                <div class="signal-desk-setup">{esc(setup_type)}</div>
+                <div class="signal-desk-plan">
+                    <span>Score <b>{score:.0f}</b></span>
+                    <span>Conf <b>{confidence:.0f}%</b></span>
+                    <span>VWAP <b>{vwap_dist:+.1f}%</b></span>
+                    <span>R/R <b>{rr:.1f}:1</b></span>
+                </div>
+                <div class="signal-desk-plan">
+                    <span>E <b>{entry}</b></span>
+                    <span>S <b>{stop}</b></span>
+                    <span>T1 <b>{t1}</b></span>
+                </div>
+                {reason_html}
+                {note_html}
+            </div>
+        """)
+
+    return f"""
+    <section class="signal-desk-panel morning-reclaim-priority-panel" id="priority-reclaim">
+        <div class="signal-desk-top">
+            <div>
+                <strong>Priority Morning Reclaim</strong>
+                <span>Max 3 PLUG/NU-style reclaim runners from 09:35–11:00 ET. Normal reclaim logic remains unchanged outside this window.</span>
+            </div>
+            <div class="signal-desk-counts">
+                <span><b>{len(visible)}</b> Focus</span>
+            </div>
+        </div>
+        <div class="signal-desk-list morning-reclaim-focus-list">
+            {''.join(cards)}
+        </div>
+    </section>
+    """
+
+
 def build_signal_desk_panel(signals, rejected_candidates=None):
     """
     Full-width Signal Desk.
@@ -4093,6 +4171,7 @@ def build_dashboard(potential, active, extended, highrisk, raw, active_watchlist
     premarket_section = ""
     afterhours_section = ""
     early_reclaim_section = ""
+    priority_reclaim_section = ""
     signal_detail_section = ""
 
     if market_open and scanner_regular_ready:
@@ -4109,6 +4188,9 @@ def build_dashboard(potential, active, extended, highrisk, raw, active_watchlist
         early_reclaim = load_early_reclaim_rows(raw)
 
         signal_desk_html = build_signal_desk_panel(signals, rejected_candidates)
+        priority_reclaim_section = build_priority_morning_reclaim_section(
+            signal_payload.get("priority_morning_reclaim", [])
+        )
         outcome_summary = load_signal_outcomes_summary()
         signal_outcomes_html = build_signal_outcomes_panel(outcome_summary)
 
@@ -4165,10 +4247,12 @@ def build_dashboard(potential, active, extended, highrisk, raw, active_watchlist
         desk_table = build_desk_table(focus_rows)
 
         signal_details_nav = '<a href="#signal-details">Signal Details</a>' if signal_detail_section else ""
+        priority_reclaim_nav = '<a href="#priority-reclaim">Priority Morning Reclaim</a>' if priority_reclaim_section else ""
 
         nav_tabs = f"""
         <div class="nav-tabs">
             <a href="#signals">Signal Desk</a>
+            {priority_reclaim_nav}
             {signal_details_nav}
             <a href="#potential">Potential Movers</a>
             <a href="#early">Early Reclaim</a>
@@ -6525,6 +6609,8 @@ td small {
 
     $nav_tabs
 
+    $priority_reclaim_section
+
     $signal_detail_section
 
     <div id="premarket">$premarket_section</div>
@@ -6556,6 +6642,7 @@ td small {
         signal_desk_html=signal_desk_html,
         signal_outcomes_html=signal_outcomes_html,
         nav_tabs=nav_tabs,
+        priority_reclaim_section=priority_reclaim_section,
         signal_detail_section=signal_detail_section,
         premarket_section=premarket_section,
         potential_section=potential_section,
