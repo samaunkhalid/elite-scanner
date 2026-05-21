@@ -78,7 +78,7 @@ SIGNAL_STATE_FILE = "signal_state.json"
 SUPPRESSED_SIGNALS_FILE = "suppressed_signals.csv"
 SIGNAL_OUTCOMES_FILE = "signal_outcomes.csv"
 SIGNAL_OUTCOMES_SUMMARY_FILE = "signal_outcomes_summary.json"
-SIGNAL_ENGINE_STRATEGY_VERSION = "v2.7.1_structure_based_reclaim_datagap"
+SIGNAL_ENGINE_STRATEGY_VERSION = "v2.7.2_reclaim_namefix_datagap"
 
 # State retention.
 ACTIVE_STALE_MINUTES = 10
@@ -4894,7 +4894,7 @@ def not_ready_reasons(
     setup = safe_str(setup_type or plan.get("setup_type"), "").upper()
 
     if setup == "VWAP_EMA_RECLAIM_RUNNER":
-        _, reason = setup_early_reclaim_runner_ready(metrics, rr, confidence)
+        _, reason = setup_vwap_ema_reclaim_runner_ready(metrics, rr, confidence)
         reasons.append(f"Early VWAP/EMA reclaim not ready: {reason}")
     elif setup == "VWAP_RECLAIM_BREAKOUT":
         _, reason = setup_vwap_reclaim_ready(metrics, rr, confidence)
