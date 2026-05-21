@@ -78,7 +78,7 @@ SIGNAL_STATE_FILE = "signal_state.json"
 SUPPRESSED_SIGNALS_FILE = "suppressed_signals.csv"
 SIGNAL_OUTCOMES_FILE = "signal_outcomes.csv"
 SIGNAL_OUTCOMES_SUMMARY_FILE = "signal_outcomes_summary.json"
-SIGNAL_ENGINE_STRATEGY_VERSION = "v2.7.3_late_entry_guard_datagap"
+SIGNAL_ENGINE_STRATEGY_VERSION = "v2.7.4_outcome_sync_late_guard_datagap"
 
 # State retention.
 ACTIVE_STALE_MINUTES = 10
@@ -7205,6 +7205,72 @@ def prepare_monitor_symbols(focus: Dict[str, Dict[str, Any]], prior_state: Dict[
     return sorted(symbols)
 
 
+
+def remove_completed_outcome_signals(new_state: Dict[str, Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+    """
+    Keep signal_desk.json synchronized with signal_outcomes.csv.
+
+    The outcome tracker can mark a protected signal as T1_HIT/T2_HIT/STOP_HIT
+    while the protected state still says ACTIVE_SIGNAL. In that case the signal
+    must leave the primary Signal Desk lists and live only in the Outcomes panel.
+
+    This prevents completed signals like:
+      ACTIVE_SIGNAL -> T1_HIT
+    from continuing to render as fresh Active entries after the target was hit.
+    """
+    if not new_state:
+        return new_state
+
+    try:
+        rows = load_signal_outcomes()
+    except Exception as exc:
+        decision_log("-", "OUTCOME_SYNC_LOAD_ERROR", error=str(exc))
+        return new_state
+
+    final_by_id: Dict[str, Dict[str, Any]] = {}
+    for row in rows:
+        signal_id = safe_str(row.get("signal_id"), "")
+        outcome_status = safe_str(row.get("outcome_status"), "").upper()
+        if signal_id and outcome_status in OUTCOME_FINAL_STATUSES:
+            final_by_id[signal_id] = row
+
+    if not final_by_id:
+        return new_state
+
+    retained: Dict[str, Dict[str, Any]] = {}
+    removed = 0
+
+    for sym, signal in new_state.items():
+        signal_id = safe_str(signal.get("signal_id"), "")
+        outcome_row = final_by_id.get(signal_id) if signal_id else None
+
+        if outcome_row:
+            removed += 1
+            outcome_status = safe_str(outcome_row.get("outcome_status"), "").upper()
+            outcome_detail = safe_str(outcome_row.get("outcome_detail"), "")
+            decision_log(
+                normalize_symbol(sym or signal.get("symbol")),
+                "SIGNAL_REMOVED_AFTER_FINAL_OUTCOME",
+                signal_id=signal_id,
+                prior_status=normalize_status(signal.get("signal_status")),
+                outcome_status=outcome_status,
+                reason=outcome_detail,
+            )
+            continue
+
+        retained[sym] = signal
+
+    if removed:
+        decision_log(
+            "-",
+            "OUTCOME_SYNC_APPLIED",
+            removed=removed,
+            retained=len(retained),
+        )
+
+    return retained
+
+
 def build_signal_outputs(new_state: Dict[str, Dict[str, Any]]) -> List[Dict[str, Any]]:
     rank = {
         "ACTIVE_SIGNAL": 1,
@@ -7403,6 +7469,14 @@ def run_signal_engine() -> None:
             rejected_candidates.append(diagnostic)
 
     outcome_summary = update_signal_outcomes(new_state, prior_state)
+
+    # Outcome/state synchronization:
+    # If the outcome tracker marked a signal as T1_HIT/T2_HIT/STOP_HIT/etc.,
+    # remove it from the primary Signal Desk before building signal_desk.json
+    # and before saving signal_state.json. The Outcomes panel remains the
+    # source of truth for completed signals.
+    new_state = remove_completed_outcome_signals(new_state)
+
     signals = build_signal_outputs(new_state)
     counts = summarize_signals(signals)
 
