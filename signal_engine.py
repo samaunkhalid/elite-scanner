@@ -78,7 +78,7 @@ SIGNAL_STATE_FILE = "signal_state.json"
 SUPPRESSED_SIGNALS_FILE = "suppressed_signals.csv"
 SIGNAL_OUTCOMES_FILE = "signal_outcomes.csv"
 SIGNAL_OUTCOMES_SUMMARY_FILE = "signal_outcomes_summary.json"
-SIGNAL_ENGINE_STRATEGY_VERSION = "v2.7.2_reclaim_namefix_datagap"
+SIGNAL_ENGINE_STRATEGY_VERSION = "v2.7.3_late_entry_guard_datagap"
 
 # State retention.
 ACTIVE_STALE_MINUTES = 10
@@ -95,6 +95,14 @@ RECENT_INVALIDATED_KEEP_MINUTES = 30
 DATA_GAP_GRACE_SECONDS = int(os.getenv("DATA_GAP_GRACE_SECONDS", "180"))
 RECLAIM_TRIGGER_RETEST_TOLERANCE_PCT = float(os.getenv("RECLAIM_TRIGGER_RETEST_TOLERANCE_PCT", "0.50"))
 RECLAIM_STRUCTURE_CONFIDENCE_PREMIUM_MAX = float(os.getenv("RECLAIM_STRUCTURE_CONFIDENCE_PREMIUM_MAX", "8.0"))
+# Active late-entry guard.
+# A Trigger Touched setup must not be promoted to ACTIVE after price has already
+# moved too far beyond the planned entry. This prevents batch scanner refreshes
+# from turning already-chased reclaim/breakout names into actionable Active
+# signals. The ticker can stay TRIGGER_TOUCHED and wait for a retest; if it never
+# retests within the normal confirmation window, it exits as a missed/failed entry.
+ACTIVE_LATE_ENTRY_MAX_ABOVE_ENTRY_PCT = float(os.getenv("ACTIVE_LATE_ENTRY_MAX_ABOVE_ENTRY_PCT", "0.50"))
+ACTIVE_LATE_ENTRY_MAX_R_MULTIPLE = float(os.getenv("ACTIVE_LATE_ENTRY_MAX_R_MULTIPLE", "0.50"))
 
 # Quality thresholds.
 MIN_AVG_DOLLAR_VOL_M = 25.0
@@ -6393,6 +6401,50 @@ def touched_trigger_rejected(existing: Dict[str, Any], metrics: IntradayMetrics)
     return False, ""
 
 
+
+def active_late_entry_guard_reason(plan: Dict[str, Any], metrics: IntradayMetrics) -> str:
+    """
+    Return a blocking reason when the current price is too far above the locked
+    entry trigger to create a fresh ACTIVE_SIGNAL.
+
+    This does not invalidate the setup immediately. It simply prevents a late
+    Active promotion so the ticker can either retest the entry zone or expire
+    cleanly as a missed window.
+    """
+    if not metrics or not getattr(metrics, "has_data", False):
+        return ""
+
+    entry = safe_float(plan.get("entry_trigger"), 0.0)
+    stop = safe_float(plan.get("stop_loss"), 0.0)
+    price = safe_float(getattr(metrics, "price", 0.0), 0.0)
+
+    if entry <= 0 or price <= entry:
+        return ""
+
+    above_entry_pct = pct_change(price, entry)
+    risk = entry - stop if entry > 0 and stop > 0 and entry > stop else 0.0
+    r_now = (price - entry) / risk if risk > 0 else 0.0
+
+    late_by_pct = above_entry_pct > ACTIVE_LATE_ENTRY_MAX_ABOVE_ENTRY_PCT
+    late_by_r = risk > 0 and r_now > ACTIVE_LATE_ENTRY_MAX_R_MULTIPLE
+
+    if not late_by_pct and not late_by_r:
+        return ""
+
+    pieces = [
+        f"Late entry guard: price is {above_entry_pct:.2f}% above trigger",
+    ]
+    if risk > 0:
+        pieces.append(f"{r_now:.2f}R from entry")
+
+    pieces.append(
+        f"max allowed {ACTIVE_LATE_ENTRY_MAX_ABOVE_ENTRY_PCT:.2f}% "
+        f"or {ACTIVE_LATE_ENTRY_MAX_R_MULTIPLE:.2f}R"
+    )
+    pieces.append("wait for retest instead of promoting to Active")
+    return "; ".join(pieces)
+
+
 def active_promotion_failure_reasons(
     plan: Dict[str, Any],
     confidence: float,
@@ -6411,6 +6463,10 @@ def active_promotion_failure_reasons(
 
     if safe_float(plan.get("reward_risk"), 0) < MIN_RR:
         reasons.append(f"R/R {safe_float(plan.get('reward_risk'), 0):.2f} < minimum {MIN_RR:.1f}")
+
+    late_entry_reason = active_late_entry_guard_reason(plan, metrics)
+    if late_entry_reason:
+        reasons.append(late_entry_reason)
 
     if not metrics.above_vwap:
         reasons.append("Price is not above VWAP")
@@ -6725,6 +6781,7 @@ def process_existing_signal(
                 )
 
             out = dict(existing)
+            wait_for_retest = "Late entry guard:" in safe_str(fail_reason, "")
             out.update({
                 "last_checked": now_text,
                 "updated_at": now_text,
@@ -6734,7 +6791,13 @@ def process_existing_signal(
                 "price_updated_at": metrics.price_updated_at,
                 "latest_bar_time": timestamp_to_et_iso(metrics.latest_bar_time),
                 "reason": f"Trigger touched; Active confirmation still pending: {fail_reason}",
-                "entry_warning": "Trigger touched but active quality is not confirmed yet. Manual review only.",
+                "entry_warning": (
+                    "Trigger touched but price is already too far above entry. Wait for retest; do not chase."
+                    if wait_for_retest
+                    else "Trigger touched but active quality is not confirmed yet. Manual review only."
+                ),
+                "actionability": "WAIT_FOR_RETEST" if wait_for_retest else safe_str(out.get("actionability"), "TRIGGER_TOUCHED"),
+                "late_entry_guard_active": wait_for_retest,
             })
             decision_log(
                 normalize_symbol(row.get("symbol")),
