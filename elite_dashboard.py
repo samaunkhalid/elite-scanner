@@ -3704,11 +3704,17 @@ def load_signal_outcomes_summary():
                     sets["pre_active_t2_hit"].add(sid)
 
             if status == "STOP_HIT":
-                sets["stop_hit"].add(sid)
+                if active_time:
+                    sets["stop_hit"].add(sid)
 
             if status == "INVALIDATED_AFTER_ENTRY":
                 sets["invalidated_after_entry"].add(sid)
-                sets["active_invalidated"].add(sid)
+                # Active Invalidated means the signal actually had active_time.
+                # If it invalidated after entry/touch but before active, it belongs to Pre-Active.
+                if active_time:
+                    sets["active_invalidated"].add(sid)
+                else:
+                    sets["pre_active_invalidated"].add(sid)
 
             if status == "INVALIDATED_BEFORE_ENTRY":
                 sets["invalidated_before_entry"].add(sid)
@@ -3720,6 +3726,8 @@ def load_signal_outcomes_summary():
                     reason = reason[:120]
                     invalid_reasons[reason] = invalid_reasons.get(reason, 0) + 1
 
+        # Tracked Signals is the unique signal_id count, not a missing "total" field.
+        counts["total"] = len(sets["tracked"])
         for key, values in sets.items():
             if key in counts:
                 counts[key] = len(values)
