@@ -1693,6 +1693,189 @@ def build_section(title, subtitle, stocks, class_name, max_cards=10, signal_map=
     """
 
 
+def row_symbol_set(rows, max_rows=None):
+    """
+    Return normalized symbols from a visible card row list.
+
+    Used to avoid duplicate HTML ids when Signal Desk has a ticker that is
+    already rendered in Potential / Early Reclaim / Active Momentum.
+    """
+    out = set()
+    rows = rows or []
+    limit = len(rows) if max_rows is None else min(len(rows), max_rows)
+    for row in rows[:limit]:
+        sym = safe_str(row.get("symbol"), "").upper()
+        if sym:
+            out.add(sym)
+    return out
+
+
+def build_row_lookup(*row_lists):
+    """
+    Build a best-effort symbol -> row lookup from available scanner sources.
+
+    Priority is left-to-right. Use visible/fresh sections first, then raw
+    scanner rows. This allows Signal Desk-only tickers to still receive a full
+    detail card when the signal engine kept/protected a symbol that is no longer
+    inside the visible scanner buckets.
+    """
+    lookup = {}
+    for rows in row_lists:
+        for row in rows or []:
+            sym = safe_str(row.get("symbol"), "").upper()
+            if not sym:
+                continue
+            if sym not in lookup:
+                lookup[sym] = dict(row)
+    return lookup
+
+
+def live_signal_symbols(signals):
+    """Return ordered Signal Desk symbols that are Active / Ready / Watch."""
+    ordered = []
+    seen = set()
+    for signal in sorted(signals or [], key=signal_display_sort_key):
+        group = signal_status_group(signal)
+        if group not in {"active", "ready", "watch"}:
+            continue
+        sym = safe_str(signal.get("symbol"), "").upper()
+        if not sym or sym in seen:
+            continue
+        ordered.append(sym)
+        seen.add(sym)
+    return ordered
+
+
+def signal_to_detail_card_row(signal, source_row=None):
+    """
+    Create a normal stock-card row for a Signal Desk ticker.
+
+    If the ticker exists in raw/potential/active scanner files, preserve that
+    scanner context. If not, synthesize a safe fallback row from signal_desk.json
+    so the top Signal Desk ticker always links to a visible full detail card.
+    """
+    source = dict(source_row or {})
+    sym = safe_str(signal.get("symbol") or source.get("symbol"), "").upper()
+    if not sym:
+        sym = "UNKNOWN"
+
+    price = safe_float(
+        signal.get("price")
+        or signal.get("current_price")
+        or source.get("price"),
+        0,
+    )
+
+    score = safe_float(
+        source.get("score")
+        or signal.get("scanner_score")
+        or signal.get("base_scanner_score")
+        or signal.get("confidence")
+        or signal.get("live_signal_score"),
+        0,
+    )
+
+    vwap = safe_float(signal.get("vwap") or source.get("vwap"), 0)
+    vwap_dist = safe_float(signal.get("vwap_dist_pct") or source.get("vwap_dist_pct"), 0)
+    above_vwap = truthy(source.get("above_vwap"))
+    if not above_vwap and price > 0 and vwap > 0:
+        above_vwap = price >= vwap
+    if not above_vwap and vwap_dist > 0:
+        above_vwap = True
+
+    setup_bucket = safe_str(source.get("setup_bucket"), "")
+    if not setup_bucket:
+        setup_bucket = "MONITOR"
+
+    tags = safe_str(source.get("tags"), "")
+    desk_status = normalize_signal_status(signal.get("signal_status"))
+    setup_type = safe_str(signal.get("setup_type"), "")
+    signal_tag = "Signal Desk Detail"
+    if desk_status:
+        signal_tag += f" · {desk_status.replace('_', ' ').title()}"
+    if setup_type and setup_type not in signal_tag:
+        signal_tag += f" · {setup_type}"
+
+    if tags:
+        tags = f"{tags} · {signal_tag}"
+    else:
+        tags = signal_tag
+
+    row = {
+        **source,
+        "symbol": sym,
+        "company_name": safe_str(signal.get("company_name") or source.get("company_name"), sym),
+        "sector": safe_str(signal.get("sector") or source.get("sector"), "Signal Desk"),
+        "sector_etf": safe_str(signal.get("sector_etf") or source.get("sector_etf"), "SPY"),
+        "sector_status": safe_str(signal.get("sector_status") or source.get("sector_status"), "UNKNOWN"),
+        "sector_change_pct": safe_float(signal.get("sector_change_pct") or source.get("sector_change_pct"), 0),
+        "stock_vs_sector_pct": safe_float(signal.get("stock_vs_sector_pct") or source.get("stock_vs_sector_pct"), 0),
+        "tier": safe_str(source.get("tier"), "—"),
+        "score": round(score, 1) if score else 0,
+        "price": price,
+        "change_pct": safe_float(signal.get("change_pct") or source.get("change_pct"), 0),
+        "setup_bucket": setup_bucket,
+        "risk_category": safe_str(signal.get("risk_category") or source.get("risk_category"), "NORMAL"),
+        "dollar_vol_M": safe_float(signal.get("dollar_vol_M") or source.get("dollar_vol_M"), 0),
+        "atr_pct": safe_float(signal.get("atr_pct") or source.get("atr_pct"), 0),
+        "vwap_dist_pct": vwap_dist,
+        "above_vwap": above_vwap,
+        "hod_distance_pct": safe_float(signal.get("hod_distance_pct") or source.get("hod_distance_pct"), 0),
+        "short_pct": safe_float(source.get("short_pct"), 0),
+        "float_M": safe_float(source.get("float_M"), 0),
+        "days_to_cover": safe_float(source.get("days_to_cover"), 0),
+        "tags": tags,
+        "price_source": safe_str(signal.get("price_source") or source.get("price_source"), "Signal Desk"),
+        "price_updated_at": safe_str(signal.get("price_updated_at") or signal.get("last_checked") or source.get("price_updated_at"), ""),
+        "catalyst_label": safe_str(source.get("catalyst_label"), "Signal Desk protected setup"),
+        "catalyst_sentiment": safe_str(source.get("catalyst_sentiment"), "NONE"),
+        "catalyst_headline": safe_str(source.get("catalyst_headline"), ""),
+        "catalyst_source": safe_str(source.get("catalyst_source"), ""),
+        "catalyst_time": safe_str(source.get("catalyst_time"), ""),
+        "risk_flags": safe_str(source.get("risk_flags"), ""),
+    }
+    return row
+
+
+def build_signal_desk_details_section(signals, visible_symbols, *row_sources):
+    """
+    Guaranteed detail cards for Signal Desk tickers.
+
+    Fixes the dashboard join bug where Signal Desk could show Active / Ready /
+    Watch tickers at the top, but a ticker had no full card because it was not
+    in visible Potential / Early Reclaim / Active Momentum sections.
+    """
+    visible_symbols = set(visible_symbols or set())
+    signal_map = build_signal_map(signals or [])
+    ordered_symbols = live_signal_symbols(signals or [])
+    missing_symbols = [sym for sym in ordered_symbols if sym not in visible_symbols]
+
+    if not missing_symbols:
+        return ""
+
+    row_lookup = build_row_lookup(*row_sources)
+    cards = []
+    for sym in missing_symbols:
+        signal = signal_map.get(sym, {})
+        row = signal_to_detail_card_row(signal, row_lookup.get(sym))
+        cards.append(build_card(row, signal=signal))
+
+    return f"""
+    <section class="desk-section section-signal-details" id="signal-details">
+        <div class="section-header">
+            <div>
+                <h2>Signal Desk Details</h2>
+                <p>Guaranteed full cards for Signal Desk tickers not visible in the main scanner sections. This keeps every Active / Ready / Watch ticker linkable.</p>
+            </div>
+            <span class="section-count">{len(cards)}</span>
+        </div>
+        <div class="cards-grid">
+            {''.join(cards)}
+        </div>
+    </section>
+    """
+
+
 def macro_display_name(name):
     """
     Compact but readable macro event labels for the dashboard.
@@ -3749,6 +3932,7 @@ def build_dashboard(potential, active, extended, highrisk, raw, active_watchlist
     premarket_section = ""
     afterhours_section = ""
     early_reclaim_section = ""
+    signal_detail_section = ""
 
     if market_open and scanner_regular_ready:
         signals = signal_payload.get("signals", [])
@@ -3803,11 +3987,28 @@ def build_dashboard(potential, active, extended, highrisk, raw, active_watchlist
             collapse_empty=True,
         )
 
+        visible_detail_symbols = set()
+        visible_detail_symbols.update(row_symbol_set(potential, 12))
+        visible_detail_symbols.update(row_symbol_set(early_reclaim, 12))
+        visible_detail_symbols.update(row_symbol_set(active, 8))
+
+        signal_detail_section = build_signal_desk_details_section(
+            signals,
+            visible_detail_symbols,
+            potential,
+            early_reclaim,
+            active,
+            raw,
+        )
+
         desk_table = build_desk_table(focus_rows)
 
-        nav_tabs = """
+        signal_details_nav = '<a href="#signal-details">Signal Details</a>' if signal_detail_section else ""
+
+        nav_tabs = f"""
         <div class="nav-tabs">
             <a href="#signals">Signal Desk</a>
+            {signal_details_nav}
             <a href="#potential">Potential Movers</a>
             <a href="#early">Early Reclaim</a>
             <a href="#active">Active Momentum</a>
@@ -6154,6 +6355,8 @@ td small {
 
     $nav_tabs
 
+    $signal_detail_section
+
     <div id="premarket">$premarket_section</div>
     <div id="potential">$potential_section</div>
     <div id="early">$early_reclaim_section</div>
@@ -6183,6 +6386,7 @@ td small {
         signal_desk_html=signal_desk_html,
         signal_outcomes_html=signal_outcomes_html,
         nav_tabs=nav_tabs,
+        signal_detail_section=signal_detail_section,
         premarket_section=premarket_section,
         potential_section=potential_section,
         early_reclaim_section=early_reclaim_section,
