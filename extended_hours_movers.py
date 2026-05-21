@@ -7,6 +7,7 @@ Separate monitor-only scanner for pre-market and after-hours movers.
 
 Purpose:
   - Find true extended-hours movers using Alpaca SIP data.
+  - Compare premarket/after-hours moves against the verified latest regular-session close.
   - Write premarket_movers.csv/json or after_hours_movers.csv/json.
   - Keep extended-hours discovery completely separate from the regular scanner,
     Smart Money Phase 1 validation, and Signal Desk lifecycle.
@@ -52,7 +53,7 @@ except Exception:  # pragma: no cover
     ZoneInfo = None
 
 
-VERSION = "extended_hours_movers_v1.2_current_breakout_continuation"
+VERSION = "extended_hours_movers_v1.3_verified_regular_close_anchor"
 
 PROJECT_DIR = Path(os.getenv("ELITE_PROJECT_DIR", Path(__file__).resolve().parent)).resolve()
 
@@ -95,6 +96,17 @@ EXCLUDE_NON_COMMON_STOCKS = os.getenv("EXTENDED_EXCLUDE_NON_COMMON", "1").strip(
 MAX_OUTPUT_ROWS = int(os.getenv("EXTENDED_MAX_OUTPUT_ROWS", "30"))
 SNAPSHOT_CHUNK_SIZE = int(os.getenv("EXTENDED_SNAPSHOT_CHUNK_SIZE", "200"))
 BAR_CHUNK_SIZE = int(os.getenv("EXTENDED_BAR_CHUNK_SIZE", "100"))
+
+# Use a wider rough pool before validating the regular-close anchor. Snapshot
+# prevDailyBar can be stale during premarket after a huge prior-day regular move,
+# so final rows must be recalculated against an explicit regular-session close.
+VALIDATION_POOL_SIZE = int(os.getenv("EXTENDED_VALIDATION_POOL_SIZE", str(max(MAX_OUTPUT_ROWS * 25, 1000))))
+
+# Correctness first: final extended-hours rows should use a verified regular
+# 15:59/16:00 close anchor from Alpaca SIP 1-minute bars. Snapshot close fallback
+# is disabled by default because it caused premarket movers to compare against
+# the wrong prior day close.
+ALLOW_SNAPSHOT_CLOSE_FALLBACK = os.getenv("EXTENDED_ALLOW_SNAPSHOT_CLOSE_FALLBACK", "0").strip().lower() in {"1", "true", "yes", "y"}
 
 REQUEST_TIMEOUT = int(os.getenv("EXTENDED_REQUEST_TIMEOUT", "25"))
 
@@ -543,11 +555,52 @@ def bar_close(bar: Dict[str, Any]) -> float:
     return safe_float(bar.get("c") or bar.get("close"), 0.0)
 
 
+def regular_close_anchor_day(session: str, current: Optional[datetime] = None) -> datetime:
+    """
+    Return the trading date whose regular-session close should anchor the
+    extended-hours move.
+
+    Premarket:
+      Use the previous completed regular session. Example:
+      Wednesday premarket -> Tuesday 16:00 close.
+
+    After-hours:
+      Use today's completed regular session close. If called before 16:00,
+      fall back to the previous completed regular session.
+    """
+    current = current or now_et()
+    session = session.lower()
+
+    if session == "premarket":
+        return previous_weekday(current)
+
+    if session == "afterhours":
+        if current.time() < datetime.strptime("16:00", "%H:%M").time():
+            return previous_weekday(current)
+        return current
+
+    return previous_weekday(current)
+
+
 def fetch_regular_close_anchors(symbols: Sequence[str], session: str, current: Optional[datetime] = None) -> Dict[str, float]:
-    if session.lower() != "afterhours":
+    """
+    Fetch the verified regular-session close anchor from Alpaca SIP 1-minute bars.
+
+    This fixes the premarket baseline bug where Alpaca snapshot prevDailyBar can
+    point to the wrong prior day after a large regular-session move. Final
+    extended-hours move calculations should compare:
+
+      premarket    -> previous completed regular-session close
+      after-hours  -> same-day completed regular-session close
+
+    The selected close is the latest 1-minute bar close before 16:00 ET from a
+    15:45-16:05 ET window.
+    """
+    session = session.lower()
+    if session not in {"premarket", "afterhours"}:
         return {}
 
-    d = session_date_for("afterhours", current)
+    d = regular_close_anchor_day(session, current)
     start_et = d.replace(hour=15, minute=45, second=0, microsecond=0)
     end_et = d.replace(hour=16, minute=5, second=0, microsecond=0)
     close_et = d.replace(hour=16, minute=0, second=0, microsecond=0)
@@ -570,7 +623,7 @@ def fetch_regular_close_anchors(symbols: Sequence[str], session: str, current: O
                 },
             )
         except Exception as exc:
-            print(f"  ⚠ Close-anchor chunk failed ({len(group)} symbols): {exc}")
+            print(f"  ⚠ Regular-close-anchor chunk failed ({len(group)} symbols): {exc}")
             continue
 
         bars_by_symbol = data.get("bars", {}) if isinstance(data, dict) else {}
@@ -970,8 +1023,9 @@ def build_movers(session: str) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     skipped_no_anchor = 0
     skipped_below_move = 0
 
-    # After-hours anchor: first use daily close, then refresh the strongest
-    # candidates with explicit 15:59 close anchor.
+    # Rough selection uses snapshot anchors only to reduce API work.
+    # Final rows are recalculated against verified regular-close anchors from
+    # Alpaca SIP 1-minute bars before output.
     for asset in assets:
         symbol = asset.symbol
         snap = snapshots.get(symbol)
@@ -990,10 +1044,10 @@ def build_movers(session: str) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
 
         if session == "premarket":
             anchor = snapshot_prev_close(snap)
-            anchor_label = "previous_regular_close"
+            anchor_label = "snapshot_prev_daily_bar_rough"
         else:
             anchor = snapshot_daily_close(snap)
-            anchor_label = "regular_16_close_snapshot"
+            anchor_label = "snapshot_daily_bar_rough"
 
         if anchor <= 0:
             skipped_no_anchor += 1
@@ -1020,13 +1074,13 @@ def build_movers(session: str) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
             "ask": ask,
         })
 
-    # Keep a wide pool before explicit bar-volume and close-anchor validation.
+    # Keep a wide pool before explicit bar-volume and verified close-anchor validation.
     rough.sort(key=lambda r: -safe_float(r.get("change_pct"), 0.0))
-    validation_pool = rough[: max(MAX_OUTPUT_ROWS * 10, 250)]
+    validation_pool = rough[:VALIDATION_POOL_SIZE]
 
     validation_symbols = [r["symbol"] for r in validation_pool]
 
-    close_anchors = fetch_regular_close_anchors(validation_symbols, session, current) if session == "afterhours" else {}
+    close_anchors = fetch_regular_close_anchors(validation_symbols, session, current)
     bar_stats = fetch_extended_bar_stats(validation_symbols, session, current)
 
     rows: List[Dict[str, Any]] = []
@@ -1034,6 +1088,7 @@ def build_movers(session: str) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     skipped_too_few_bars = 0
     skipped_absolute_volume = 0
     skipped_wide_spread = 0
+    skipped_no_verified_anchor = 0
 
     for r in validation_pool:
         symbol = str(r["symbol"])
@@ -1046,11 +1101,15 @@ def build_movers(session: str) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
             current,
         )
 
-        anchor = close_anchors.get(symbol, 0.0) if session == "afterhours" else safe_float(r["anchor_price"], 0.0)
-        anchor_label = "regular_16_close" if session == "afterhours" and anchor > 0 else str(r["anchor_label"])
-
-        if anchor <= 0:
+        anchor = safe_float(close_anchors.get(symbol, 0.0), 0.0)
+        if anchor > 0:
+            anchor_label = "previous_regular_close" if session == "premarket" else "regular_16_close"
+        elif ALLOW_SNAPSHOT_CLOSE_FALLBACK:
             anchor = safe_float(r["anchor_price"], 0.0)
+            anchor_label = f"{r['anchor_label']}_fallback"
+        else:
+            skipped_no_verified_anchor += 1
+            continue
 
         if latest <= 0 or anchor <= 0:
             skipped_no_price += 1
@@ -1183,6 +1242,11 @@ def build_movers(session: str) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
         "data_feed": DATA_FEED,
         "asset_universe_count": len(assets),
         "snapshot_count": len(snapshots),
+        "regular_close_anchor_day": regular_close_anchor_day(session, current).date().isoformat(),
+        "regular_close_anchor_source": "Alpaca SIP 1Min last bar before 16:00 ET",
+        "snapshot_close_fallback_allowed": ALLOW_SNAPSHOT_CLOSE_FALLBACK,
+        "validation_pool_size": len(validation_pool),
+        "verified_close_anchor_count": len(close_anchors),
         "rough_candidate_count": len(rough),
         "rows": len(rows),
         "max_rows": MAX_OUTPUT_ROWS,
@@ -1211,10 +1275,11 @@ def build_movers(session: str) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
         "skipped_too_few_extended_bars": skipped_too_few_bars,
         "skipped_absolute_volume": skipped_absolute_volume,
         "skipped_wide_spread": skipped_wide_spread,
+        "skipped_no_verified_anchor": skipped_no_verified_anchor,
         "ranking_method": (
-            "fresh current extended price vs previous regular close; high-volume breakout/continuation"
+            "fresh current extended price vs verified previous regular-session close; high-volume breakout/continuation"
             if session == "premarket"
-            else "fresh current extended price vs regular 16:00 close; high-volume breakout/continuation"
+            else "fresh current extended price vs verified regular 16:00 close; high-volume breakout/continuation"
         ),
     }
 
@@ -1245,7 +1310,8 @@ def run(session: str) -> int:
         f"too few bars: {metadata['skipped_too_few_extended_bars']} | "
         f"abs vol low: {metadata['skipped_absolute_volume']} | "
         f"liquidity low: {metadata['skipped_liquidity']} | "
-        f"wide spread: {metadata['skipped_wide_spread']}"
+        f"wide spread: {metadata['skipped_wide_spread']} | "
+        f"no verified close: {metadata['skipped_no_verified_anchor']}"
     )
     print("=" * 70)
 
