@@ -2569,13 +2569,13 @@ def build_market_inactive_signal_panel(status):
 # ==============================================================
 
 FIRST_REGULAR_SCANNER_HOUR = 9
-FIRST_REGULAR_SCANNER_MINUTE = 40
+FIRST_REGULAR_SCANNER_MINUTE = 35
 
 
 def scanner_data_is_regular_session_ready(now_ny, scanner_meta):
     """
     Only allow ticker cards/table/sector context after today's first valid
-    regular-market scanner has run at or after 09:40 ET.
+    regular-market scanner has run at or after 09:35 ET.
 
     This prevents stale 09:00/09:01 pre-market scanner files from appearing
     after the 09:30 dashboard-only OPEN refresh.
@@ -2599,7 +2599,7 @@ def scanner_data_is_regular_session_ready(now_ny, scanner_meta):
 
 def build_waiting_first_scanner_panel(status, scanner_time_label):
     """
-    Signal Desk replacement when market is OPEN but the first valid 09:40+
+    Signal Desk replacement when market is OPEN but the first valid 09:35+
     regular-market scanner data is not available yet.
 
     Strict rule:
@@ -2622,7 +2622,7 @@ def build_waiting_first_scanner_panel(status, scanner_time_label):
         </div>
         <div class="signal-desk-empty">
             <strong>Market is {esc(status)}.</strong>
-            <span>Waiting for first regular-market scanner at 09:40 ET. Scanner candidates are hidden until valid 09:40+ scanner data is available. Last scanner data: {esc(scanner_time_label)}</span>
+            <span>Waiting for first regular-market scanner at 09:35 ET. Scanner candidates are hidden until valid 09:35+ scanner data is available. Last scanner data: {esc(scanner_time_label)}</span>
         </div>
     </section>
     """
@@ -3963,19 +3963,50 @@ def build_signal_outcomes_panel(summary):
         {body_html}
     </section>
     """
-def build_priority_morning_reclaim_section(priority_signals):
+def is_priority_morning_reclaim_display_window(now_ny=None, status="", signal_payload=None):
+    """
+    Dashboard display window for the Priority Morning Reclaim panel.
+
+    Display rule:
+      - During the 09:35-11:00 ET regular-market morning window, show the
+        section even when zero tickers qualify.
+      - If signal_engine.py explicitly reports market_phase=VALID_MORNING,
+        also show it. This protects against small clock/reporting differences.
+      - Outside that window, keep the section hidden when there are no names.
+    """
+    payload = signal_payload if isinstance(signal_payload, dict) else {}
+    phase = safe_str(payload.get("market_phase"), "").upper()
+    if phase in {"VALID_MORNING", "MORNING_PRIORITY_RECLAIM"}:
+        return True
+
+    if now_ny is None:
+        return False
+
+    try:
+        if safe_str(status, "").upper() != "OPEN":
+            return False
+        minute = minutes_of_day(now_ny)
+        return (9 * 60 + 35) <= minute <= (11 * 60)
+    except Exception:
+        return False
+
+
+def build_priority_morning_reclaim_section(priority_signals, now_ny=None, status="", signal_payload=None):
     """
     Dedicated max-3 PLUG/NU-style morning reclaim focus section.
 
-    It reads signal_engine.py's priority_morning_reclaim list only. If the
-    engine is outside the 09:35-11:00 window or no ticker qualifies, this
-    section stays hidden and all normal dashboard sections remain unchanged.
+    It reads signal_engine.py's priority_morning_reclaim list. During the
+    09:35-11:00 ET morning window, this section is always visible so the
+    dashboard clearly shows whether the engine found 0, 1, 2, or 3 qualified
+    reclaim setups. Outside the morning window, it remains hidden when empty.
     """
     priority_signals = [s for s in (priority_signals or []) if isinstance(s, dict)]
-    if not priority_signals:
+    visible = priority_signals[:3]
+    show_empty_panel = is_priority_morning_reclaim_display_window(now_ny, status, signal_payload)
+
+    if not visible and not show_empty_panel:
         return ""
 
-    visible = priority_signals[:3]
     cards = []
 
     for s in visible:
@@ -4023,12 +4054,20 @@ def build_priority_morning_reclaim_section(priority_signals):
             </div>
         """)
 
+    if not cards:
+        cards.append("""
+            <div class="signal-desk-empty morning-reclaim-empty">
+                <strong>No qualified Priority Morning Reclaim setups yet.</strong>
+                <span>Waiting for clean VWAP/EMA reclaim from below + MACD curl + volume confirmation. Max 3 tickers will appear here when they qualify.</span>
+            </div>
+        """)
+
     return f"""
     <section class="signal-desk-panel morning-reclaim-priority-panel" id="priority-reclaim">
         <div class="signal-desk-top">
             <div>
                 <strong>Priority Morning Reclaim</strong>
-                <span>Max 3 PLUG/NU-style reclaim runners from 09:35–11:00 ET. Normal reclaim logic remains unchanged outside this window.</span>
+                <span>Max 3 PLUG/NU-style reclaim runners from 09:35–11:00 ET. Shows 0 qualified setups during the active window instead of hiding the section.</span>
             </div>
             <div class="signal-desk-counts">
                 <span><b>{len(visible)}</b> Focus</span>
@@ -4189,7 +4228,10 @@ def build_dashboard(potential, active, extended, highrisk, raw, active_watchlist
 
         signal_desk_html = build_signal_desk_panel(signals, rejected_candidates)
         priority_reclaim_section = build_priority_morning_reclaim_section(
-            signal_payload.get("priority_morning_reclaim", [])
+            signal_payload.get("priority_morning_reclaim", []),
+            now_ny=now_ny,
+            status=status,
+            signal_payload=signal_payload,
         )
         outcome_summary = load_signal_outcomes_summary()
         signal_outcomes_html = build_signal_outcomes_panel(outcome_summary)
@@ -4361,7 +4403,7 @@ def build_dashboard(potential, active, extended, highrisk, raw, active_watchlist
 
     else:
         # Hard display gate outside regular market hours OR before the first
-        # valid 09:40+ regular-market scanner has completed.
+        # valid 09:35+ regular-market scanner has completed.
         #
         # This prevents stale pre-market / after-hours scanner output from
         # appearing in regular market decision sections.
