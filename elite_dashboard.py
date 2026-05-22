@@ -25,8 +25,8 @@ Display:
   - Dashboard hides Extended / High Risk sections from the main decision screen
   - Full-width Signal Desk replaces KPI summary row
   - Signal Desk collapses when no live signals exist
-  - Potential Movers loads 12; Early Reclaim Runners loads 12; Active Momentum loads 8
-  - Dedicated Early Reclaim Runners section reads early_reclaim_runner=True from elite_watchlist_raw.csv
+  - Potential Momentum loads 12; Reclaimer loads 12; Active Momentum loads 12
+  - Dedicated Reclaimer section reads early_reclaim_runner=True from elite_watchlist_raw.csv
   - WATCH rows are compact in Signal Desk to reduce height
   - Ticker sections are hidden outside regular market OPEN status
 """
@@ -446,7 +446,7 @@ def get_bucket_meta(bucket):
 
     mapping = {
         "POTENTIAL_MOVER": {
-            "label": "Potential Mover",
+            "label": "Potential Momentum",
             "class": "bucket-potential",
             "accent": "#38bdf8",
             "interpretation": "Clean continuation candidate; confirm VWAP hold and breakout structure.",
@@ -1421,7 +1421,7 @@ def build_monitor_mover_card(stock):
         </div>
 
         <div class="interpretation extended-interpretation">
-            Monitor-only extended-hours mover. This does not affect Signal Desk, regular Potential Movers, Active Momentum, or trade execution.
+            Monitor-only extended-hours mover. This does not affect Signal Desk, regular Potential Momentum, Active Momentum, or trade execution.
         </div>
 
         <div class="tags-row">{tags_html}</div>
@@ -1462,7 +1462,7 @@ def early_reclaim_sort_key(stock):
 
 def load_early_reclaim_rows(raw_rows):
     """
-    Build the display list for the Early Reclaim Runners section.
+    Build the display list for the Reclaimer section.
 
     Source:
       elite_watchlist_raw.csv rows already passed into build_dashboard().
@@ -1490,9 +1490,9 @@ def load_early_reclaim_rows(raw_rows):
 
 def build_early_reclaim_card(stock, signal=None):
     """
-    Regular-market Early Reclaim Runner card.
+    Regular-market Reclaimer card.
 
-    This section is intentionally separate from Potential Movers and Active Momentum.
+    This section is intentionally separate from Potential Momentum and Active Momentum.
     It is not labeled "monitor only"; it is a live scanner lane showing whether
     the early VWAP/EMA reclaim detection path is working.
     """
@@ -1570,7 +1570,7 @@ def build_early_reclaim_card(stock, signal=None):
 
         <div class="score-risk-row">
             <span class="score-pill">Scanner {scanner_score}/100</span>
-            <span class="risk-pill">Early Reclaim</span>
+            <span class="risk-pill">Reclaimer</span>
             <span class="sector-status-pill sector-neutral">{esc(bucket)}</span>
             <span class="sector-status-pill" style="{badge_style}">{esc(badge_text)}</span>
         </div>
@@ -1638,8 +1638,8 @@ def build_early_reclaim_section(stocks, signal_map=None, max_cards=12):
     if not cards:
         cards = """
         <div class="empty-section compact-empty">
-            <strong>No Reclaim Setups Yet.</strong>
-            <span>This section fills when the regular-market scanner detects VWAP/EMA reclaim candidates from the reclaim lane.</span>
+            <strong>No Reclaimer setups detected.</strong>
+            <span>This section fills when the regular-market scanner detects VWAP/EMA reclaim or pullback candidates.</span>
         </div>
         """
 
@@ -1648,7 +1648,7 @@ def build_early_reclaim_section(stocks, signal_map=None, max_cards=12):
         <div class="section-header">
             <div>
                 <h2>Reclaimer</h2>
-                <p>Regular-market VWAP/EMA reclaim lane. Shows up to {max_cards} candidates with VWAP attempt quality badges.</p>
+                <p>Regular-market VWAP/EMA reclaim and pullback lane. Shows up to {max_cards} candidates with VWAP attempt quality badges.</p>
             </div>
             <span class="section-count">{count}</span>
         </div>
@@ -1698,7 +1698,7 @@ def row_symbol_set(rows, max_rows=None):
     Return normalized symbols from a visible card row list.
 
     Used to avoid duplicate HTML ids when Signal Desk has a ticker that is
-    already rendered in Potential / Early Reclaim / Active Momentum.
+    already rendered in Potential Momentum / Reclaimer / Active Momentum.
     """
     out = set()
     rows = rows or []
@@ -1746,13 +1746,64 @@ def live_signal_symbols(signals):
     return ordered
 
 
-def signal_to_detail_card_row(signal, source_row=None):
+
+RECLAIM_SETUP_TYPES = {
+    "VWAP_EMA_RECLAIM_RUNNER",
+    "VWAP_RECLAIM_BREAKOUT",
+    "VWAP_PULLBACK_CONTINUATION",
+}
+
+
+def signal_setup_values(signal=None, row=None):
+    """
+    Pull setup descriptors from Signal Desk and scanner rows for routing a
+    ticker into the correct visible dashboard section.
+    """
+    values = []
+    for source in (signal or {}, row or {}):
+        if not isinstance(source, dict):
+            continue
+        for key in [
+            "setup_type",
+            "intraday_setup_type",
+            "setup_bucket",
+            "setup_name",
+            "pattern",
+            "tags",
+        ]:
+            val = safe_str(source.get(key), "")
+            if val:
+                values.append(val)
+    return values
+
+
+def is_reclaim_setup(signal=None, row=None):
+    """
+    True for VWAP/EMA reclaim, VWAP reclaim breakout, VWAP pullback
+    continuation, or other reclaim/pullback setup descriptors.
+    """
+    if row and is_early_reclaim_row(row):
+        return True
+
+    for value in signal_setup_values(signal, row):
+        upper = safe_str(value, "").upper()
+        if not upper:
+            continue
+        if upper in RECLAIM_SETUP_TYPES:
+            return True
+        if "RECLAIM" in upper or "PULLBACK" in upper:
+            return True
+
+    return False
+
+
+def signal_to_card_row(signal, source_row=None):
     """
     Create a normal stock-card row for a Signal Desk ticker.
 
     If the ticker exists in raw/potential/active scanner files, preserve that
-    scanner context. If not, synthesize a safe fallback row from signal_desk.json
-    so the top Signal Desk ticker always links to a visible full detail card.
+    scanner context. If not, synthesize a safe row from signal_desk.json so the
+    top Signal Desk ticker always has a visible full card in the main sections.
     """
     source = dict(source_row or {})
     sym = safe_str(signal.get("symbol") or source.get("symbol"), "").upper()
@@ -1783,19 +1834,33 @@ def signal_to_detail_card_row(signal, source_row=None):
     if not above_vwap and vwap_dist > 0:
         above_vwap = True
 
+    desk_status = normalize_signal_status(signal.get("signal_status"))
+    setup_type = safe_str(
+        signal.get("setup_type")
+        or signal.get("intraday_setup_type")
+        or source.get("setup_type")
+        or source.get("intraday_setup_type"),
+        "",
+    )
+
     setup_bucket = safe_str(source.get("setup_bucket"), "")
     if not setup_bucket:
-        setup_bucket = "MONITOR"
+        group = signal_status_group(signal)
+        if group == "active":
+            setup_bucket = "ACTIVE_MOMENTUM"
+        elif group in {"ready", "watch"}:
+            setup_bucket = "POTENTIAL_MOVER"
+        else:
+            setup_bucket = "MONITOR"
 
     tags = safe_str(source.get("tags"), "")
-    desk_status = normalize_signal_status(signal.get("signal_status"))
-    setup_type = safe_str(signal.get("setup_type"), "")
-    signal_tag = "Signal Desk Detail"
+    signal_tag_parts = ["Signal Desk"]
     if desk_status:
-        signal_tag += f" · {desk_status.replace('_', ' ').title()}"
-    if setup_type and setup_type not in signal_tag:
-        signal_tag += f" · {setup_type}"
+        signal_tag_parts.append(desk_status.replace("_", " ").title())
+    if setup_type:
+        signal_tag_parts.append(setup_type)
 
+    signal_tag = " · ".join(signal_tag_parts)
     if tags:
         tags = f"{tags} · {signal_tag}"
     else:
@@ -1836,6 +1901,189 @@ def signal_to_detail_card_row(signal, source_row=None):
     }
     return row
 
+
+def unique_rows_by_symbol(rows, exclude_symbols=None):
+    """
+    Deduplicate card rows by normalized ticker symbol while preserving order.
+    """
+    exclude_symbols = set(exclude_symbols or set())
+    seen = set()
+    out = []
+
+    for row in rows or []:
+        sym = safe_str(row.get("symbol"), "").upper()
+        if not sym or sym in seen or sym in exclude_symbols:
+            continue
+        seen.add(sym)
+        out.append(row)
+
+    return out
+
+
+def remove_symbols_from_rows(rows, symbols):
+    symbols = set(symbols or set())
+    if not symbols:
+        return list(rows or [])
+    return [
+        row for row in (rows or [])
+        if safe_str(row.get("symbol"), "").upper() not in symbols
+    ]
+
+
+def has_visible_symbol(rows, symbol, max_cards):
+    symbol = safe_str(symbol, "").upper()
+    return symbol in row_symbol_set(rows or [], max_cards)
+
+
+def ensure_symbol_visible(rows, row, max_cards):
+    """
+    Ensure a ticker row appears inside the first max_cards positions without
+    creating duplicate ticker cards.
+    """
+    rows = list(rows or [])
+    sym = safe_str(row.get("symbol"), "").upper()
+    if not sym:
+        return rows[:max_cards]
+
+    visible = row_symbol_set(rows, max_cards)
+    if sym in visible:
+        return unique_rows_by_symbol(rows)[:max_cards]
+
+    existing_index = None
+    for idx, existing in enumerate(rows):
+        if safe_str(existing.get("symbol"), "").upper() == sym:
+            existing_index = idx
+            break
+
+    if existing_index is not None:
+        selected = rows[existing_index]
+        rows = [selected] + rows[:existing_index] + rows[existing_index + 1:]
+    else:
+        rows = [row] + rows
+
+    return unique_rows_by_symbol(rows)[:max_cards]
+
+
+def ensure_signal_desk_cards_in_main_sections(
+    signals,
+    priority_morning_reclaim,
+    potential_rows,
+    reclaimer_rows,
+    active_rows,
+    *row_sources,
+):
+    """
+    Inject missing Signal Desk tickers into their correct visible card section
+    before rendering, so Active / Ready / Watch rows are never orphaned.
+
+    Routing:
+      - priority_morning_reclaim symbols -> Priority Morning Reclaim
+      - reclaim/pullback setup types -> Reclaimer
+      - ACTIVE_SIGNAL / ACTIVE -> Active Momentum
+      - TRIGGER_READY / TRIGGER_TOUCHED / WATCH -> Potential Momentum
+    """
+    signals = signals or []
+    priority_morning_reclaim = [
+        row for row in (priority_morning_reclaim or [])
+        if isinstance(row, dict)
+    ]
+
+    potential_rows = unique_rows_by_symbol(potential_rows or [])
+    reclaimer_rows = unique_rows_by_symbol(reclaimer_rows or [])
+    active_rows = unique_rows_by_symbol(active_rows or [])
+
+    signal_map = build_signal_map(signals)
+    row_lookup = build_row_lookup(
+        priority_morning_reclaim,
+        potential_rows,
+        reclaimer_rows,
+        active_rows,
+        *(row_sources or []),
+    )
+
+    priority_qualified = []
+    priority_seen = set()
+    for signal in priority_morning_reclaim:
+        sym = safe_str(signal.get("symbol"), "").upper()
+        if not sym or sym in priority_seen:
+            continue
+        priority_seen.add(sym)
+        priority_qualified.append(sym)
+
+    priority_rows = []
+    for sym in priority_qualified[:3]:
+        priority_signal = signal_map.get(sym) or row_lookup.get(sym) or {"symbol": sym}
+        source_row = row_lookup.get(sym) or priority_signal
+        priority_row = signal_to_card_row(priority_signal, source_row)
+        priority_row["priority_morning_reclaim"] = True
+        if not safe_str(priority_row.get("intraday_setup_type"), ""):
+            priority_row["intraday_setup_type"] = safe_str(
+                priority_signal.get("intraday_setup_type")
+                or priority_signal.get("setup_type")
+                or "VWAP_EMA_RECLAIM_RUNNER"
+            )
+        priority_rows.append(priority_row)
+
+    priority_rows = unique_rows_by_symbol(priority_rows)[:3]
+    priority_symbols = row_symbol_set(priority_rows, 3)
+
+    potential_rows = remove_symbols_from_rows(potential_rows, priority_symbols)
+    reclaimer_rows = remove_symbols_from_rows(reclaimer_rows, priority_symbols)
+    active_rows = remove_symbols_from_rows(active_rows, priority_symbols)
+
+    for sym in live_signal_symbols(signals):
+        signal = signal_map.get(sym, {"symbol": sym})
+        source_row = row_lookup.get(sym, {})
+        card_row = signal_to_card_row(signal, source_row)
+        group = signal_status_group(signal)
+
+        if sym in priority_qualified:
+            if not has_visible_symbol(priority_rows, sym, 3) and len(priority_rows) < 3:
+                priority_rows = ensure_symbol_visible(priority_rows, card_row, 3)
+                priority_symbols = row_symbol_set(priority_rows, 3)
+            potential_rows = remove_symbols_from_rows(potential_rows, {sym})
+            reclaimer_rows = remove_symbols_from_rows(reclaimer_rows, {sym})
+            active_rows = remove_symbols_from_rows(active_rows, {sym})
+            continue
+
+        if is_reclaim_setup(signal, source_row):
+            potential_rows = remove_symbols_from_rows(potential_rows, {sym})
+            active_rows = remove_symbols_from_rows(active_rows, {sym})
+            reclaimer_rows = ensure_symbol_visible(reclaimer_rows, card_row, 12)
+            continue
+
+        if group == "active":
+            potential_rows = remove_symbols_from_rows(potential_rows, {sym})
+            reclaimer_rows = remove_symbols_from_rows(reclaimer_rows, {sym})
+            active_rows = ensure_symbol_visible(active_rows, card_row, 12)
+            continue
+
+        if group in {"ready", "watch"}:
+            reclaimer_rows = remove_symbols_from_rows(reclaimer_rows, {sym})
+            active_rows = remove_symbols_from_rows(active_rows, {sym})
+            potential_rows = ensure_symbol_visible(potential_rows, card_row, 12)
+
+    priority_rows = unique_rows_by_symbol(priority_rows)[:3]
+
+    priority_symbols = row_symbol_set(priority_rows, 3)
+    reclaimer_rows = unique_rows_by_symbol(
+        remove_symbols_from_rows(reclaimer_rows, priority_symbols)
+    )[:12]
+
+    reclaimer_symbols = row_symbol_set(reclaimer_rows, 12)
+    active_rows = unique_rows_by_symbol(
+        remove_symbols_from_rows(active_rows, priority_symbols | reclaimer_symbols)
+    )[:12]
+
+    active_symbols = row_symbol_set(active_rows, 12)
+    potential_rows = unique_rows_by_symbol(
+        remove_symbols_from_rows(
+            potential_rows,
+            priority_symbols | reclaimer_symbols | active_symbols,
+        )
+    )[:12]
+
+    return priority_rows, potential_rows, reclaimer_rows, active_rows
 
 
 def macro_display_name(name):
@@ -2973,7 +3221,7 @@ def build_monitor_movers_section(title, subtitle, stocks, class_name, max_cards=
     Monitor-only mover section for pre-market and after-hours snapshots.
 
     These cards are ranked/replaced inside their own section only.
-    They do not become Potential Movers, Active Momentum, Trigger Ready,
+    They do not become Potential Momentum, Active Momentum, Trigger Ready,
     or Active Signal candidates from dashboard display.
     """
     count = len(stocks)
@@ -2998,7 +3246,7 @@ def build_monitor_movers_section(title, subtitle, stocks, class_name, max_cards=
         </div>
         <div class="signal-desk-empty" style="margin-bottom:14px;">
             <strong>Monitor Only</strong>
-            <span>These names are ranked/replaced only inside this extended-hours section. They do not affect Signal Desk, regular Potential Movers, Active Momentum, or trade execution.</span>
+            <span>These names are ranked/replaced only inside this extended-hours section. They do not affect Signal Desk, regular Potential Momentum, Active Momentum, or trade execution.</span>
         </div>
         <div class="cards-grid">
             {cards}
@@ -3925,86 +4173,42 @@ def build_signal_outcomes_panel(summary):
         {body_html}
     </section>
     """
-def build_priority_morning_reclaim_section(priority_signals):
+def build_priority_morning_reclaim_section(priority_rows, signal_map=None, max_cards=3):
     """
-    Dedicated max-3 priority morning reclaim focus section.
-
-    Priority Morning Reclaim stays visible during regular market hours.
-    Empty priority_morning_reclaim shows a clear heading and status
-    instead of disappearing.
+    Dedicated max-3 morning reclaim focus section. Always rendered on the
+    regular dashboard path, even when there are no qualifying rows.
     """
-    priority_signals = [s for s in (priority_signals or []) if isinstance(s, dict)]
-    visible = priority_signals[:3]
-    cards = []
+    signal_map = signal_map or {}
+    priority_rows = unique_rows_by_symbol(priority_rows or [])[:max_cards]
+    count = len(priority_rows)
 
-    for s in visible:
-        symbol = safe_str(s.get("symbol"), "—").upper()
-        href = "#" + html_id_for_symbol(symbol)
-        status = normalize_signal_status(s.get("signal_status"))
-        status_class = get_signal_status_class(status)
-        status_text = "TOUCHED" if status == "TRIGGER_TOUCHED" else status.replace("_", " ")
-        setup_type = safe_str(s.get("setup_type"), "VWAP/EMA reclaim")
-        score = safe_float(s.get("morning_reclaim_score"), 0)
-        confidence = safe_float(s.get("confidence"), 0)
-        vwap_dist = safe_float(s.get("vwap_dist_pct"), 0)
-        rr = safe_float(s.get("reward_risk"), 0)
-        entry = format_signal_price(s.get("entry_trigger") or s.get("entry"))
-        stop = format_signal_price(s.get("stop_loss") or s.get("stop"))
-        t1 = format_signal_price(s.get("target_1") or s.get("target1"))
-        reasons = s.get("morning_reclaim_reasons") if isinstance(s.get("morning_reclaim_reasons"), list) else []
-        note = safe_str(s.get("morning_reclaim_note"), "")
-        reason_html = ""
-        if reasons:
-            reason_html = "".join(f'<span class="signal-chip">{esc(str(r))}</span>' for r in reasons[:4])
-            reason_html = f'<div class="morning-reclaim-reasons">{reason_html}</div>'
-        note_html = f'<div class="signal-desk-lunch-warning">{esc(note)}</div>' if note else ""
+    cards = "".join(
+        build_early_reclaim_card(
+            row,
+            signal=signal_map.get(safe_str(row.get("symbol"), "").upper()),
+        )
+        for row in priority_rows
+    )
 
-        cards.append(f"""
-            <div class="signal-desk-item morning-reclaim-focus-card">
-                <div class="signal-desk-item-top">
-                    <a class="signal-desk-symbol" href="{esc(href)}">{esc(symbol)}</a>
-                    <span class="signal-status {status_class}">{esc(status_text)}</span>
-                </div>
-                <div class="signal-desk-setup">{esc(setup_type)}</div>
-                <div class="signal-desk-plan">
-                    <span>Score <b>{score:.0f}</b></span>
-                    <span>Conf <b>{confidence:.0f}%</b></span>
-                    <span>VWAP <b>{vwap_dist:+.1f}%</b></span>
-                    <span>R/R <b>{rr:.1f}:1</b></span>
-                </div>
-                <div class="signal-desk-plan">
-                    <span>E <b>{entry}</b></span>
-                    <span>S <b>{stop}</b></span>
-                    <span>T1 <b>{t1}</b></span>
-                </div>
-                {reason_html}
-                {note_html}
-            </div>
-        """)
-
-    if cards:
-        cards_html = "".join(cards)
-    else:
-        cards_html = """
-            <div class="empty-section compact-empty morning-reclaim-empty">
-                <strong>No Priority Reclaim Yet.</strong>
-                <span>This section works only 09:35–11:00 ET. Shows up to 3 tickers only after VWAP/EMA reclaim, MACD curl, volume confirmation, and late-entry filters pass.</span>
-            </div>
+    if not cards:
+        cards = """
+        <div class="empty-section compact-empty">
+            <strong>No priority reclaim setups right now.</strong>
+            <span>Watch for clean reclaim structure, volume confirmation, and risk/reward before action.</span>
+        </div>
         """
 
     return f"""
-    <section class="signal-desk-panel morning-reclaim-priority-panel" id="priority-reclaim">
-        <div class="signal-desk-top">
+    <section class="desk-section section-priority-reclaim" id="priority-reclaim">
+        <div class="section-header">
             <div>
-                <strong>Priority Morning Reclaim</strong>
-                <span>Works only 09:35–11:00 ET. Max 3 priority reclaim setups; actionable confirmation starts at 09:40 ET.</span>
+                <h2>Priority Morning Reclaim</h2>
+                <p>Works only 09:35–11:00 ET. Max 3 priority reclaim setups; actionable confirmation starts at 09:40 ET.</p>
             </div>
-            <div class="signal-desk-counts">
-                <span><b>{len(visible)}</b> Focus</span>
-            </div>
+            <span class="section-count">{count}</span>
         </div>
-        <div class="signal-desk-list morning-reclaim-focus-list">
-            {cards_html}
+        <div class="cards-grid">
+            {cards}
         </div>
     </section>
     """
@@ -4141,7 +4345,6 @@ def build_dashboard(potential, active, extended, highrisk, raw, active_watchlist
     afterhours_section = ""
     early_reclaim_section = ""
     priority_reclaim_section = ""
-    signal_detail_section = ""
 
     if market_open and scanner_regular_ready:
         signals = signal_payload.get("signals", [])
@@ -4154,11 +4357,21 @@ def build_dashboard(potential, active, extended, highrisk, raw, active_watchlist
         potential = apply_live_market_overlay(potential, live_market_map)
         active = apply_live_market_overlay(active, live_market_map)
         raw = apply_live_market_overlay(raw, live_market_map)
-        early_reclaim = load_early_reclaim_rows(raw)
+        reclaimer = load_early_reclaim_rows(raw)
+        priority_reclaim_rows, potential, reclaimer, active = ensure_signal_desk_cards_in_main_sections(
+            signals,
+            signal_payload.get("priority_morning_reclaim", []),
+            potential,
+            reclaimer,
+            active,
+            raw,
+        )
 
         signal_desk_html = build_signal_desk_panel(signals, rejected_candidates)
         priority_reclaim_section = build_priority_morning_reclaim_section(
-            signal_payload.get("priority_morning_reclaim", [])
+            priority_reclaim_rows,
+            signal_map=signal_map,
+            max_cards=3,
         )
         outcome_summary = load_signal_outcomes_summary()
         signal_outcomes_html = build_signal_outcomes_panel(outcome_summary)
@@ -4168,8 +4381,11 @@ def build_dashboard(potential, active, extended, highrisk, raw, active_watchlist
         # but the dashboard focuses on actionable candidates only.
         # Match the visible card limit so table/sector context reflects the decision screen.
         focus_rows = []
+        focus_rows.extend(priority_reclaim_rows[:3])
         focus_rows.extend(potential[:12])
-        focus_rows.extend(active[:8])
+        focus_rows.extend(reclaimer[:12])
+        focus_rows.extend(active[:12])
+        focus_rows = unique_rows_by_symbol(focus_rows)
 
         sector_snapshot = build_sector_rotation_json_panel(load_sector_rotation_payload())
 
@@ -4184,7 +4400,7 @@ def build_dashboard(potential, active, extended, highrisk, raw, active_watchlist
         )
 
         early_reclaim_section = build_early_reclaim_section(
-            early_reclaim,
+            reclaimer,
             signal_map=signal_map,
             max_cards=12,
         )
@@ -4199,25 +4415,14 @@ def build_dashboard(potential, active, extended, highrisk, raw, active_watchlist
             collapse_empty=True,
         )
 
-        visible_detail_symbols = set()
-        visible_detail_symbols.update(row_symbol_set(potential, 12))
-        visible_detail_symbols.update(row_symbol_set(early_reclaim, 12))
-        visible_detail_symbols.update(row_symbol_set(active, 12))
-
-        # Signal Desk Details section removed - all Signal Desk tickers
-        # must appear in Priority Morning Reclaim, Potential Momentum, Reclaimer, or Active Momentum
-        signal_detail_section = ""
-
         desk_table = build_desk_table(focus_rows)
-
-        priority_reclaim_nav = '<a href="#priority-reclaim">Priority Morning Reclaim</a>' if priority_reclaim_section else ""
 
         nav_tabs = f"""
         <div class="nav-tabs">
             <a href="#signals">Signal Desk</a>
-            {priority_reclaim_nav}
+            <a href="#priority-reclaim">Priority Morning Reclaim</a>
             <a href="#potential">Potential Momentum</a>
-            <a href="#early">Reclaimer</a>
+            <a href="#reclaimer">Reclaimer</a>
             <a href="#active">Active Momentum</a>
             <a href="#sectors">Sector Rotation</a>
             <a href="#outcomes">Outcomes</a>
@@ -6553,7 +6758,7 @@ td small {
     <div class="header-inner">
         <div class="title">
             <h1><a class="title-refresh" href="#" onclick="window.forceDashboardRefresh(); return false;" title="Refresh dashboard">Elite Scanner — Pro Desk</a></h1>
-            <p>Technical Potential Movers + Catalyst Confirmation + Sector Context</p>
+            <p>Technical Potential Momentum + Catalyst Confirmation + Sector Context</p>
         </div>
         <div class="header-meta">
             <span class="scan-pill">$primary_scan_time</span>
@@ -6575,7 +6780,7 @@ td small {
 
     <div id="premarket">$premarket_section</div>
     <div id="potential">$potential_section</div>
-    <div id="early">$early_reclaim_section</div>
+    <div id="reclaimer">$early_reclaim_section</div>
     <div id="active">$active_section</div>
     <div id="afterhours">$afterhours_section</div>
     <div id="sectors">$sector_snapshot</div>
@@ -6603,7 +6808,6 @@ td small {
         signal_outcomes_html=signal_outcomes_html,
         nav_tabs=nav_tabs,
         priority_reclaim_section=priority_reclaim_section,
-        signal_detail_section=signal_detail_section,
         premarket_section=premarket_section,
         potential_section=potential_section,
         early_reclaim_section=early_reclaim_section,
@@ -6623,7 +6827,7 @@ def main():
     print("=" * 70)
 
     potential = load_csv_records("potential_movers.csv", limit=12)
-    active = load_csv_records("active_momentum.csv", limit=8)
+    active = load_csv_records("active_momentum.csv", limit=12)
     extended = load_csv_records("extended_movers.csv", limit=10)
     highrisk = load_csv_records("high_risk_movers.csv", limit=10)
     raw = load_csv_records("elite_watchlist_raw.csv")
@@ -6653,9 +6857,9 @@ def main():
 
     regime = load_regime()
 
-    print(f"  Potential Movers:       {len(potential)}")
+    print(f"  Potential Momentum:       {len(potential)}")
     print(f"  Active Momentum:        {len(active)}")
-    print(f"  Early Reclaim Runners:  {len(load_early_reclaim_rows(raw))} (visible section max 12)")
+    print(f"  Reclaimer:  {len(load_early_reclaim_rows(raw))} (visible section max 12)")
     print(f"  Extended / Chase Risk:  {len(extended)} (generated, hidden on dashboard)")
     print(f"  High Risk / Extreme:    {len(highrisk)} (generated, hidden on dashboard)")
     print(f"  Raw Scored:             {len(raw)}")
