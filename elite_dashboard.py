@@ -1638,8 +1638,8 @@ def build_early_reclaim_section(stocks, signal_map=None, max_cards=12):
     if not cards:
         cards = """
         <div class="empty-section compact-empty">
-            <strong>No Early Reclaim Runners detected.</strong>
-            <span>This section fills when the regular-market scanner detects VWAP/EMA reclaim candidates from the early reclaim lane.</span>
+            <strong>No Reclaim Setups Yet.</strong>
+            <span>This section fills when the regular-market scanner detects VWAP/EMA reclaim candidates from the reclaim lane.</span>
         </div>
         """
 
@@ -1647,8 +1647,8 @@ def build_early_reclaim_section(stocks, signal_map=None, max_cards=12):
     <section class="desk-section section-early-reclaim">
         <div class="section-header">
             <div>
-                <h2>Early Reclaim Runners</h2>
-                <p>Regular-market VWAP/EMA reclaim lane. Shows up to {max_cards} candidates above Active Momentum with VWAP attempt quality badges.</p>
+                <h2>Reclaimer</h2>
+                <p>Regular-market VWAP/EMA reclaim lane. Shows up to {max_cards} candidates with VWAP attempt quality badges.</p>
             </div>
             <span class="section-count">{count}</span>
         </div>
@@ -1836,44 +1836,6 @@ def signal_to_detail_card_row(signal, source_row=None):
     }
     return row
 
-
-def build_signal_desk_details_section(signals, visible_symbols, *row_sources):
-    """
-    Guaranteed detail cards for Signal Desk tickers.
-
-    Fixes the dashboard join bug where Signal Desk could show Active / Ready /
-    Watch tickers at the top, but a ticker had no full card because it was not
-    in visible Potential / Early Reclaim / Active Momentum sections.
-    """
-    visible_symbols = set(visible_symbols or set())
-    signal_map = build_signal_map(signals or [])
-    ordered_symbols = live_signal_symbols(signals or [])
-    missing_symbols = [sym for sym in ordered_symbols if sym not in visible_symbols]
-
-    if not missing_symbols:
-        return ""
-
-    row_lookup = build_row_lookup(*row_sources)
-    cards = []
-    for sym in missing_symbols:
-        signal = signal_map.get(sym, {})
-        row = signal_to_detail_card_row(signal, row_lookup.get(sym))
-        cards.append(build_card(row, signal=signal))
-
-    return f"""
-    <section class="desk-section section-signal-details" id="signal-details">
-        <div class="section-header">
-            <div>
-                <h2>Signal Desk Details</h2>
-                <p>Guaranteed full cards for Signal Desk tickers not visible in the main scanner sections. This keeps every Active / Ready / Watch ticker linkable.</p>
-            </div>
-            <span class="section-count">{len(cards)}</span>
-        </div>
-        <div class="cards-grid">
-            {''.join(cards)}
-        </div>
-    </section>
-    """
 
 
 def macro_display_name(name):
@@ -3965,16 +3927,13 @@ def build_signal_outcomes_panel(summary):
     """
 def build_priority_morning_reclaim_section(priority_signals):
     """
-    Dedicated max-3 PLUG/NU-style morning reclaim focus section.
+    Dedicated max-3 priority morning reclaim focus section.
 
-    It reads signal_engine.py's priority_morning_reclaim list only. If the
-    engine is outside the 09:35-11:00 window or no ticker qualifies, this
-    section stays hidden and all normal dashboard sections remain unchanged.
+    Priority Morning Reclaim stays visible during regular market hours.
+    Empty priority_morning_reclaim shows a clear heading and status
+    instead of disappearing.
     """
     priority_signals = [s for s in (priority_signals or []) if isinstance(s, dict)]
-    if not priority_signals:
-        return ""
-
     visible = priority_signals[:3]
     cards = []
 
@@ -4023,19 +3982,29 @@ def build_priority_morning_reclaim_section(priority_signals):
             </div>
         """)
 
+    if cards:
+        cards_html = "".join(cards)
+    else:
+        cards_html = """
+            <div class="empty-section compact-empty morning-reclaim-empty">
+                <strong>No Priority Reclaim Yet.</strong>
+                <span>This section works only 09:35–11:00 ET. Shows up to 3 tickers only after VWAP/EMA reclaim, MACD curl, volume confirmation, and late-entry filters pass.</span>
+            </div>
+        """
+
     return f"""
     <section class="signal-desk-panel morning-reclaim-priority-panel" id="priority-reclaim">
         <div class="signal-desk-top">
             <div>
                 <strong>Priority Morning Reclaim</strong>
-                <span>Max 3 PLUG/NU-style reclaim runners from 09:35–11:00 ET. Normal reclaim logic remains unchanged outside this window.</span>
+                <span>Works only 09:35–11:00 ET. Max 3 priority reclaim setups; actionable confirmation starts at 09:40 ET.</span>
             </div>
             <div class="signal-desk-counts">
                 <span><b>{len(visible)}</b> Focus</span>
             </div>
         </div>
         <div class="signal-desk-list morning-reclaim-focus-list">
-            {''.join(cards)}
+            {cards_html}
         </div>
     </section>
     """
@@ -4205,7 +4174,7 @@ def build_dashboard(potential, active, extended, highrisk, raw, active_watchlist
         sector_snapshot = build_sector_rotation_json_panel(load_sector_rotation_payload())
 
         potential_section = build_section(
-            "Primary Focus — Potential Movers",
+            "Potential Momentum",
             "Cleanest technical setups. Review this section first.",
             potential,
             "section-potential",
@@ -4225,7 +4194,7 @@ def build_dashboard(potential, active, extended, highrisk, raw, active_watchlist
             "Already moving. Wait for pullback or tight consolidation before entry.",
             active,
             "section-active",
-            max_cards=8,
+            max_cards=12,
             signal_map=signal_map,
             collapse_empty=True,
         )
@@ -4233,29 +4202,22 @@ def build_dashboard(potential, active, extended, highrisk, raw, active_watchlist
         visible_detail_symbols = set()
         visible_detail_symbols.update(row_symbol_set(potential, 12))
         visible_detail_symbols.update(row_symbol_set(early_reclaim, 12))
-        visible_detail_symbols.update(row_symbol_set(active, 8))
+        visible_detail_symbols.update(row_symbol_set(active, 12))
 
-        signal_detail_section = build_signal_desk_details_section(
-            signals,
-            visible_detail_symbols,
-            potential,
-            early_reclaim,
-            active,
-            raw,
-        )
+        # Signal Desk Details section removed - all Signal Desk tickers
+        # must appear in Priority Morning Reclaim, Potential Momentum, Reclaimer, or Active Momentum
+        signal_detail_section = ""
 
         desk_table = build_desk_table(focus_rows)
 
-        signal_details_nav = '<a href="#signal-details">Signal Details</a>' if signal_detail_section else ""
         priority_reclaim_nav = '<a href="#priority-reclaim">Priority Morning Reclaim</a>' if priority_reclaim_section else ""
 
         nav_tabs = f"""
         <div class="nav-tabs">
             <a href="#signals">Signal Desk</a>
             {priority_reclaim_nav}
-            {signal_details_nav}
-            <a href="#potential">Potential Movers</a>
-            <a href="#early">Early Reclaim</a>
+            <a href="#potential">Potential Momentum</a>
+            <a href="#early">Reclaimer</a>
             <a href="#active">Active Momentum</a>
             <a href="#sectors">Sector Rotation</a>
             <a href="#outcomes">Outcomes</a>
@@ -6610,8 +6572,6 @@ td small {
     $nav_tabs
 
     $priority_reclaim_section
-
-    $signal_detail_section
 
     <div id="premarket">$premarket_section</div>
     <div id="potential">$potential_section</div>
