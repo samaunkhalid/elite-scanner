@@ -2569,13 +2569,13 @@ def build_market_inactive_signal_panel(status):
 # ==============================================================
 
 FIRST_REGULAR_SCANNER_HOUR = 9
-FIRST_REGULAR_SCANNER_MINUTE = 45
+FIRST_REGULAR_SCANNER_MINUTE = 40
 
 
 def scanner_data_is_regular_session_ready(now_ny, scanner_meta):
     """
     Only allow ticker cards/table/sector context after today's first valid
-    regular-market scanner has run at or after 09:45 ET.
+    regular-market scanner has run at or after 09:40 ET.
 
     This prevents stale 09:00/09:01 pre-market scanner files from appearing
     after the 09:30 dashboard-only OPEN refresh.
@@ -2599,7 +2599,7 @@ def scanner_data_is_regular_session_ready(now_ny, scanner_meta):
 
 def build_waiting_first_scanner_panel(status, scanner_time_label):
     """
-    Signal Desk replacement when market is OPEN but the first valid 09:45+
+    Signal Desk replacement when market is OPEN but the first valid 09:40+
     regular-market scanner data is not available yet.
 
     Strict rule:
@@ -2622,7 +2622,7 @@ def build_waiting_first_scanner_panel(status, scanner_time_label):
         </div>
         <div class="signal-desk-empty">
             <strong>Market is {esc(status)}.</strong>
-            <span>Waiting for first regular-market scanner at 09:45 ET. Scanner candidates are hidden until valid 09:45+ scanner data is available. Last scanner data: {esc(scanner_time_label)}</span>
+            <span>Waiting for first regular-market scanner at 09:40 ET. Scanner candidates are hidden until valid 09:40+ scanner data is available. Last scanner data: {esc(scanner_time_label)}</span>
         </div>
     </section>
     """
@@ -4361,7 +4361,7 @@ def build_dashboard(potential, active, extended, highrisk, raw, active_watchlist
 
     else:
         # Hard display gate outside regular market hours OR before the first
-        # valid 09:45+ regular-market scanner has completed.
+        # valid 09:40+ regular-market scanner has completed.
         #
         # This prevents stale pre-market / after-hours scanner output from
         # appearing in regular market decision sections.
