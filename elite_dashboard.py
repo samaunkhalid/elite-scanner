@@ -2569,15 +2569,15 @@ def build_market_inactive_signal_panel(status):
 # ==============================================================
 
 FIRST_REGULAR_SCANNER_HOUR = 9
-FIRST_REGULAR_SCANNER_MINUTE = 35
+FIRST_REGULAR_SCANNER_MINUTE = 40
 
 
 def scanner_data_is_regular_session_ready(now_ny, scanner_meta):
     """
     Only allow ticker cards/table/sector context after today's first valid
-    regular-market scanner has run at or after 09:35 ET.
+    regular-market scanner has run at or after 09:40 ET.
 
-    This prevents stale 09:00/09:01 pre-market scanner files from appearing
+    09:35 is discovery-only; this gate waits for 09:40 actionable scanner data and prevents stale 09:00/09:01 pre-market scanner files from appearing
     after the 09:30 dashboard-only OPEN refresh.
     """
     scanner_dt = parse_et_datetime(scanner_meta.get("scanner_generated_at_et"))
@@ -2599,7 +2599,7 @@ def scanner_data_is_regular_session_ready(now_ny, scanner_meta):
 
 def build_waiting_first_scanner_panel(status, scanner_time_label):
     """
-    Signal Desk replacement when market is OPEN but the first valid 09:35+
+    Signal Desk replacement when market is OPEN but the first actionable 09:40+
     regular-market scanner data is not available yet.
 
     Strict rule:
@@ -2622,7 +2622,7 @@ def build_waiting_first_scanner_panel(status, scanner_time_label):
         </div>
         <div class="signal-desk-empty">
             <strong>Market is {esc(status)}.</strong>
-            <span>Waiting for first regular-market scanner at 09:35 ET. Scanner candidates are hidden until valid 09:35+ scanner data is available. Last scanner data: {esc(scanner_time_label)}</span>
+            <span>Waiting for first actionable regular-market scanner at 09:40 ET. The 09:35 scan is discovery-only; scanner candidates stay hidden until valid 09:40+ scanner data is available. Last scanner data: {esc(scanner_time_label)}</span>
         </div>
     </section>
     """
@@ -3970,9 +3970,11 @@ def is_priority_morning_reclaim_display_window(now_ny=None, status="", signal_pa
     Display rule:
       - During the 09:35-11:00 ET regular-market morning window, show the
         section even when zero tickers qualify.
+      - 09:35-09:39 is discovery-only and must not expose actionable cards.
+      - 09:40+ is the actionable confirmation window.
       - If signal_engine.py explicitly reports market_phase=VALID_MORNING,
         also show it. This protects against small clock/reporting differences.
-      - Outside that window, keep the section hidden when there are no names.
+      - Outside the morning window, keep the section hidden to avoid stale names.
     """
     payload = signal_payload if isinstance(signal_payload, dict) else {}
     phase = safe_str(payload.get("market_phase"), "").upper()
@@ -3991,6 +3993,27 @@ def is_priority_morning_reclaim_display_window(now_ny=None, status="", signal_pa
         return False
 
 
+def is_priority_morning_reclaim_actionable_window(now_ny=None, status="", signal_payload=None):
+    """
+    True only when the dashboard may display actionable Priority Morning Reclaim
+    ticker cards. The 09:35 scanner is discovery-only; actionable display starts
+    at 09:40 ET.
+    """
+    if not is_priority_morning_reclaim_display_window(now_ny, status, signal_payload):
+        return False
+
+    if now_ny is None:
+        return False
+
+    try:
+        if safe_str(status, "").upper() != "OPEN":
+            return False
+        minute = minutes_of_day(now_ny)
+        return (9 * 60 + 40) <= minute <= (11 * 60)
+    except Exception:
+        return False
+
+
 def build_priority_morning_reclaim_section(priority_signals, now_ny=None, status="", signal_payload=None):
     """
     Dedicated max-3 PLUG/NU-style morning reclaim focus section.
@@ -3998,14 +4021,19 @@ def build_priority_morning_reclaim_section(priority_signals, now_ny=None, status
     It reads signal_engine.py's priority_morning_reclaim list. During the
     09:35-11:00 ET morning window, this section is always visible so the
     dashboard clearly shows whether the engine found 0, 1, 2, or 3 qualified
-    reclaim setups. Outside the morning window, it remains hidden when empty.
+    reclaim setups. 09:35-09:39 is discovery-only; actionable cards begin at
+    09:40 after confirmation. Outside the morning window, it remains hidden.
     """
     priority_signals = [s for s in (priority_signals or []) if isinstance(s, dict)]
-    visible = priority_signals[:3]
-    show_empty_panel = is_priority_morning_reclaim_display_window(now_ny, status, signal_payload)
+    show_panel = is_priority_morning_reclaim_display_window(now_ny, status, signal_payload)
+    actionable_window = is_priority_morning_reclaim_actionable_window(now_ny, status, signal_payload)
 
-    if not visible and not show_empty_panel:
+    if not show_panel:
         return ""
+
+    # 09:35-09:39 is discovery-only. Do not show actionable ticker cards before
+    # the 09:40 confirmation gate even if signal_engine has stale/early names.
+    visible = priority_signals[:3] if actionable_window else []
 
     cards = []
 
@@ -4055,19 +4083,27 @@ def build_priority_morning_reclaim_section(priority_signals, now_ny=None, status
         """)
 
     if not cards:
-        cards.append("""
-            <div class="signal-desk-empty morning-reclaim-empty">
-                <strong>No qualified Priority Morning Reclaim setups yet.</strong>
-                <span>Waiting for clean VWAP/EMA reclaim from below + MACD curl + volume confirmation. Max 3 tickers will appear here when they qualify.</span>
-            </div>
-        """)
+        if actionable_window:
+            cards.append("""
+                <div class="signal-desk-empty morning-reclaim-empty">
+                    <strong>No qualified Priority Morning Reclaim setups yet.</strong>
+                    <span>Waiting for clean VWAP/EMA reclaim from below + MACD curl + volume confirmation. Max 3 tickers will appear here when they qualify.</span>
+                </div>
+            """)
+        else:
+            cards.append("""
+                <div class="signal-desk-empty morning-reclaim-empty">
+                    <strong>09:35 discovery window active.</strong>
+                    <span>Priority Morning Reclaim is visible now, but actionable cards start after the 09:40 confirmation scan. Waiting for valid 09:40+ scanner data.</span>
+                </div>
+            """)
 
     return f"""
     <section class="signal-desk-panel morning-reclaim-priority-panel" id="priority-reclaim">
         <div class="signal-desk-top">
             <div>
                 <strong>Priority Morning Reclaim</strong>
-                <span>Max 3 PLUG/NU-style reclaim runners from 09:35–11:00 ET. Shows 0 qualified setups during the active window instead of hiding the section.</span>
+                <span>Max 3 PLUG/NU-style reclaim runners from 09:35–11:00 ET. 09:35 is discovery-only; actionable cards start at 09:40.</span>
             </div>
             <div class="signal-desk-counts">
                 <span><b>{len(visible)}</b> Focus</span>
@@ -4403,12 +4439,18 @@ def build_dashboard(potential, active, extended, highrisk, raw, active_watchlist
 
     else:
         # Hard display gate outside regular market hours OR before the first
-        # valid 09:35+ regular-market scanner has completed.
+        # valid 09:40+ actionable regular-market scanner has completed.
         #
         # This prevents stale pre-market / after-hours scanner output from
         # appearing in regular market decision sections.
         if market_open:
             signal_desk_html = build_waiting_first_scanner_panel(status, scanner_time_label)
+            priority_reclaim_section = build_priority_morning_reclaim_section(
+                signal_payload.get("priority_morning_reclaim", []),
+                now_ny=now_ny,
+                status=status,
+                signal_payload=signal_payload,
+            )
         else:
             signal_desk_html = build_market_inactive_signal_panel(status)
 
@@ -4417,9 +4459,11 @@ def build_dashboard(potential, active, extended, highrisk, raw, active_watchlist
         active_section = ""
         sector_snapshot = ""
         desk_table = ""
-        nav_tabs = """
+        priority_reclaim_nav = '<a href="#priority-reclaim">Priority Morning Reclaim</a>' if priority_reclaim_section else ""
+        nav_tabs = f"""
         <div class="nav-tabs">
             <a href="#signals">Signal Desk</a>
+            {priority_reclaim_nav}
         </div>
         """
 
