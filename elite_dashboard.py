@@ -2577,7 +2577,7 @@ def scanner_data_is_regular_session_ready(now_ny, scanner_meta):
     Only allow ticker cards/table/sector context after today's first valid
     regular-market scanner has run at or after 09:40 ET.
 
-    09:35 is discovery-only; this gate waits for 09:40 actionable scanner data and prevents stale 09:00/09:01 pre-market scanner files from appearing
+    This prevents stale 09:00/09:01 pre-market scanner files from appearing
     after the 09:30 dashboard-only OPEN refresh.
     """
     scanner_dt = parse_et_datetime(scanner_meta.get("scanner_generated_at_et"))
@@ -2599,7 +2599,7 @@ def scanner_data_is_regular_session_ready(now_ny, scanner_meta):
 
 def build_waiting_first_scanner_panel(status, scanner_time_label):
     """
-    Signal Desk replacement when market is OPEN but the first actionable 09:40+
+    Signal Desk replacement when market is OPEN but the first valid 09:40+
     regular-market scanner data is not available yet.
 
     Strict rule:
@@ -2622,7 +2622,7 @@ def build_waiting_first_scanner_panel(status, scanner_time_label):
         </div>
         <div class="signal-desk-empty">
             <strong>Market is {esc(status)}.</strong>
-            <span>Waiting for first actionable regular-market scanner at 09:40 ET. The 09:35 scan is discovery-only; scanner candidates stay hidden until valid 09:40+ scanner data is available. Last scanner data: {esc(scanner_time_label)}</span>
+            <span>Waiting for first regular-market scanner at 09:40 ET. Scanner candidates are hidden until valid 09:40+ scanner data is available. Last scanner data: {esc(scanner_time_label)}</span>
         </div>
     </section>
     """
@@ -3963,66 +3963,19 @@ def build_signal_outcomes_panel(summary):
         {body_html}
     </section>
     """
-def is_priority_morning_reclaim_display_window(now_ny=None, status="", signal_payload=None):
-    """
-    Dashboard display rule for the Priority Morning Reclaim panel.
-
-    This function intentionally returns True whenever it is called from the
-    regular-market dashboard build path. The section is the user's primary
-    focus area and must not disappear just because there are zero qualified
-    names, stale scanner gates, or an unexpected market_phase string.
-
-    The content inside the panel changes by time:
-      - before 09:35: waiting for discovery scan
-      - 09:35-09:39: discovery-only, no actionable ticker cards
-      - 09:40-11:00: actionable Morning Priority Reclaim window
-      - after 11:00: morning window closed, normal reclaim logic continues
-    """
-    return True
-
-
-def is_priority_morning_reclaim_actionable_window(now_ny=None, status="", signal_payload=None):
-    """
-    True only when the dashboard may display actionable Priority Morning Reclaim
-    ticker cards. The 09:35 scanner is discovery-only; actionable display starts
-    at 09:40 ET.
-    """
-    if not is_priority_morning_reclaim_display_window(now_ny, status, signal_payload):
-        return False
-
-    if now_ny is None:
-        return False
-
-    try:
-        if safe_str(status, "").upper() != "OPEN":
-            return False
-        minute = minutes_of_day(now_ny)
-        return (9 * 60 + 40) <= minute <= (11 * 60)
-    except Exception:
-        return False
-
-
-def build_priority_morning_reclaim_section(priority_signals, now_ny=None, status="", signal_payload=None):
+def build_priority_morning_reclaim_section(priority_signals):
     """
     Dedicated max-3 PLUG/NU-style morning reclaim focus section.
 
-    It reads signal_engine.py's priority_morning_reclaim list. During the
-    09:35-11:00 ET morning window, this section is always visible so the
-    dashboard clearly shows whether the engine found 0, 1, 2, or 3 qualified
-    reclaim setups. 09:35-09:39 is discovery-only; actionable cards begin at
-    09:40 after confirmation. Outside the morning window, it remains hidden.
+    It reads signal_engine.py's priority_morning_reclaim list only. If the
+    engine is outside the 09:35-11:00 window or no ticker qualifies, this
+    section stays hidden and all normal dashboard sections remain unchanged.
     """
     priority_signals = [s for s in (priority_signals or []) if isinstance(s, dict)]
-    show_panel = is_priority_morning_reclaim_display_window(now_ny, status, signal_payload)
-    actionable_window = is_priority_morning_reclaim_actionable_window(now_ny, status, signal_payload)
-
-    if not show_panel:
+    if not priority_signals:
         return ""
 
-    # 09:35-09:39 is discovery-only. Do not show actionable ticker cards before
-    # the 09:40 confirmation gate even if signal_engine has stale/early names.
-    visible = priority_signals[:3] if actionable_window else []
-
+    visible = priority_signals[:3]
     cards = []
 
     for s in visible:
@@ -4070,55 +4023,12 @@ def build_priority_morning_reclaim_section(priority_signals, now_ny=None, status
             </div>
         """)
 
-    if not cards:
-        minute = None
-        try:
-            minute = minutes_of_day(now_ny) if now_ny is not None else None
-        except Exception:
-            minute = None
-
-        if actionable_window:
-            cards.append("""
-                <div class="signal-desk-empty morning-reclaim-empty">
-                    <strong>No qualified Priority Morning Reclaim setups yet.</strong>
-                    <span>Waiting for clean VWAP/EMA reclaim from below + MACD curl + volume confirmation. Max 3 tickers will appear here when they qualify.</span>
-                </div>
-            """)
-        elif minute is not None and minute < (9 * 60 + 35):
-            cards.append("""
-                <div class="signal-desk-empty morning-reclaim-empty">
-                    <strong>Waiting for 09:35 discovery scan.</strong>
-                    <span>Priority Morning Reclaim stays visible here. The 09:35 scan is discovery-only; actionable cards start after the 09:40 confirmation scan.</span>
-                </div>
-            """)
-        elif minute is not None and (9 * 60 + 35) <= minute < (9 * 60 + 40):
-            cards.append("""
-                <div class="signal-desk-empty morning-reclaim-empty">
-                    <strong>09:35 discovery window active.</strong>
-                    <span>Priority Morning Reclaim is visible now, but actionable cards start after the 09:40 confirmation scan. Waiting for valid 09:40+ scanner data.</span>
-                </div>
-            """)
-        elif minute is not None and minute > (11 * 60):
-            cards.append("""
-                <div class="signal-desk-empty morning-reclaim-empty">
-                    <strong>Morning reclaim window closed.</strong>
-                    <span>The 09:35–11:00 Priority Morning Reclaim window has ended. Normal Signal Desk reclaim monitoring continues below.</span>
-                </div>
-            """)
-        else:
-            cards.append("""
-                <div class="signal-desk-empty morning-reclaim-empty">
-                    <strong>Priority Morning Reclaim waiting for actionable window.</strong>
-                    <span>The section is visible during regular market hours. Actionable cards require the 09:40+ confirmation window and qualifying VWAP/EMA reclaim structure.</span>
-                </div>
-            """)
-
     return f"""
     <section class="signal-desk-panel morning-reclaim-priority-panel" id="priority-reclaim">
         <div class="signal-desk-top">
             <div>
                 <strong>Priority Morning Reclaim</strong>
-                <span>Primary focus section above Signal Desk Details and Potential Movers. Max 3 PLUG/NU-style reclaim runners; actionable window is 09:40–11:00 ET. 09:35 is discovery-only.</span>
+                <span>Max 3 PLUG/NU-style reclaim runners from 09:35–11:00 ET. Normal reclaim logic remains unchanged outside this window.</span>
             </div>
             <div class="signal-desk-counts">
                 <span><b>{len(visible)}</b> Focus</span>
@@ -4279,10 +4189,7 @@ def build_dashboard(potential, active, extended, highrisk, raw, active_watchlist
 
         signal_desk_html = build_signal_desk_panel(signals, rejected_candidates)
         priority_reclaim_section = build_priority_morning_reclaim_section(
-            signal_payload.get("priority_morning_reclaim", []),
-            now_ny=now_ny,
-            status=status,
-            signal_payload=signal_payload,
+            signal_payload.get("priority_morning_reclaim", [])
         )
         outcome_summary = load_signal_outcomes_summary()
         signal_outcomes_html = build_signal_outcomes_panel(outcome_summary)
@@ -4454,18 +4361,12 @@ def build_dashboard(potential, active, extended, highrisk, raw, active_watchlist
 
     else:
         # Hard display gate outside regular market hours OR before the first
-        # valid 09:40+ actionable regular-market scanner has completed.
+        # valid 09:40+ regular-market scanner has completed.
         #
         # This prevents stale pre-market / after-hours scanner output from
         # appearing in regular market decision sections.
         if market_open:
             signal_desk_html = build_waiting_first_scanner_panel(status, scanner_time_label)
-            priority_reclaim_section = build_priority_morning_reclaim_section(
-                signal_payload.get("priority_morning_reclaim", []),
-                now_ny=now_ny,
-                status=status,
-                signal_payload=signal_payload,
-            )
         else:
             signal_desk_html = build_market_inactive_signal_panel(status)
 
@@ -4474,11 +4375,9 @@ def build_dashboard(potential, active, extended, highrisk, raw, active_watchlist
         active_section = ""
         sector_snapshot = ""
         desk_table = ""
-        priority_reclaim_nav = '<a href="#priority-reclaim">Priority Morning Reclaim</a>' if priority_reclaim_section else ""
-        nav_tabs = f"""
+        nav_tabs = """
         <div class="nav-tabs">
             <a href="#signals">Signal Desk</a>
-            {priority_reclaim_nav}
         </div>
         """
 
@@ -6708,9 +6607,9 @@ td small {
     $macro_html
     $signal_desk_html
 
-    $priority_reclaim_section
-
     $nav_tabs
+
+    $priority_reclaim_section
 
     $signal_detail_section
 
