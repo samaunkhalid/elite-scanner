@@ -3965,32 +3965,22 @@ def build_signal_outcomes_panel(summary):
     """
 def is_priority_morning_reclaim_display_window(now_ny=None, status="", signal_payload=None):
     """
-    Dashboard display window for the Priority Morning Reclaim panel.
+    Dashboard display rule for the Priority Morning Reclaim panel.
 
-    Display rule:
-      - During the 09:35-11:00 ET regular-market morning window, show the
-        section even when zero tickers qualify.
-      - 09:35-09:39 is discovery-only and must not expose actionable cards.
-      - 09:40+ is the actionable confirmation window.
-      - If signal_engine.py explicitly reports market_phase=VALID_MORNING,
-        also show it. This protects against small clock/reporting differences.
-      - Outside the morning window, keep the section hidden to avoid stale names.
+    It must not disappear during regular market hours. The panel is the user's
+    primary morning focus area, so it stays visible any time the market is OPEN.
+    The content inside the panel changes by time:
+      - before 09:35: waiting for discovery scan
+      - 09:35-09:39: discovery-only, no actionable ticker cards
+      - 09:40-11:00: actionable Morning Priority Reclaim window
+      - after 11:00: morning window closed, normal reclaim logic continues
     """
     payload = signal_payload if isinstance(signal_payload, dict) else {}
     phase = safe_str(payload.get("market_phase"), "").upper()
     if phase in {"VALID_MORNING", "MORNING_PRIORITY_RECLAIM"}:
         return True
 
-    if now_ny is None:
-        return False
-
-    try:
-        if safe_str(status, "").upper() != "OPEN":
-            return False
-        minute = minutes_of_day(now_ny)
-        return (9 * 60 + 35) <= minute <= (11 * 60)
-    except Exception:
-        return False
+    return safe_str(status, "").upper() == "OPEN"
 
 
 def is_priority_morning_reclaim_actionable_window(now_ny=None, status="", signal_payload=None):
@@ -4083,6 +4073,12 @@ def build_priority_morning_reclaim_section(priority_signals, now_ny=None, status
         """)
 
     if not cards:
+        minute = None
+        try:
+            minute = minutes_of_day(now_ny) if now_ny is not None else None
+        except Exception:
+            minute = None
+
         if actionable_window:
             cards.append("""
                 <div class="signal-desk-empty morning-reclaim-empty">
@@ -4090,11 +4086,32 @@ def build_priority_morning_reclaim_section(priority_signals, now_ny=None, status
                     <span>Waiting for clean VWAP/EMA reclaim from below + MACD curl + volume confirmation. Max 3 tickers will appear here when they qualify.</span>
                 </div>
             """)
-        else:
+        elif minute is not None and minute < (9 * 60 + 35):
+            cards.append("""
+                <div class="signal-desk-empty morning-reclaim-empty">
+                    <strong>Waiting for 09:35 discovery scan.</strong>
+                    <span>Priority Morning Reclaim stays visible here. The 09:35 scan is discovery-only; actionable cards start after the 09:40 confirmation scan.</span>
+                </div>
+            """)
+        elif minute is not None and (9 * 60 + 35) <= minute < (9 * 60 + 40):
             cards.append("""
                 <div class="signal-desk-empty morning-reclaim-empty">
                     <strong>09:35 discovery window active.</strong>
                     <span>Priority Morning Reclaim is visible now, but actionable cards start after the 09:40 confirmation scan. Waiting for valid 09:40+ scanner data.</span>
+                </div>
+            """)
+        elif minute is not None and minute > (11 * 60):
+            cards.append("""
+                <div class="signal-desk-empty morning-reclaim-empty">
+                    <strong>Morning reclaim window closed.</strong>
+                    <span>The 09:35–11:00 Priority Morning Reclaim window has ended. Normal Signal Desk reclaim monitoring continues below.</span>
+                </div>
+            """)
+        else:
+            cards.append("""
+                <div class="signal-desk-empty morning-reclaim-empty">
+                    <strong>Priority Morning Reclaim waiting for actionable window.</strong>
+                    <span>The section is visible during regular market hours. Actionable cards require the 09:40+ confirmation window and qualifying VWAP/EMA reclaim structure.</span>
                 </div>
             """)
 
@@ -4103,7 +4120,7 @@ def build_priority_morning_reclaim_section(priority_signals, now_ny=None, status
         <div class="signal-desk-top">
             <div>
                 <strong>Priority Morning Reclaim</strong>
-                <span>Max 3 PLUG/NU-style reclaim runners from 09:35–11:00 ET. 09:35 is discovery-only; actionable cards start at 09:40.</span>
+                <span>Primary focus section. Max 3 PLUG/NU-style reclaim runners; actionable window is 09:40–11:00 ET. 09:35 is discovery-only.</span>
             </div>
             <div class="signal-desk-counts">
                 <span><b>{len(visible)}</b> Focus</span>
