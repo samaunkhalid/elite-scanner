@@ -3967,20 +3967,18 @@ def is_priority_morning_reclaim_display_window(now_ny=None, status="", signal_pa
     """
     Dashboard display rule for the Priority Morning Reclaim panel.
 
-    It must not disappear during regular market hours. The panel is the user's
-    primary morning focus area, so it stays visible any time the market is OPEN.
+    This function intentionally returns True whenever it is called from the
+    regular-market dashboard build path. The section is the user's primary
+    focus area and must not disappear just because there are zero qualified
+    names, stale scanner gates, or an unexpected market_phase string.
+
     The content inside the panel changes by time:
       - before 09:35: waiting for discovery scan
       - 09:35-09:39: discovery-only, no actionable ticker cards
       - 09:40-11:00: actionable Morning Priority Reclaim window
       - after 11:00: morning window closed, normal reclaim logic continues
     """
-    payload = signal_payload if isinstance(signal_payload, dict) else {}
-    phase = safe_str(payload.get("market_phase"), "").upper()
-    if phase in {"VALID_MORNING", "MORNING_PRIORITY_RECLAIM"}:
-        return True
-
-    return safe_str(status, "").upper() == "OPEN"
+    return True
 
 
 def is_priority_morning_reclaim_actionable_window(now_ny=None, status="", signal_payload=None):
@@ -4120,7 +4118,7 @@ def build_priority_morning_reclaim_section(priority_signals, now_ny=None, status
         <div class="signal-desk-top">
             <div>
                 <strong>Priority Morning Reclaim</strong>
-                <span>Primary focus section. Max 3 PLUG/NU-style reclaim runners; actionable window is 09:40–11:00 ET. 09:35 is discovery-only.</span>
+                <span>Primary focus section above Signal Desk Details and Potential Movers. Max 3 PLUG/NU-style reclaim runners; actionable window is 09:40–11:00 ET. 09:35 is discovery-only.</span>
             </div>
             <div class="signal-desk-counts">
                 <span><b>{len(visible)}</b> Focus</span>
@@ -6710,9 +6708,9 @@ td small {
     $macro_html
     $signal_desk_html
 
-    $nav_tabs
-
     $priority_reclaim_section
+
+    $nav_tabs
 
     $signal_detail_section
 
