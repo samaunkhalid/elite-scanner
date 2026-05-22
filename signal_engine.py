@@ -56,7 +56,7 @@ except Exception:  # pragma: no cover
 # ==============================================================
 
 POTENTIAL_LIMIT = 12
-ACTIVE_LIMIT = 8
+ACTIVE_LIMIT = 12
 
 DATA_FEED = os.getenv("ALPACA_DATA_FEED", "sip").strip().lower() or "sip"
 ALPACA_BASE_URL = "https://data.alpaca.markets/v2"
@@ -78,7 +78,7 @@ SIGNAL_STATE_FILE = "signal_state.json"
 SUPPRESSED_SIGNALS_FILE = "suppressed_signals.csv"
 SIGNAL_OUTCOMES_FILE = "signal_outcomes.csv"
 SIGNAL_OUTCOMES_SUMMARY_FILE = "signal_outcomes_summary.json"
-SIGNAL_ENGINE_STRATEGY_VERSION = "v2.7.6_morning_priority_reclaim_quality"
+SIGNAL_ENGINE_STRATEGY_VERSION = "v2.8.0_three_family_active_macd_resistance_targets"
 
 # State retention.
 ACTIVE_STALE_MINUTES = 10
@@ -114,9 +114,22 @@ RECLAIM_ACTIVE_REQUIRE_TRUE_RECLAIM = os.getenv("RECLAIM_ACTIVE_REQUIRE_TRUE_REC
 RECLAIM_ACTIVE_MAX_VWAP_DIST_PCT = float(os.getenv("RECLAIM_ACTIVE_MAX_VWAP_DIST_PCT", "3.00"))
 RECLAIM_ACTIVE_MIN_RECLAIM_VOLUME_RATIO = float(os.getenv("RECLAIM_ACTIVE_MIN_RECLAIM_VOLUME_RATIO", "1.15"))
 
+# Universal ACTIVE_SIGNAL hard gates.
+# These are intentionally strict: scanning can stay broad, but Active must pass
+# the trader checklist. 1m MACD is the execution trigger; 5m MACD is the context
+# blocker. No VWAP/support structure can override a failed MACD Active gate.
+ACTIVE_REQUIRE_1M_MACD_CURL_UP = os.getenv("ACTIVE_REQUIRE_1M_MACD_CURL_UP", "1").strip() != "0"
+ACTIVE_REQUIRE_5M_MACD_NOT_BEARISH = os.getenv("ACTIVE_REQUIRE_5M_MACD_NOT_BEARISH", "1").strip() != "0"
+ACTIVE_MAX_VWAP_DIST_PCT = float(os.getenv("ACTIVE_MAX_VWAP_DIST_PCT", "3.00"))
+ACTIVE_VWAP_RECENT_BELOW_LOOKBACK_BARS = int(os.getenv("ACTIVE_VWAP_RECENT_BELOW_LOOKBACK_BARS", "15"))
+ACTIVE_RECLAIM_FRESH_LOOKBACK_MINUTES = float(os.getenv("ACTIVE_RECLAIM_FRESH_LOOKBACK_MINUTES", "10"))
+ACTIVE_CONTINUATION_ABOVE_VWAP_BARS = int(os.getenv("ACTIVE_CONTINUATION_ABOVE_VWAP_BARS", "15"))
+ACTIVE_MIN_BREAKOUT_VOLUME_EXPANSION_RATIO = float(os.getenv("ACTIVE_MIN_BREAKOUT_VOLUME_EXPANSION_RATIO", "1.10"))
+ACTIVE_HOD_FAMILY_MAX_DISTANCE_FROM_HOD_PCT = float(os.getenv("ACTIVE_HOD_FAMILY_MAX_DISTANCE_FROM_HOD_PCT", "-2.50"))
+
 # Morning Priority Reclaim layer.
 # This does NOT replace the normal reclaim engine. It only tags and ranks the
-# best PLUG/NU-style reclaim candidates during the high-probability morning
+# best priority reclaim candidates during the high-probability morning
 # window so the dashboard can show a max-3 focus list.
 MORNING_RECLAIM_PRIORITY_ENABLED = os.getenv("MORNING_RECLAIM_PRIORITY_ENABLED", "1").strip() != "0"
 MORNING_RECLAIM_START_ET = os.getenv("MORNING_RECLAIM_START_ET", "09:35")
@@ -161,7 +174,7 @@ TRIGGER_TOUCH_MAX_MINUTES = 4
 TRIGGER_REJECT_BUFFER_PCT = 0.25
 TRIGGER_WICK_REJECTION_PCT = 0.75
 # Reclaim-runner confirmation and invalidation discipline.
-# NU/CIFR showed that a reclaim trigger touch alone is not enough: the latest
+# Prior reclaim cases showed that a trigger touch alone is not enough: the latest
 # 1-minute close must still hold VWAP + EMA9 before ACTIVE, while ACTIVE reclaim
 # signals should not be invalidated on a single VWAP wick if reclaim support holds.
 RECLAIM_ACTIVE_CONFIRM_MIN_SECONDS = int(os.getenv("RECLAIM_ACTIVE_CONFIRM_MIN_SECONDS", "60"))
@@ -2195,6 +2208,9 @@ class IntradayMetrics:
     vwap_reclaim_support_level: float = 0.0
     reclaim_pullback_holding: bool = False
     reclaim_pullback_reason: str = "No reclaim pullback hold"
+    below_vwap_last_15_1m: bool = False
+    above_vwap_last_15_1m: bool = False
+    vwap_recovered_last_15_1m: bool = False
 
     avg_volume_5: float = 0.0
     avg_volume_prev_5: float = 0.0
@@ -2406,6 +2422,18 @@ def analyze_execution_bars(symbol: str, bars: List[Dict[str, Any]]) -> IntradayM
     metrics.above_vwap = metrics.price >= metrics.vwap if metrics.vwap > 0 else False
     metrics.vwap_dist_pct = pct_change(metrics.price, metrics.vwap) if metrics.vwap > 0 else 0
     metrics.hod_distance_pct = pct_change(metrics.price, metrics.hod) if metrics.hod > 0 else 0
+
+    if metrics.vwap > 0:
+        last15_vwap_bars = clean[-ACTIVE_VWAP_RECENT_BELOW_LOOKBACK_BARS:] if len(clean) >= ACTIVE_VWAP_RECENT_BELOW_LOOKBACK_BARS else clean
+        metrics.below_vwap_last_15_1m = any(
+            safe_float(b.get("c"), 0) < metrics.vwap or safe_float(b.get("l"), 0) < metrics.vwap * 0.998
+            for b in last15_vwap_bars
+        )
+        metrics.above_vwap_last_15_1m = bool(last15_vwap_bars) and all(
+            safe_float(b.get("c"), 0) >= metrics.vwap and safe_float(b.get("l"), 0) >= metrics.vwap * 0.998
+            for b in last15_vwap_bars
+        )
+        metrics.vwap_recovered_last_15_1m = metrics.below_vwap_last_15_1m and metrics.above_vwap
 
     # 1-minute MACD for early VWAP reclaim / pullback timing.
     closes_1m = [safe_float(b.get("c"), 0) for b in clean]
@@ -3384,8 +3412,8 @@ def vwap_lifecycle_macd_confirmation(metrics: IntradayMetrics, setup_type: str) 
     """
     MACD logic for VWAP reclaim/pullback lifecycle.
 
-    We do NOT invalidate a normal reclaim pullback only because MACD cools.
-    We DO block when MACD rolls down hard while price is losing EMA9/VWAP pressure.
+    WATCH/READY can remain broader than ACTIVE, but clear bearish MACD is blocked.
+    ACTIVE_SIGNAL uses active_macd_confirmation() as the non-negotiable hard gate.
     """
     if metrics.bearish_momentum_divergence:
         return False, "Bearish MACD/momentum divergence"
@@ -3422,13 +3450,267 @@ def vwap_lifecycle_macd_confirmation(metrics: IntradayMetrics, setup_type: str) 
         if metrics.macd_histogram_rising or metrics.macd_above_signal:
             return True, "5m MACD acceptable for VWAP reclaim/pullback"
 
-        # Flat/cooling MACD is allowed while reclaim support is holding.
-        if metrics.reclaim_pullback_holding and metrics.above_vwap:
-            return True, "MACD cooling but VWAP reclaim support still holding"
+        # READY can remain broader than ACTIVE, but clear 1m/5m bearish momentum
+        # must not be accepted as confirmation.
+        if metrics.macd_1m_curling_down and metrics.macd_1m_histogram_falling:
+            return False, "MACD not ready: 1m MACD curling/falling down"
 
-        return True, "MACD neutral; VWAP/reclaim structure still primary"
+        return True, "MACD neutral for watch/ready; Active still requires hard MACD gate"
 
     return macd_ready_confirmation(metrics)
+
+
+ACTIVE_FAMILY_RECLAIMER = "RECLAIMER"
+ACTIVE_FAMILY_VWAP_PULLBACK = "VWAP_PULLBACK_CONTINUATION"
+ACTIVE_FAMILY_HOD_BASE_SQUEEZE = "HOD_BASE_SQUEEZE"
+ACTIVE_FAMILY_OTHER = "OTHER"
+
+RECLAIMER_SETUP_TYPES = {
+    "VWAP_EMA_RECLAIM_RUNNER",
+    "VWAP_RECLAIM_BREAKOUT",
+    "RECLAIM_PULLBACK_HOLDING",
+}
+VWAP_PULLBACK_SETUP_TYPES = {
+    "VWAP_PULLBACK_CONTINUATION",
+}
+HOD_BASE_SQUEEZE_SETUP_TYPES = {
+    "HOD_BASE_BREAKOUT",
+    "BASE_SQUEEZE_BREAKOUT",
+}
+
+
+def active_strategy_family(setup_type: str) -> str:
+    setup = safe_str(setup_type, "").upper()
+    if setup in RECLAIMER_SETUP_TYPES:
+        return ACTIVE_FAMILY_RECLAIMER
+    if setup in VWAP_PULLBACK_SETUP_TYPES:
+        return ACTIVE_FAMILY_VWAP_PULLBACK
+    if setup in HOD_BASE_SQUEEZE_SETUP_TYPES:
+        return ACTIVE_FAMILY_HOD_BASE_SQUEEZE
+    return ACTIVE_FAMILY_OTHER
+
+
+def vwap_was_below_recently(metrics: IntradayMetrics, lookback_bars: int = ACTIVE_VWAP_RECENT_BELOW_LOOKBACK_BARS) -> bool:
+    if not metrics.has_data or metrics.vwap <= 0:
+        return False
+    bars = clean_bars(metrics.execution_bars or [])
+    recent = bars[-lookback_bars:] if len(bars) >= lookback_bars else bars
+    if not recent:
+        return False
+    return any(
+        safe_float(b.get("c"), 0) < metrics.vwap or safe_float(b.get("l"), 0) < metrics.vwap * 0.998
+        for b in recent
+    )
+
+
+def stayed_above_vwap_recently(metrics: IntradayMetrics, lookback_bars: int = ACTIVE_CONTINUATION_ABOVE_VWAP_BARS) -> bool:
+    if not metrics.has_data or metrics.vwap <= 0:
+        return False
+    bars = clean_bars(metrics.execution_bars or [])
+    if len(bars) < lookback_bars:
+        return False
+    recent = bars[-lookback_bars:]
+    return all(
+        safe_float(b.get("c"), 0) >= metrics.vwap and safe_float(b.get("l"), 0) >= metrics.vwap * 0.998
+        for b in recent
+    )
+
+
+def active_macd_confirmation(metrics: IntradayMetrics) -> Tuple[bool, str]:
+    """
+    Non-negotiable Active MACD gate.
+
+    1m MACD is the execution trigger. 5m MACD is the context blocker.
+    VWAP/support strength is not allowed to override failed MACD.
+    """
+    if not metrics.has_data:
+        return False, "MACD Active blocked: no intraday data"
+
+    if metrics.bearish_momentum_divergence:
+        return False, "MACD Active blocked: bearish momentum divergence"
+
+    if metrics.macd_1m_bearish_crossover_recent:
+        return False, "MACD Active blocked: 1m bearish crossover"
+
+    if metrics.macd_1m_curling_down or (metrics.macd_1m_histogram_falling and not metrics.macd_1m_bullish_crossover_recent):
+        return False, "MACD Active blocked: 1m MACD curling/falling down"
+
+    one_min_ok = (
+        metrics.macd_1m_bullish_crossover_recent
+        or metrics.macd_1m_curling_up
+        or (metrics.macd_1m_histogram_rising and not metrics.macd_1m_bearish_crossover_recent)
+    )
+    if ACTIVE_REQUIRE_1M_MACD_CURL_UP and not one_min_ok:
+        return False, "MACD Active blocked: 1m MACD is not curling up"
+
+    if metrics.macd_bearish_crossover_recent:
+        return False, "MACD Active blocked: 5m bearish crossover"
+
+    if metrics.macd_histogram_falling and not metrics.macd_above_signal:
+        return False, "MACD Active blocked: 5m histogram falling below signal"
+
+    five_min_ok = (
+        metrics.macd_bullish_crossover_recent
+        or metrics.macd_histogram_rising
+        or (metrics.macd_above_signal and not metrics.macd_histogram_falling)
+    )
+    if ACTIVE_REQUIRE_5M_MACD_NOT_BEARISH and not five_min_ok:
+        return False, "MACD Active blocked: 5m MACD is not improving/not bearish"
+
+    return True, "MACD Active confirmed: 1m curling up and 5m improving/not bearish"
+
+
+def active_volume_confirmation(metrics: IntradayMetrics, family: str) -> Tuple[bool, str]:
+    if not metrics.has_data:
+        return False, "Volume Active blocked: no intraday data"
+
+    if metrics.volume_fading_vs_morning and not metrics.recent_volume_expanding:
+        return False, f"Volume Active blocked: {volume_fade_label(metrics)}"
+
+    if metrics.recent_volume_expanding:
+        return True, "Volume Active confirmed: recent volume expanding"
+
+    if family == ACTIVE_FAMILY_RECLAIMER and metrics.vwap_reclaim_volume_ratio >= RECLAIM_ACTIVE_MIN_RECLAIM_VOLUME_RATIO:
+        return True, f"Volume Active confirmed: reclaim volume {metrics.vwap_reclaim_volume_ratio:.2f}x"
+
+    if metrics.avg_volume_1m_20 > 0 and metrics.avg_volume_1m_5 >= ACTIVE_MIN_BREAKOUT_VOLUME_EXPANSION_RATIO * metrics.avg_volume_1m_20:
+        return True, "Volume Active confirmed: 1m volume above recent average"
+
+    if metrics.live_participation_ready_ok and metrics.recent_5m_dollar_volume >= MIN_LIVE_5M_DOLLAR_VOL_READY:
+        return True, "Volume Active confirmed: sufficient 5m dollar volume"
+
+    return False, "Volume Active blocked: no volume confirmation"
+
+
+def active_support_extension_confirmation(metrics: IntradayMetrics) -> Tuple[bool, str]:
+    if not metrics.has_data:
+        return False, "Support Active blocked: no intraday data"
+
+    if metrics.vwap > 0 and not metrics.above_vwap:
+        return False, "Support Active blocked: price is below VWAP"
+
+    if metrics.vwap_dist_pct > ACTIVE_MAX_VWAP_DIST_PCT:
+        return False, (
+            f"Extension Active blocked: VWAP distance {metrics.vwap_dist_pct:.2f}% "
+            f"> {ACTIVE_MAX_VWAP_DIST_PCT:.2f}%"
+        )
+
+    if metrics.ema9 > 0 and not metrics.price_above_ema9:
+        return False, "Support Active blocked: price is below EMA9"
+
+    return True, "VWAP/EMA support and extension confirmed"
+
+
+def active_family_structure_confirmation(
+    setup_type: str,
+    metrics: IntradayMetrics,
+    row: Optional[Dict[str, Any]] = None,
+) -> Tuple[bool, str, str]:
+    family = active_strategy_family(setup_type)
+
+    if family == ACTIVE_FAMILY_RECLAIMER:
+        fresh_reclaim = (
+            metrics.vwap_reclaim_recent
+            or metrics.vwap_reclaim_age_minutes <= ACTIVE_RECLAIM_FRESH_LOOKBACK_MINUTES
+            or vwap_was_below_recently(metrics)
+            or metrics.vwap_recovered_last_15_1m
+            or scanner_marks_early_reclaim(row)
+            or (is_morning_reclaim_actionable_window() and metrics.reclaim_pullback_holding)
+        )
+        if not fresh_reclaim:
+            return False, "Family Active blocked: Reclaimer requires recent VWAP loss/reclaim evidence", family
+        if not (metrics.vwap_reclaim_ready or metrics.reclaim_pullback_holding or scanner_marks_early_reclaim(row)):
+            return False, "Family Active blocked: Reclaimer lacks reclaim/hold structure", family
+        return True, "Family confirmed: Reclaimer", family
+
+    if family == ACTIVE_FAMILY_VWAP_PULLBACK:
+        if vwap_was_below_recently(metrics):
+            return False, "Family Active blocked: recent VWAP loss belongs to Reclaimer, not Continuation"
+        if not stayed_above_vwap_recently(metrics):
+            return False, f"Family Active blocked: Continuation requires {ACTIVE_CONTINUATION_ABOVE_VWAP_BARS}+ 1m bars above VWAP"
+        if not metrics.pullback_holding_vwap:
+            return False, "Family Active blocked: Continuation pullback is not holding VWAP/support"
+        if metrics.vwap_failed_touch_count >= 2:
+            return False, "Family Active blocked: repeated failed VWAP retests"
+        return True, "Family confirmed: VWAP Pullback Continuation", family
+
+    if family == ACTIVE_FAMILY_HOD_BASE_SQUEEZE:
+        if metrics.hod > 0 and metrics.hod_distance_pct < ACTIVE_HOD_FAMILY_MAX_DISTANCE_FROM_HOD_PCT:
+            return False, f"Family Active blocked: HOD base/squeeze too far from HOD ({metrics.hod_distance_pct:.2f}%)"
+        if not metrics.consolidating_near_high:
+            return False, "Family Active blocked: no controlled near-HOD consolidation"
+        if not metrics.base_compression:
+            return False, "Family Active blocked: no base/flag/squeeze compression"
+        if not metrics.price_near_base_breakout:
+            return False, "Family Active blocked: price not near base/HOD breakout"
+        if not metrics.base_volume_constructive and not metrics.recent_volume_expanding:
+            return False, "Family Active blocked: base volume not constructive"
+        return True, "Family confirmed: HOD Base/Squeeze Breakout", family
+
+    return False, f"Family Active blocked: setup {safe_str(setup_type, 'UNKNOWN')} is watch-only, not Active eligible", family
+
+
+def active_signal_hard_gate(
+    plan: Dict[str, Any],
+    metrics: IntradayMetrics,
+    setup_type: str = "",
+    row: Optional[Dict[str, Any]] = None,
+) -> Tuple[bool, str, str]:
+    """
+    Universal Active checklist for the three approved Active families.
+    Scanner discovery can remain broad; this gate controls only ACTIVE_SIGNAL.
+    """
+    setup = safe_str(setup_type or plan.get("setup_type"), "").upper()
+
+    family_ok, family_reason, family = active_family_structure_confirmation(setup, metrics, row)
+    if not family_ok:
+        return False, family_reason, family
+
+    support_ok, support_reason = active_support_extension_confirmation(metrics)
+    if not support_ok:
+        return False, support_reason, family
+
+    macd_ok, macd_reason = active_macd_confirmation(metrics)
+    if not macd_ok:
+        return False, macd_reason, family
+
+    volume_ok, volume_reason = active_volume_confirmation(metrics, family)
+    if not volume_ok:
+        return False, volume_reason, family
+
+    return True, f"{family_reason}; {support_reason}; {macd_reason}; {volume_reason}", family
+
+
+def active_signal_runtime_gate(
+    signal: Dict[str, Any],
+    metrics: IntradayMetrics,
+) -> Tuple[bool, str, str]:
+    """
+    Runtime protection for an already ACTIVE signal.
+
+    Do not re-test whether the original reclaim was recent; only invalidate when
+    the live Active checklist fails: support/extension, MACD, or volume.
+    """
+    setup = safe_str(signal.get("setup_type"), "").upper()
+    family = active_strategy_family(setup)
+
+    if family == ACTIVE_FAMILY_OTHER:
+        return False, f"Active runtime blocked: setup {setup or 'UNKNOWN'} is not Active eligible", family
+
+    support_ok, support_reason = active_support_extension_confirmation(metrics)
+    if not support_ok:
+        return False, support_reason, family
+
+    macd_ok, macd_reason = active_macd_confirmation(metrics)
+    if not macd_ok:
+        return False, macd_reason, family
+
+    volume_ok, volume_reason = active_volume_confirmation(metrics, family)
+    if not volume_ok:
+        return False, volume_reason, family
+
+    return True, f"{support_reason}; {macd_reason}; {volume_reason}", family
+
 
 
 def is_truthy_value(value: Any) -> bool:
@@ -3663,7 +3945,7 @@ def morning_reclaim_priority_score(
     now: Optional[datetime] = None,
 ) -> Tuple[float, List[str], List[str]]:
     """
-    Score PLUG/NU-style morning reclaim runners without changing the normal
+    Score priority morning reclaim runners without changing the normal
     after-11:00 reclaim engine.
 
     The score is intentionally used for dashboard focus/ranking only. Existing
@@ -4063,15 +4345,27 @@ def resistance_levels_above(entry: float, metrics: IntradayMetrics, row: Dict[st
     return sorted(set(round(x, 4) for x in levels if x > entry * 1.001))
 
 
-def pick_target_1(entry: float, risk: float, metrics: IntradayMetrics, row: Dict[str, Any]) -> Tuple[float, float]:
+def pick_targets(entry: float, risk: float, metrics: IntradayMetrics, row: Dict[str, Any]) -> Tuple[float, float, float, str]:
+    """
+    Resistance-first target logic.
+
+    Target 1 is the first real/technical resistance above entry. R/R validates
+    the trade after the target is selected. A fixed R-multiple may be kept only
+    as a fallback/checkpoint when no resistance is available.
+    """
     min_target = entry + MIN_RR * risk
     levels = resistance_levels_above(entry, metrics, row)
-    usable = [x for x in levels if x >= min_target]
 
-    if usable:
-        return min(usable), min_target
+    if levels:
+        target_1 = min(levels)
+        higher = [x for x in levels if x > target_1 * 1.001]
+        target_2 = higher[0] if higher else max(entry + 2.0 * risk, target_1 + 0.5 * risk)
+        return target_1, target_2, min_target, "RESISTANCE_FIRST"
 
-    return min_target, min_target
+    # Last-resort fallback. The trade still must pass R/R validation.
+    target_1 = min_target
+    target_2 = entry + 2.0 * risk
+    return target_1, target_2, min_target, "R_MULTIPLE_FALLBACK"
 
 
 def build_trade_plan(
@@ -4105,6 +4399,7 @@ def build_trade_plan(
         target_2 = 0.0
         rr = 0.0
         min_target_1 = 0.0
+        target_source = "INVALID_PLAN"
     else:
         buffer = stop_buffer_pct(row)
         spread = quote_spread_dollars(quote or {})
@@ -4130,8 +4425,7 @@ def build_trade_plan(
             valid = False
             rejection_reason = f"Stop distance {stop_distance_pct:.2f}% > max {max_stop:.1f}%"
 
-        target_1, min_target_1 = pick_target_1(entry, risk, metrics, row)
-        target_2 = max(entry + 2.0 * risk, target_1 + 0.5 * risk)
+        target_1, target_2, min_target_1, target_source = pick_targets(entry, risk, metrics, row)
 
         rr = (target_1 - entry) / risk if risk > 0 else 0.0
 
@@ -4152,6 +4446,7 @@ def build_trade_plan(
         "support_level": round(support, 4),
         "structure_label": structure_label,
         "min_target_1": round(min_target_1, 4),
+        "target_source": target_source,
         "buffer_pct_used": round(stop_buffer_pct(row) * 100, 2),
         "spread_dollars": round(quote_spread_dollars(quote or {}), 4) if quote_spread_dollars(quote or {}) is not None else None,
     }
@@ -4184,7 +4479,7 @@ def choose_best_provisional_plan(
 
     if scanner_marks_early_reclaim(row):
         # Do not let a generic VWAP pullback / HOD plan steal an early reclaim
-        # runner simply because it has a slightly better R/R. NU/CIFR/CCL showed
+        # runner simply because it has a slightly better R/R. Prior reclaim cases showed
         # that scanner-marked early reclaim rows need to stay in their dedicated
         # lifecycle so entry stays near VWAP/EMA and ACTIVE confirmation remains strict.
         for setup_name, setup_plan in valid_plans:
@@ -4685,6 +4980,12 @@ def setup_vwap_pullback_ready(metrics: IntradayMetrics, rr: float, confidence: f
     if not metrics.above_vwap:
         return False, "Below VWAP"
 
+    if vwap_was_below_recently(metrics):
+        return False, "VWAP pullback continuation blocked: recent VWAP loss/reclaim belongs to Reclaimer family"
+
+    if not stayed_above_vwap_recently(metrics):
+        return False, f"VWAP pullback continuation blocked: needs {ACTIVE_CONTINUATION_ABOVE_VWAP_BARS}+ one-minute bars above VWAP"
+
     ema_ok, ema_reason = ema9_ready_confirmation(metrics)
     if not ema_ok:
         return False, ema_reason
@@ -4777,6 +5078,9 @@ def setup_base_squeeze_ready(metrics: IntradayMetrics, rr: float, confidence: fl
 
     if not metrics.above_vwap:
         return False, "Below VWAP"
+
+    if metrics.hod > 0 and metrics.hod_distance_pct < ACTIVE_HOD_FAMILY_MAX_DISTANCE_FROM_HOD_PCT:
+        return False, f"Base squeeze is watch-only unless near HOD ({metrics.hod_distance_pct:.2f}%)"
 
     ema_ok, ema_reason = ema9_ready_confirmation(metrics)
     if not ema_ok:
@@ -5340,6 +5644,9 @@ def diagnostic_candidate(
         "vwap_reclaim_support_level": round(metrics.vwap_reclaim_support_level, 4),
         "reclaim_pullback_holding": metrics.reclaim_pullback_holding,
         "reclaim_pullback_reason": metrics.reclaim_pullback_reason,
+        "below_vwap_last_15_1m": metrics.below_vwap_last_15_1m,
+        "above_vwap_last_15_1m": metrics.above_vwap_last_15_1m,
+        "vwap_recovered_last_15_1m": metrics.vwap_recovered_last_15_1m,
         "avg_volume_5": round(metrics.avg_volume_5, 2),
         "avg_volume_prev_5": round(metrics.avg_volume_prev_5, 2),
         "morning_avg_volume_5m": round(metrics.morning_avg_volume_5m, 2),
@@ -5363,6 +5670,7 @@ def diagnostic_candidate(
         "support_level": plan.get("support_level"),
         "structure_label": plan.get("structure_label"),
         "min_target_1": plan.get("min_target_1"),
+        "target_source": plan.get("target_source", ""),
         "buffer_pct_used": plan.get("buffer_pct_used"),
     }
 
@@ -5424,6 +5732,7 @@ def signal_base(
         "support_level": plan.get("support_level"),
         "structure_label": plan.get("structure_label"),
         "min_target_1": plan.get("min_target_1"),
+        "target_source": plan.get("target_source", ""),
         "buffer_pct_used": plan.get("buffer_pct_used"),
         "atr_pct": safe_float(row.get("atr_pct"), 0),
         "dollar_vol_M": safe_float(row.get("dollar_vol_M"), 0),
@@ -5522,6 +5831,9 @@ def signal_base(
         "vwap_reclaim_support_level": round(metrics.vwap_reclaim_support_level, 4),
         "reclaim_pullback_holding": metrics.reclaim_pullback_holding,
         "reclaim_pullback_reason": metrics.reclaim_pullback_reason,
+        "below_vwap_last_15_1m": metrics.below_vwap_last_15_1m,
+        "above_vwap_last_15_1m": metrics.above_vwap_last_15_1m,
+        "vwap_recovered_last_15_1m": metrics.vwap_recovered_last_15_1m,
         "avg_volume_5": round(metrics.avg_volume_5, 2),
         "avg_volume_prev_5": round(metrics.avg_volume_prev_5, 2),
         "morning_avg_volume_5m": round(metrics.morning_avg_volume_5m, 2),
@@ -5649,7 +5961,7 @@ def reclaim_active_confirmation_quality(
     """
     Reclaim ACTIVE confirmation must be candle-close based.
 
-    CIFR exposed the problem: a current tick can touch/hold briefly, become ACTIVE,
+    Prior reclaim cases exposed the problem: a current tick can touch/hold briefly, become ACTIVE,
     then immediately lose VWAP. Require the latest 1-minute close to hold trigger,
     VWAP, and EMA9 before activation.
     """
@@ -5800,6 +6112,10 @@ def active_invalidated(signal: Dict[str, Any], metrics: IntradayMetrics) -> Tupl
 
     trigger = safe_float(signal.get("entry_trigger"), 0)
     stop = safe_float(signal.get("stop_loss"), 0)
+
+    runtime_ok, runtime_reason, _active_family = active_signal_runtime_gate(signal, metrics)
+    if not runtime_ok:
+        return True, runtime_reason, "FAILED_SETUP"
 
     if is_reclaim_lifecycle_setup(signal):
         hard_fail, hard_reason = reclaim_active_hard_failure(signal, metrics)
@@ -6278,6 +6594,7 @@ def locked_plan_from_signal(signal: Dict[str, Any]) -> Dict[str, Any]:
         "support_level": safe_float(signal.get("support_level"), 0),
         "structure_label": safe_str(signal.get("structure_label"), "LOCKED_TRIGGER_READY_PLAN"),
         "min_target_1": safe_float(signal.get("min_target_1"), target_1),
+        "target_source": safe_str(signal.get("target_source"), "LOCKED_TRIGGER_READY_PLAN"),
         "buffer_pct_used": safe_float(signal.get("buffer_pct_used"), 0),
         "spread_dollars": safe_float(signal.get("spread_dollars"), 0),
     }
@@ -6384,7 +6701,11 @@ def trigger_hold_confirmation(
         if not macd_ok:
             return False, macd_reason
 
-    return True, "Trigger held above entry with valid VWAP/volume confirmation"
+    hard_gate_ok, hard_gate_reason, _active_family = active_signal_hard_gate(existing, metrics, setup, None)
+    if not hard_gate_ok:
+        return False, hard_gate_reason
+
+    return True, "Trigger held above entry with valid VWAP/volume/MACD confirmation"
 
 
 def trigger_reference_high(metrics: IntradayMetrics) -> float:
@@ -6845,6 +7166,10 @@ def active_promotion_failure_reasons(
     if safe_float(plan.get("reward_risk"), 0) < MIN_RR:
         reasons.append(f"R/R {safe_float(plan.get('reward_risk'), 0):.2f} < minimum {MIN_RR:.1f}")
 
+    hard_gate_ok, hard_gate_reason, active_family = active_signal_hard_gate(plan, metrics, setup_type, row)
+    if not hard_gate_ok:
+        reasons.append(hard_gate_reason)
+
     late_entry_reason = active_late_entry_guard_reason(plan, metrics)
     if late_entry_reason:
         reasons.append(late_entry_reason)
@@ -6952,7 +7277,11 @@ def promote_trigger_ready_to_active(
     out["triggered_at"] = now_text
     out["detected_at"] = existing.get("detected_at") or existing.get("ready_since") or now_text
     out["ready_since"] = existing.get("ready_since") or now_text
+    hard_gate_ok, hard_gate_reason, active_family = active_signal_hard_gate(plan, metrics, setup_type, row)
     out["active_grade"] = active_confidence_grade(conf)
+    out["active_family"] = active_family
+    out["active_gate_reason"] = hard_gate_reason
+    out["target_source"] = plan.get("target_source", "")
     out["trigger_source"] = metrics.price_source
 
     entry = safe_float(plan.get("entry_trigger"), 0)
@@ -7036,6 +7365,8 @@ def process_existing_signal(
             "macd_status": metrics.macd_status,
             "momentum_status": metrics.momentum_status,
             "actionable": True,
+            "active_family": active_strategy_family(safe_str(existing.get("setup_type"), "")),
+            "active_gate_reason": active_signal_runtime_gate(existing, metrics)[1],
             "actionability": "ACTIVE_AGED_MONITORING" if active_aged else (safe_str(existing.get("actionability"), "ACTIVE") or "ACTIVE"),
             "active_aged_monitoring": active_aged,
             "entry_warning": combine_warning(
