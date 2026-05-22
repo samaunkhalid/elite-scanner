@@ -25,7 +25,7 @@ Display:
   - Dashboard hides Extended / High Risk sections from the main decision screen
   - Full-width Signal Desk replaces KPI summary row
   - Signal Desk collapses when no live signals exist
-  - Potential Momentum loads 12; Reclaimer loads 12; Active Momentum loads 12
+  - Potential Momentum loads 8; Reclaimer loads 8; Active Momentum is hidden from the main dashboard
   - Dedicated Reclaimer section reads early_reclaim_runner=True from elite_watchlist_raw.csv
   - WATCH rows are compact in Signal Desk to reduce height
   - Ticker sections are hidden outside regular market OPEN status
@@ -1623,7 +1623,7 @@ def build_early_reclaim_card(stock, signal=None):
     """
 
 
-def build_early_reclaim_section(stocks, signal_map=None, max_cards=12):
+def build_early_reclaim_section(stocks, signal_map=None, max_cards=8):
     signal_map = signal_map or {}
     count = len(stocks)
 
@@ -1979,7 +1979,7 @@ def ensure_signal_desk_cards_in_main_sections(
     Routing:
       - priority_morning_reclaim symbols -> Priority Morning Reclaim
       - reclaim/pullback setup types -> Reclaimer
-      - ACTIVE_SIGNAL / ACTIVE -> Active Momentum
+      - ACTIVE_SIGNAL / ACTIVE non-reclaim setups -> Potential Momentum
       - TRIGGER_READY / TRIGGER_TOUCHED / WATCH -> Potential Momentum
     """
     signals = signals or []
@@ -2049,39 +2049,43 @@ def ensure_signal_desk_cards_in_main_sections(
         if is_reclaim_setup(signal, source_row):
             potential_rows = remove_symbols_from_rows(potential_rows, {sym})
             active_rows = remove_symbols_from_rows(active_rows, {sym})
-            reclaimer_rows = ensure_symbol_visible(reclaimer_rows, card_row, 12)
+            reclaimer_rows = ensure_symbol_visible(reclaimer_rows, card_row, 8)
             continue
 
         if group == "active":
             potential_rows = remove_symbols_from_rows(potential_rows, {sym})
             reclaimer_rows = remove_symbols_from_rows(reclaimer_rows, {sym})
-            active_rows = ensure_symbol_visible(active_rows, card_row, 12)
+            potential_rows = ensure_symbol_visible(potential_rows, card_row, 8)
             continue
 
         if group in {"ready", "watch"}:
             reclaimer_rows = remove_symbols_from_rows(reclaimer_rows, {sym})
             active_rows = remove_symbols_from_rows(active_rows, {sym})
-            potential_rows = ensure_symbol_visible(potential_rows, card_row, 12)
+            potential_rows = ensure_symbol_visible(potential_rows, card_row, 8)
 
     priority_rows = unique_rows_by_symbol(priority_rows)[:3]
 
     priority_symbols = row_symbol_set(priority_rows, 3)
     reclaimer_rows = unique_rows_by_symbol(
         remove_symbols_from_rows(reclaimer_rows, priority_symbols)
-    )[:12]
+    )[:8]
 
-    reclaimer_symbols = row_symbol_set(reclaimer_rows, 12)
+    reclaimer_symbols = row_symbol_set(reclaimer_rows, 8)
+
+    # Active Momentum is intentionally hidden from the main dashboard. Reclaim
+    # active signals are routed to Reclaimer above; non-reclaim active signals
+    # are routed to Potential Momentum so Signal Desk tickers still have a
+    # visible full card without a separate Active Momentum section.
     active_rows = unique_rows_by_symbol(
         remove_symbols_from_rows(active_rows, priority_symbols | reclaimer_symbols)
-    )[:12]
+    )
 
-    active_symbols = row_symbol_set(active_rows, 12)
     potential_rows = unique_rows_by_symbol(
         remove_symbols_from_rows(
             potential_rows,
-            priority_symbols | reclaimer_symbols | active_symbols,
+            priority_symbols | reclaimer_symbols,
         )
-    )[:12]
+    )[:8]
 
     return priority_rows, potential_rows, reclaimer_rows, active_rows
 
@@ -4382,9 +4386,8 @@ def build_dashboard(potential, active, extended, highrisk, raw, active_watchlist
         # Match the visible card limit so table/sector context reflects the decision screen.
         focus_rows = []
         focus_rows.extend(priority_reclaim_rows[:3])
-        focus_rows.extend(potential[:12])
-        focus_rows.extend(reclaimer[:12])
-        focus_rows.extend(active[:12])
+        focus_rows.extend(potential[:8])
+        focus_rows.extend(reclaimer[:8])
         focus_rows = unique_rows_by_symbol(focus_rows)
 
         sector_snapshot = build_sector_rotation_json_panel(load_sector_rotation_payload())
@@ -4394,7 +4397,7 @@ def build_dashboard(potential, active, extended, highrisk, raw, active_watchlist
             "Cleanest technical setups. Review this section first.",
             potential,
             "section-potential",
-            max_cards=12,
+            max_cards=8,
             signal_map=signal_map,
             collapse_empty=True,
         )
@@ -4402,18 +4405,14 @@ def build_dashboard(potential, active, extended, highrisk, raw, active_watchlist
         early_reclaim_section = build_early_reclaim_section(
             reclaimer,
             signal_map=signal_map,
-            max_cards=12,
+            max_cards=8,
         )
 
-        active_section = build_section(
-            "Active Momentum",
-            "Already moving. Wait for pullback or tight consolidation before entry.",
-            active,
-            "section-active",
-            max_cards=12,
-            signal_map=signal_map,
-            collapse_empty=True,
-        )
+        # Active Momentum remains available to the scanner/signal engine as a
+        # background/shadow bucket, but it is intentionally hidden from the main
+        # trading dashboard to reduce noise. Non-reclaim ACTIVE_SIGNAL cards are
+        # routed into Potential Momentum above.
+        active_section = ""
 
         desk_table = build_desk_table(focus_rows)
 
@@ -4423,7 +4422,6 @@ def build_dashboard(potential, active, extended, highrisk, raw, active_watchlist
             <a href="#priority-reclaim">Priority Morning Reclaim</a>
             <a href="#potential">Potential Momentum</a>
             <a href="#reclaimer">Reclaimer</a>
-            <a href="#active">Active Momentum</a>
             <a href="#sectors">Sector Rotation</a>
             <a href="#outcomes">Outcomes</a>
             <a href="#desk">Table View</a>
@@ -6781,7 +6779,6 @@ td small {
     <div id="premarket">$premarket_section</div>
     <div id="potential">$potential_section</div>
     <div id="reclaimer">$early_reclaim_section</div>
-    <div id="active">$active_section</div>
     <div id="afterhours">$afterhours_section</div>
     <div id="sectors">$sector_snapshot</div>
     $signal_outcomes_html
@@ -6858,8 +6855,8 @@ def main():
     regime = load_regime()
 
     print(f"  Potential Momentum:       {len(potential)}")
-    print(f"  Active Momentum:        {len(active)}")
-    print(f"  Reclaimer:  {len(load_early_reclaim_rows(raw))} (visible section max 12)")
+    print(f"  Active Momentum:        {len(active)} (hidden on dashboard)")
+    print(f"  Reclaimer:  {len(load_early_reclaim_rows(raw))} (visible section max 8)")
     print(f"  Extended / Chase Risk:  {len(extended)} (generated, hidden on dashboard)")
     print(f"  High Risk / Extreme:    {len(highrisk)} (generated, hidden on dashboard)")
     print(f"  Raw Scored:             {len(raw)}")
