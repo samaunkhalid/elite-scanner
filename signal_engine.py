@@ -78,7 +78,7 @@ SIGNAL_STATE_FILE = "signal_state.json"
 SUPPRESSED_SIGNALS_FILE = "suppressed_signals.csv"
 SIGNAL_OUTCOMES_FILE = "signal_outcomes.csv"
 SIGNAL_OUTCOMES_SUMMARY_FILE = "signal_outcomes_summary.json"
-SIGNAL_ENGINE_STRATEGY_VERSION = "v2.8.0_three_family_active_macd_resistance_targets"
+SIGNAL_ENGINE_STRATEGY_VERSION = "v2.8.0_three_family_active_macd_resistance_targets_FIXED_PREV2"
 
 # State retention.
 ACTIVE_STALE_MINUTES = 10
@@ -2234,6 +2234,7 @@ class IntradayMetrics:
     macd_signal: float = 0.0
     macd_histogram: float = 0.0
     macd_histogram_prev: float = 0.0
+    macd_histogram_prev2: float = 0.0
     macd_above_signal: bool = False
     macd_above_zero: bool = False
     macd_bullish_crossover_recent: bool = False
@@ -2248,6 +2249,7 @@ class IntradayMetrics:
     macd_1m_signal: float = 0.0
     macd_1m_histogram: float = 0.0
     macd_1m_histogram_prev: float = 0.0
+    macd_1m_histogram_prev2: float = 0.0
     macd_1m_above_signal: bool = False
     macd_1m_bullish_crossover_recent: bool = False
     macd_1m_bearish_crossover_recent: bool = False
@@ -2443,6 +2445,7 @@ def analyze_execution_bars(symbol: str, bars: List[Dict[str, Any]]) -> IntradayM
         metrics.macd_1m_signal = macd_1m_signal[-1]
         metrics.macd_1m_histogram = macd_1m_hist[-1]
         metrics.macd_1m_histogram_prev = macd_1m_hist[-2]
+        metrics.macd_1m_histogram_prev2 = macd_1m_hist[-3]
         metrics.macd_1m_above_signal = metrics.macd_1m_value >= metrics.macd_1m_signal
         metrics.macd_1m_histogram_rising = macd_1m_hist[-1] > macd_1m_hist[-2]
         metrics.macd_1m_histogram_falling = macd_1m_hist[-1] < macd_1m_hist[-2]
@@ -2730,6 +2733,7 @@ def enrich_structure_from_5min(metrics: IntradayMetrics, bars_5m: List[Dict[str,
         metrics.macd_signal = macd_signal[-1]
         metrics.macd_histogram = macd_hist[-1]
         metrics.macd_histogram_prev = macd_hist[-2]
+        metrics.macd_histogram_prev2 = macd_hist[-3]
 
         metrics.macd_above_signal = metrics.macd_value >= metrics.macd_signal
         metrics.macd_above_zero = metrics.macd_value >= 0
@@ -3518,46 +3522,72 @@ def stayed_above_vwap_recently(metrics: IntradayMetrics, lookback_bars: int = AC
 
 def active_macd_confirmation(metrics: IntradayMetrics) -> Tuple[bool, str]:
     """
-    Non-negotiable Active MACD gate.
+    Non-negotiable Active MACD gate - HARD REQUIRED.
 
     1m MACD is the execution trigger. 5m MACD is the context blocker.
-    VWAP/support strength is not allowed to override failed MACD.
+    NO exceptions. VWAP/support strength CANNOT override failed MACD.
+
+    Uses prev2 histogram values so "falling for 2 bars" means:
+        current < previous < previous_2
+    not merely current < previous.
     """
     if not metrics.has_data:
         return False, "MACD Active blocked: no intraday data"
 
+    one_min_hist_falling_2bars = (
+        metrics.macd_1m_histogram_prev2 != 0.0
+        and metrics.macd_1m_histogram < metrics.macd_1m_histogram_prev
+        and metrics.macd_1m_histogram_prev < metrics.macd_1m_histogram_prev2
+    )
+    five_min_hist_falling_2bars = (
+        metrics.macd_histogram_prev2 != 0.0
+        and metrics.macd_histogram < metrics.macd_histogram_prev
+        and metrics.macd_histogram_prev < metrics.macd_histogram_prev2
+    )
+
+    # HARD BLOCK: bearish divergence.
     if metrics.bearish_momentum_divergence:
         return False, "MACD Active blocked: bearish momentum divergence"
 
+    # HARD BLOCK: 1m bearish crossover.
     if metrics.macd_1m_bearish_crossover_recent:
         return False, "MACD Active blocked: 1m bearish crossover"
 
-    if metrics.macd_1m_curling_down or (metrics.macd_1m_histogram_falling and not metrics.macd_1m_bullish_crossover_recent):
-        return False, "MACD Active blocked: 1m MACD curling/falling down"
+    # HARD BLOCK: true 2-bar 1m histogram fade.
+    if one_min_hist_falling_2bars:
+        return False, "MACD Active blocked: 1m histogram falling for 2+ bars"
 
+    # HARD BLOCK: 1m MACD curling down.
+    if metrics.macd_1m_curling_down:
+        return False, "MACD Active blocked: 1m MACD curling down"
+
+    # HARD REQUIRED: 1m MACD must be curling up / rising / bullish crossover.
     one_min_ok = (
-        metrics.macd_1m_bullish_crossover_recent
-        or metrics.macd_1m_curling_up
-        or (metrics.macd_1m_histogram_rising and not metrics.macd_1m_bearish_crossover_recent)
+        metrics.macd_1m_histogram_rising
+        or metrics.macd_1m_bullish_crossover_recent
+        or (metrics.macd_1m_value > metrics.macd_1m_signal and metrics.macd_1m_curling_up)
     )
-    if ACTIVE_REQUIRE_1M_MACD_CURL_UP and not one_min_ok:
-        return False, "MACD Active blocked: 1m MACD is not curling up"
+    if not one_min_ok:
+        return False, "MACD Active blocked: 1m MACD must be rising/curling up or bullish crossover"
 
+    # HARD BLOCK: 5m bearish crossover.
     if metrics.macd_bearish_crossover_recent:
         return False, "MACD Active blocked: 5m bearish crossover"
 
-    if metrics.macd_histogram_falling and not metrics.macd_above_signal:
-        return False, "MACD Active blocked: 5m histogram falling below signal"
+    # HARD BLOCK: 5m histogram falling hard while below signal.
+    if five_min_hist_falling_2bars and not metrics.macd_above_signal:
+        return False, "MACD Active blocked: 5m histogram falling hard for 2 bars below signal"
 
+    # HARD REQUIRED: 5m MACD must be improving OR at minimum not bearish.
     five_min_ok = (
-        metrics.macd_bullish_crossover_recent
-        or metrics.macd_histogram_rising
-        or (metrics.macd_above_signal and not metrics.macd_histogram_falling)
+        metrics.macd_histogram_rising
+        or (metrics.macd_above_signal and not five_min_hist_falling_2bars)
+        or metrics.macd_bullish_crossover_recent
     )
-    if ACTIVE_REQUIRE_5M_MACD_NOT_BEARISH and not five_min_ok:
-        return False, "MACD Active blocked: 5m MACD is not improving/not bearish"
+    if not five_min_ok:
+        return False, "MACD Active blocked: 5m MACD must be improving or at minimum above signal and not falling"
 
-    return True, "MACD Active confirmed: 1m curling up and 5m improving/not bearish"
+    return True, "MACD Active confirmed: 1m curling up AND 5m improving/not bearish"
 
 
 def active_volume_confirmation(metrics: IntradayMetrics, family: str) -> Tuple[bool, str]:
@@ -5598,6 +5628,7 @@ def diagnostic_candidate(
         "macd_signal": round(metrics.macd_signal, 4),
         "macd_histogram": round(metrics.macd_histogram, 4),
         "macd_histogram_prev": round(metrics.macd_histogram_prev, 4),
+        "macd_histogram_prev2": round(metrics.macd_histogram_prev2, 4),
         "macd_above_signal": metrics.macd_above_signal,
         "macd_above_zero": metrics.macd_above_zero,
         "macd_bullish_crossover_recent": metrics.macd_bullish_crossover_recent,
@@ -5609,6 +5640,7 @@ def diagnostic_candidate(
         "macd_1m_signal": round(metrics.macd_1m_signal, 4),
         "macd_1m_histogram": round(metrics.macd_1m_histogram, 4),
         "macd_1m_histogram_prev": round(metrics.macd_1m_histogram_prev, 4),
+        "macd_1m_histogram_prev2": round(metrics.macd_1m_histogram_prev2, 4),
         "macd_1m_above_signal": metrics.macd_1m_above_signal,
         "macd_1m_bullish_crossover_recent": metrics.macd_1m_bullish_crossover_recent,
         "macd_1m_bearish_crossover_recent": metrics.macd_1m_bearish_crossover_recent,
@@ -5785,6 +5817,7 @@ def signal_base(
         "macd_signal": round(metrics.macd_signal, 4),
         "macd_histogram": round(metrics.macd_histogram, 4),
         "macd_histogram_prev": round(metrics.macd_histogram_prev, 4),
+        "macd_histogram_prev2": round(metrics.macd_histogram_prev2, 4),
         "macd_above_signal": metrics.macd_above_signal,
         "macd_above_zero": metrics.macd_above_zero,
         "macd_bullish_crossover_recent": metrics.macd_bullish_crossover_recent,
@@ -5796,6 +5829,7 @@ def signal_base(
         "macd_1m_signal": round(metrics.macd_1m_signal, 4),
         "macd_1m_histogram": round(metrics.macd_1m_histogram, 4),
         "macd_1m_histogram_prev": round(metrics.macd_1m_histogram_prev, 4),
+        "macd_1m_histogram_prev2": round(metrics.macd_1m_histogram_prev2, 4),
         "macd_1m_above_signal": metrics.macd_1m_above_signal,
         "macd_1m_bullish_crossover_recent": metrics.macd_1m_bullish_crossover_recent,
         "macd_1m_bearish_crossover_recent": metrics.macd_1m_bearish_crossover_recent,
