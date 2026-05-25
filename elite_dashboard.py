@@ -40,7 +40,7 @@ from string import Template
 
 import pandas as pd
 
-DASHBOARD_VERSION = "v2.8.2_system_health"
+DASHBOARD_VERSION = "v2.8.3_system_health_top"
 
 try:
     from zoneinfo import ZoneInfo
@@ -3928,7 +3928,7 @@ def build_status_chip(label, value, state="ok", detail=""):
 
 def build_system_health_panel(scanner_meta, signal_payload, now_ny, market_status, rejected_candidates=None):
     """
-    Compact health strip below macro/regime panels.
+    Compact health strip in the sticky header below scan-time pills.
     It is read-only and does not affect scanner/signal logic.
     """
     engine_version = read_signal_engine_version()
@@ -4918,6 +4918,33 @@ body {
 .status-green { color: #34d399; background: rgba(16, 185, 129, 0.10); }
 .status-yellow { color: #fbbf24; background: rgba(245, 158, 11, 0.10); }
 .status-gray { color: #94a3b8; background: rgba(148, 163, 184, 0.08); }
+
+
+.header-health-inner {
+    max-width: 1480px;
+    margin: 0 auto;
+    padding: 0 22px 14px;
+}
+
+.header-health-inner .system-health-panel {
+    margin-bottom: 0;
+    padding: 10px 12px;
+    border-radius: 12px;
+    background: rgba(15, 23, 42, 0.78);
+}
+
+.header-health-inner .system-health-top {
+    margin-bottom: 8px;
+}
+
+.header-health-inner .health-chip {
+    min-height: 54px;
+    padding: 7px 8px;
+}
+
+.header-health-inner .blocked-summary {
+    max-width: 640px;
+}
 
 .container {
     max-width: 1480px;
@@ -7159,12 +7186,14 @@ td small {
             <span class="status-pill $status_class">Market: $status</span>
         </div>
     </div>
+    <div class="header-health-inner">
+        $system_health_html
+    </div>
 </header>
 
 <main class="container">
     $regime_html
     $macro_html
-    $system_health_html
     $signal_desk_html
 
     $nav_tabs
