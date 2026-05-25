@@ -40,6 +40,8 @@ from string import Template
 
 import pandas as pd
 
+DASHBOARD_VERSION = "v2.8.2_system_health"
+
 try:
     from zoneinfo import ZoneInfo
 except Exception:
@@ -3755,6 +3757,252 @@ def build_signal_diagnostics_panel(rejected_candidates, max_preview=3):
     """
 
 
+def read_signal_engine_version():
+    """
+    Read the active signal_engine.py strategy marker directly from the deployed file.
+    Dashboard only reads this value; it does not import or execute signal_engine.py.
+    """
+    path = "signal_engine.py"
+    if not os.path.exists(path):
+        return "missing"
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            content = f.read(12000)
+        m = re.search(r'SIGNAL_ENGINE_STRATEGY_VERSION\s*=\s*["\']([^"\']+)["\']', content)
+        if m:
+            return m.group(1)
+    except Exception:
+        pass
+    return "unknown"
+
+
+def datetime_age_minutes(value, now_ny=None):
+    """
+    Return age in minutes for timestamp-like value normalized to ET.
+    """
+    if now_ny is None:
+        _, now_ny = get_times()
+
+    dt = parse_et_datetime(value)
+    if not dt:
+        return None
+
+    try:
+        if dt.tzinfo and ZoneInfo:
+            dt = dt.astimezone(ZoneInfo("America/New_York")).replace(tzinfo=None)
+        elif dt.tzinfo:
+            dt = dt.replace(tzinfo=None)
+
+        if getattr(now_ny, "tzinfo", None):
+            now_local = now_ny.astimezone(ZoneInfo("America/New_York")).replace(tzinfo=None) if ZoneInfo else now_ny.replace(tzinfo=None)
+        else:
+            now_local = now_ny
+
+        return max(0, int((now_local - dt).total_seconds() // 60))
+    except Exception:
+        return None
+
+
+def file_mtime_et_label(path):
+    if not os.path.exists(path):
+        return ""
+    try:
+        ts = os.path.getmtime(path)
+        if ZoneInfo:
+            dt = datetime.fromtimestamp(ts, ZoneInfo("America/New_York"))
+        else:
+            dt = datetime.fromtimestamp(ts)
+        return dt.isoformat()
+    except Exception:
+        return ""
+
+
+def health_state_from_age(age_minutes, warn_minutes=7, bad_minutes=15):
+    if age_minutes is None:
+        return "bad", "missing"
+    if age_minutes >= bad_minutes:
+        return "bad", f"{age_minutes}m stale"
+    if age_minutes >= warn_minutes:
+        return "warn", f"{age_minutes}m old"
+    return "ok", f"{age_minutes}m ago"
+
+
+def compact_version_label(version):
+    text = safe_str(version, "unknown")
+    if "FIXED_PREV2" in text:
+        return "FIXED_PREV2"
+    if "three_family_active" in text:
+        return "v2.8.0"
+    if len(text) > 30:
+        return text[:27] + "..."
+    return text
+
+
+def classify_block_reason(reason):
+    low = safe_str(reason, "").lower()
+
+    if not low:
+        return "Other"
+    if "macd" in low or "momentum" in low or "curl" in low or "histogram" in low:
+        return "MACD"
+    if "vwap" in low or "support" in low or "reclaim" in low or "below" in low or "breakdown" in low:
+        return "VWAP/Support"
+    if "volume" in low or "rvol" in low:
+        return "Volume"
+    if "stale" in low or "data" in low or "bar" in low or "alpaca" in low or "no intraday" in low:
+        return "Stale/Data"
+    if "extended" in low or "chase" in low or "too far" in low:
+        return "Extension"
+    if "r/r" in low or "reward" in low or "target" in low:
+        return "R/R"
+    if "event" in low or "news" in low or "earnings" in low:
+        return "News/Event"
+
+    grouped = normalize_blocker_reason(reason)
+    if grouped and grouped != reason:
+        return classify_block_reason(grouped)
+
+    return "Other"
+
+
+def collect_block_reason_counts(rejected_candidates=None, max_suppressed_rows=300):
+    """
+    Count rejection/blocking reasons for the dashboard health strip.
+
+    Priority:
+      1. signal_desk.json rejected_candidates from the current signal refresh
+      2. suppressed_signals.csv as a fallback
+    """
+    from collections import Counter
+
+    counter = Counter()
+    rows_checked = 0
+
+    for candidate in rejected_candidates or []:
+        if not isinstance(candidate, dict):
+            continue
+        reasons = []
+        reasons.extend(candidate.get("rejected_reasons") or [])
+        reasons.extend(candidate.get("not_ready_reasons") or [])
+        reasons.extend(candidate.get("block_reasons") or [])
+        reason_text = (
+            safe_str(candidate.get("reason"))
+            or safe_str(candidate.get("block_reason"))
+            or safe_str(candidate.get("invalidation_reason"))
+        )
+        if reason_text:
+            reasons.append(reason_text)
+        if not reasons:
+            reasons.append("Other")
+        for reason in reasons:
+            counter[classify_block_reason(reason)] += 1
+        rows_checked += 1
+
+    if rows_checked == 0 and os.path.exists("suppressed_signals.csv"):
+        for row in load_csv_records("suppressed_signals.csv", limit=max_suppressed_rows):
+            reason = (
+                safe_str(row.get("reason"))
+                or safe_str(row.get("block_reason"))
+                or safe_str(row.get("invalidation_reason"))
+                or safe_str(row.get("rejected_reason"))
+                or safe_str(row.get("not_ready_reason"))
+                or safe_str(row.get("status_reason"))
+                or "Other"
+            )
+            counter[classify_block_reason(reason)] += 1
+            rows_checked += 1
+
+    return counter, rows_checked
+
+
+def build_status_chip(label, value, state="ok", detail=""):
+    detail_html = f'<span>{esc(detail)}</span>' if detail else ""
+    return f"""
+    <div class="health-chip health-{esc(state)}">
+        <strong>{esc(label)}</strong>
+        <b>{esc(value)}</b>
+        {detail_html}
+    </div>
+    """
+
+
+def build_system_health_panel(scanner_meta, signal_payload, now_ny, market_status, rejected_candidates=None):
+    """
+    Compact health strip below macro/regime panels.
+    It is read-only and does not affect scanner/signal logic.
+    """
+    engine_version = read_signal_engine_version()
+    engine_state = "ok" if "FIXED_PREV2" in engine_version else "warn"
+
+    scanner_age = datetime_age_minutes(scanner_meta.get("scanner_generated_at_et"), now_ny)
+    signal_age = datetime_age_minutes(signal_payload.get("generated_at_et"), now_ny)
+
+    ml_summary = load_json_object("ml_phase0_data/ml_phase0_summary.json", default={})
+    ml_time = safe_str(ml_summary.get("snapshot_time_et"), "") or file_mtime_et_label("ml_phase0_data/ml_phase0_summary.json")
+    ml_age = datetime_age_minutes(ml_time, now_ny)
+    ml_records = safe_int(ml_summary.get("total_records"), 0)
+    ml_active = safe_int(ml_summary.get("active_records"), 0)
+    ml_macd_blocks = safe_int(ml_summary.get("macd_block_records"), 0)
+
+    scanner_state, scanner_detail = health_state_from_age(
+        scanner_age,
+        warn_minutes=8 if market_status == "OPEN" else 90,
+        bad_minutes=15 if market_status == "OPEN" else 240,
+    )
+    signal_state, signal_detail = health_state_from_age(
+        signal_age,
+        warn_minutes=6 if market_status == "OPEN" else 90,
+        bad_minutes=12 if market_status == "OPEN" else 240,
+    )
+    ml_state, ml_detail = health_state_from_age(
+        ml_age,
+        warn_minutes=8 if market_status == "OPEN" else 120,
+        bad_minutes=15 if market_status == "OPEN" else 360,
+    )
+
+    block_counts, block_rows = collect_block_reason_counts(rejected_candidates or signal_payload.get("rejected_candidates", []))
+    block_order = ["MACD", "VWAP/Support", "Volume", "Stale/Data", "Extension", "R/R", "News/Event", "Other"]
+    block_items = []
+    for key in block_order:
+        val = safe_int(block_counts.get(key), 0)
+        if val > 0:
+            block_items.append(f'<span><b>{val}</b> {esc(key)}</span>')
+    if not block_items:
+        block_items.append('<span><b>0</b> current blockers</span>')
+
+    signal_counts = signal_payload.get("counts", {}) if isinstance(signal_payload, dict) else {}
+    active_count = safe_int(signal_counts.get("active"), 0)
+    ready_count = safe_int(signal_counts.get("ready"), 0) + safe_int(signal_counts.get("trigger_ready"), 0) + safe_int(signal_counts.get("touched"), 0)
+    watch_count = safe_int(signal_counts.get("watch"), 0)
+    signal_detail = f"{signal_detail} · A {active_count} / R {ready_count} / W {watch_count}"
+
+    chips = [
+        build_status_chip("Engine", compact_version_label(engine_version), engine_state, "signal_engine.py"),
+        build_status_chip("Dashboard", DASHBOARD_VERSION, "ok", "max8/no-active-section"),
+        build_status_chip("Scanner", "fresh" if scanner_state == "ok" else scanner_state.upper(), scanner_state, scanner_detail),
+        build_status_chip("Signals", "fresh" if signal_state == "ok" else signal_state.upper(), signal_state, signal_detail),
+        build_status_chip("ML Phase 0", f"{ml_records} rows", ml_state, f"{ml_detail} · Active {ml_active} · MACD blocks {ml_macd_blocks}"),
+    ]
+
+    return f"""
+    <section class="system-health-panel">
+        <div class="system-health-top">
+            <div>
+                <strong>System Health</strong>
+                <span>Pre-market/live audit strip. Read-only; does not modify signals.</span>
+            </div>
+            <div class="blocked-summary">
+                <em>Blocked</em>
+                {''.join(block_items)}
+            </div>
+        </div>
+        <div class="health-chip-row">
+            {''.join(chips)}
+        </div>
+    </section>
+    """
+
+
 def is_market_close_expiry_outcome(row):
     """
     True when an outcome row represents end-of-session / after-hours expiry,
@@ -4342,6 +4590,13 @@ def build_dashboard(potential, active, extended, highrisk, raw, active_watchlist
     regime_html = build_regime_html(regime)
     macro = load_macro_calendar()
     macro_html = build_macro_html(macro)
+    system_health_html = build_system_health_panel(
+        scanner_meta,
+        signal_payload,
+        now_ny,
+        status,
+        signal_payload.get("rejected_candidates", []) if isinstance(signal_payload, dict) else [],
+    )
 
     scanner_regular_ready = scanner_data_is_regular_session_ready(now_ny, scanner_meta)
 
@@ -4878,6 +5133,145 @@ body {
 
 .positive { color: #22c55e !important; }
 .negative { color: #ef4444 !important; }
+
+
+.system-health-panel {
+    background: rgba(15, 23, 42, 0.82);
+    border: 1px solid rgba(148, 163, 184, 0.14);
+    border-radius: 14px;
+    padding: 12px 14px;
+    margin-bottom: 16px;
+    box-shadow: 0 10px 26px rgba(0, 0, 0, 0.18);
+}
+
+.system-health-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 14px;
+    margin-bottom: 10px;
+}
+
+.system-health-top strong {
+    display: block;
+    font-size: 14px;
+    color: #f8fafc;
+}
+
+.system-health-top span {
+    display: block;
+    color: #93c5fd;
+    font-size: 11px;
+    margin-top: 2px;
+}
+
+.blocked-summary {
+    display: flex;
+    justify-content: flex-end;
+    flex-wrap: wrap;
+    gap: 6px;
+    max-width: 760px;
+    font-size: 10px;
+    color: #cbd5e1;
+}
+
+.blocked-summary em {
+    color: #94a3b8;
+    font-style: normal;
+    padding: 4px 0;
+}
+
+.blocked-summary span {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 7px;
+    border-radius: 999px;
+    border: 1px solid rgba(148, 163, 184, 0.14);
+    background: rgba(2, 6, 23, 0.36);
+    color: #cbd5e1;
+}
+
+.blocked-summary b {
+    color: #fbbf24;
+}
+
+.health-chip-row {
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 8px;
+}
+
+.health-chip {
+    border-radius: 11px;
+    padding: 8px 9px;
+    background: rgba(2, 6, 23, 0.42);
+    border: 1px solid rgba(148, 163, 184, 0.14);
+    min-height: 62px;
+}
+
+.health-chip strong,
+.health-chip b,
+.health-chip span {
+    display: block;
+}
+
+.health-chip strong {
+    color: #94a3b8;
+    font-size: 9.5px;
+    text-transform: uppercase;
+    letter-spacing: .04em;
+}
+
+.health-chip b {
+    color: #e5e7eb;
+    font-size: 12px;
+    margin-top: 2px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.health-chip span {
+    color: #93c5fd;
+    font-size: 10px;
+    margin-top: 3px;
+    line-height: 1.25;
+}
+
+.health-ok {
+    border-left: 3px solid #22c55e;
+}
+
+.health-warn {
+    border-left: 3px solid #f59e0b;
+}
+
+.health-bad {
+    border-left: 3px solid #ef4444;
+}
+
+.health-warn b {
+    color: #fbbf24;
+}
+
+.health-bad b {
+    color: #f87171;
+}
+
+@media (max-width: 1100px) {
+    .health-chip-row {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .system-health-top {
+        flex-direction: column;
+    }
+
+    .blocked-summary {
+        justify-content: flex-start;
+    }
+}
 
 .signal-desk-panel {
     scroll-margin-top: 118px;
@@ -6770,6 +7164,7 @@ td small {
 <main class="container">
     $regime_html
     $macro_html
+    $system_health_html
     $signal_desk_html
 
     $nav_tabs
@@ -6800,6 +7195,7 @@ td small {
         dashboard_time=dashboard_time_label,
         regime_html=regime_html,
         macro_html=macro_html,
+        system_health_html=system_health_html,
         sector_snapshot=sector_snapshot,
         signal_desk_html=signal_desk_html,
         signal_outcomes_html=signal_outcomes_html,
