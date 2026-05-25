@@ -40,7 +40,7 @@ from string import Template
 
 import pandas as pd
 
-DASHBOARD_VERSION = "v2.8.3_system_health_top"
+DASHBOARD_VERSION = "v2.8.4_normal_layout"
 
 try:
     from zoneinfo import ZoneInfo
@@ -3915,94 +3915,6 @@ def collect_block_reason_counts(rejected_candidates=None, max_suppressed_rows=30
     return counter, rows_checked
 
 
-def build_status_chip(label, value, state="ok", detail=""):
-    detail_html = f'<span>{esc(detail)}</span>' if detail else ""
-    return f"""
-    <div class="health-chip health-{esc(state)}">
-        <strong>{esc(label)}</strong>
-        <b>{esc(value)}</b>
-        {detail_html}
-    </div>
-    """
-
-
-def build_system_health_panel(scanner_meta, signal_payload, now_ny, market_status, rejected_candidates=None):
-    """
-    Compact health strip in the sticky header below scan-time pills.
-    It is read-only and does not affect scanner/signal logic.
-    """
-    engine_version = read_signal_engine_version()
-    engine_state = "ok" if "FIXED_PREV2" in engine_version else "warn"
-
-    scanner_age = datetime_age_minutes(scanner_meta.get("scanner_generated_at_et"), now_ny)
-    signal_age = datetime_age_minutes(signal_payload.get("generated_at_et"), now_ny)
-
-    ml_summary = load_json_object("ml_phase0_data/ml_phase0_summary.json", default={})
-    ml_time = safe_str(ml_summary.get("snapshot_time_et"), "") or file_mtime_et_label("ml_phase0_data/ml_phase0_summary.json")
-    ml_age = datetime_age_minutes(ml_time, now_ny)
-    ml_records = safe_int(ml_summary.get("total_records"), 0)
-    ml_active = safe_int(ml_summary.get("active_records"), 0)
-    ml_macd_blocks = safe_int(ml_summary.get("macd_block_records"), 0)
-
-    scanner_state, scanner_detail = health_state_from_age(
-        scanner_age,
-        warn_minutes=8 if market_status == "OPEN" else 90,
-        bad_minutes=15 if market_status == "OPEN" else 240,
-    )
-    signal_state, signal_detail = health_state_from_age(
-        signal_age,
-        warn_minutes=6 if market_status == "OPEN" else 90,
-        bad_minutes=12 if market_status == "OPEN" else 240,
-    )
-    ml_state, ml_detail = health_state_from_age(
-        ml_age,
-        warn_minutes=8 if market_status == "OPEN" else 120,
-        bad_minutes=15 if market_status == "OPEN" else 360,
-    )
-
-    block_counts, block_rows = collect_block_reason_counts(rejected_candidates or signal_payload.get("rejected_candidates", []))
-    block_order = ["MACD", "VWAP/Support", "Volume", "Stale/Data", "Extension", "R/R", "News/Event", "Other"]
-    block_items = []
-    for key in block_order:
-        val = safe_int(block_counts.get(key), 0)
-        if val > 0:
-            block_items.append(f'<span><b>{val}</b> {esc(key)}</span>')
-    if not block_items:
-        block_items.append('<span><b>0</b> current blockers</span>')
-
-    signal_counts = signal_payload.get("counts", {}) if isinstance(signal_payload, dict) else {}
-    active_count = safe_int(signal_counts.get("active"), 0)
-    ready_count = safe_int(signal_counts.get("ready"), 0) + safe_int(signal_counts.get("trigger_ready"), 0) + safe_int(signal_counts.get("touched"), 0)
-    watch_count = safe_int(signal_counts.get("watch"), 0)
-    signal_detail = f"{signal_detail} · A {active_count} / R {ready_count} / W {watch_count}"
-
-    chips = [
-        build_status_chip("Engine", compact_version_label(engine_version), engine_state, "signal_engine.py"),
-        build_status_chip("Dashboard", DASHBOARD_VERSION, "ok", "max8/no-active-section"),
-        build_status_chip("Scanner", "fresh" if scanner_state == "ok" else scanner_state.upper(), scanner_state, scanner_detail),
-        build_status_chip("Signals", "fresh" if signal_state == "ok" else signal_state.upper(), signal_state, signal_detail),
-        build_status_chip("ML Phase 0", f"{ml_records} rows", ml_state, f"{ml_detail} · Active {ml_active} · MACD blocks {ml_macd_blocks}"),
-    ]
-
-    return f"""
-    <section class="system-health-panel">
-        <div class="system-health-top">
-            <div>
-                <strong>System Health</strong>
-                <span>Pre-market/live audit strip. Read-only; does not modify signals.</span>
-            </div>
-            <div class="blocked-summary">
-                <em>Blocked</em>
-                {''.join(block_items)}
-            </div>
-        </div>
-        <div class="health-chip-row">
-            {''.join(chips)}
-        </div>
-    </section>
-    """
-
-
 def is_market_close_expiry_outcome(row):
     """
     True when an outcome row represents end-of-session / after-hours expiry,
@@ -4590,13 +4502,6 @@ def build_dashboard(potential, active, extended, highrisk, raw, active_watchlist
     regime_html = build_regime_html(regime)
     macro = load_macro_calendar()
     macro_html = build_macro_html(macro)
-    system_health_html = build_system_health_panel(
-        scanner_meta,
-        signal_payload,
-        now_ny,
-        status,
-        signal_payload.get("rejected_candidates", []) if isinstance(signal_payload, dict) else [],
-    )
 
     scanner_regular_ready = scanner_data_is_regular_session_ready(now_ny, scanner_meta)
 
@@ -4920,32 +4825,6 @@ body {
 .status-gray { color: #94a3b8; background: rgba(148, 163, 184, 0.08); }
 
 
-.header-health-inner {
-    max-width: 1480px;
-    margin: 0 auto;
-    padding: 0 22px 14px;
-}
-
-.header-health-inner .system-health-panel {
-    margin-bottom: 0;
-    padding: 10px 12px;
-    border-radius: 12px;
-    background: rgba(15, 23, 42, 0.78);
-}
-
-.header-health-inner .system-health-top {
-    margin-bottom: 8px;
-}
-
-.header-health-inner .health-chip {
-    min-height: 54px;
-    padding: 7px 8px;
-}
-
-.header-health-inner .blocked-summary {
-    max-width: 640px;
-}
-
 .container {
     max-width: 1480px;
     margin: 0 auto;
@@ -5161,144 +5040,6 @@ body {
 .positive { color: #22c55e !important; }
 .negative { color: #ef4444 !important; }
 
-
-.system-health-panel {
-    background: rgba(15, 23, 42, 0.82);
-    border: 1px solid rgba(148, 163, 184, 0.14);
-    border-radius: 14px;
-    padding: 12px 14px;
-    margin-bottom: 16px;
-    box-shadow: 0 10px 26px rgba(0, 0, 0, 0.18);
-}
-
-.system-health-top {
-    display: flex;
-    justify-content: space-between;
-    align-items: flex-start;
-    gap: 14px;
-    margin-bottom: 10px;
-}
-
-.system-health-top strong {
-    display: block;
-    font-size: 14px;
-    color: #f8fafc;
-}
-
-.system-health-top span {
-    display: block;
-    color: #93c5fd;
-    font-size: 11px;
-    margin-top: 2px;
-}
-
-.blocked-summary {
-    display: flex;
-    justify-content: flex-end;
-    flex-wrap: wrap;
-    gap: 6px;
-    max-width: 760px;
-    font-size: 10px;
-    color: #cbd5e1;
-}
-
-.blocked-summary em {
-    color: #94a3b8;
-    font-style: normal;
-    padding: 4px 0;
-}
-
-.blocked-summary span {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    padding: 4px 7px;
-    border-radius: 999px;
-    border: 1px solid rgba(148, 163, 184, 0.14);
-    background: rgba(2, 6, 23, 0.36);
-    color: #cbd5e1;
-}
-
-.blocked-summary b {
-    color: #fbbf24;
-}
-
-.health-chip-row {
-    display: grid;
-    grid-template-columns: repeat(5, minmax(0, 1fr));
-    gap: 8px;
-}
-
-.health-chip {
-    border-radius: 11px;
-    padding: 8px 9px;
-    background: rgba(2, 6, 23, 0.42);
-    border: 1px solid rgba(148, 163, 184, 0.14);
-    min-height: 62px;
-}
-
-.health-chip strong,
-.health-chip b,
-.health-chip span {
-    display: block;
-}
-
-.health-chip strong {
-    color: #94a3b8;
-    font-size: 9.5px;
-    text-transform: uppercase;
-    letter-spacing: .04em;
-}
-
-.health-chip b {
-    color: #e5e7eb;
-    font-size: 12px;
-    margin-top: 2px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-
-.health-chip span {
-    color: #93c5fd;
-    font-size: 10px;
-    margin-top: 3px;
-    line-height: 1.25;
-}
-
-.health-ok {
-    border-left: 3px solid #22c55e;
-}
-
-.health-warn {
-    border-left: 3px solid #f59e0b;
-}
-
-.health-bad {
-    border-left: 3px solid #ef4444;
-}
-
-.health-warn b {
-    color: #fbbf24;
-}
-
-.health-bad b {
-    color: #f87171;
-}
-
-@media (max-width: 1100px) {
-    .health-chip-row {
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-    }
-
-    .system-health-top {
-        flex-direction: column;
-    }
-
-    .blocked-summary {
-        justify-content: flex-start;
-    }
-}
 
 .signal-desk-panel {
     scroll-margin-top: 118px;
@@ -7186,9 +6927,6 @@ td small {
             <span class="status-pill $status_class">Market: $status</span>
         </div>
     </div>
-    <div class="header-health-inner">
-        $system_health_html
-    </div>
 </header>
 
 <main class="container">
@@ -7224,7 +6962,6 @@ td small {
         dashboard_time=dashboard_time_label,
         regime_html=regime_html,
         macro_html=macro_html,
-        system_health_html=system_health_html,
         sector_snapshot=sector_snapshot,
         signal_desk_html=signal_desk_html,
         signal_outcomes_html=signal_outcomes_html,
