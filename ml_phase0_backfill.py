@@ -46,7 +46,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 
-COLLECTOR_VERSION = "ml_phase0_backfill_v1.0.0"
+COLLECTOR_VERSION = "ml_phase0_backfill_v1.1.0_gap_fields"
 DEFAULT_ENGINE_VERSION = "historical_pre_v2_8_or_unknown"
 ET_OFFSET = timezone(timedelta(hours=-4))
 
@@ -434,6 +434,17 @@ def normalize_record(row: Dict[str, Any], source_path: Path, source_row_index: i
         "price": safe_float(first_value(row, ["price", "current_price", "last_price"], 0), 0),
         "change_pct": safe_float(first_value(row, ["change_pct", "pct_change"], 0), 0),
         "vwap_dist_pct": safe_float(first_value(row, ["vwap_dist_pct", "vwap_distance_pct"], 0), 0),
+        "gap_pct": safe_float(first_value(row, ["gap_pct", "gap_percent"], 0), 0),
+        "gap_age_minutes": safe_float(first_value(row, ["gap_age_minutes", "gap_age_min"], 0), 0),
+        "gap_direction": safe_str(first_value(row, ["gap_direction"], "")),
+        "strong_gap_up": bool(safe_str(first_value(row, ["strong_gap_up", "is_strong_gap_up"], "")).lower() in {"1", "true", "yes", "y"}),
+        "previous_close": safe_float(first_value(row, ["previous_close", "prev_close"], 0), 0),
+        "session_open": safe_float(first_value(row, ["session_open", "regular_open", "open"], 0), 0),
+        "premarket_high": safe_float(first_value(row, ["premarket_high", "pre_market_high"], 0), 0),
+        "opening_range_high": safe_float(first_value(row, ["opening_range_high", "or_high"], 0), 0),
+        "opening_range_low": safe_float(first_value(row, ["opening_range_low", "or_low"], 0), 0),
+        "opening_range_minutes": safe_float(first_value(row, ["opening_range_minutes", "or_minutes"], 0), 0),
+        "opening_range_source": safe_str(first_value(row, ["opening_range_source", "or_source"], "")),
         "volume": safe_float(first_value(row, ["volume", "intraday_volume"], 0), 0),
         "rvol": safe_float(first_value(row, ["rvol", "relative_volume"], 0), 0),
         "confidence": safe_float(first_value(row, ["confidence", "confidence_score"], 0), 0),
