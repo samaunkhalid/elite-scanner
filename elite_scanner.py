@@ -1,5 +1,5 @@
 """
-ELITE MULTI-SOURCE STOCK SCANNER v2.1
+ELITE MULTI-SOURCE STOCK SCANNER v2.2 GAP FIELDS
 ======================================
 ChatGPT Calibration Fixes Applied:
 
@@ -306,6 +306,185 @@ def _session_vwap_from_bars(df):
     if valid.any() and vol[valid].sum() > 0:
         return float((typical[valid] * vol[valid]).sum() / vol[valid].sum())
     return _safe_float_local(close.iloc[-1] if len(close) else 0, 0)
+
+
+
+# ==============================================================
+# GAP / OPENING RANGE CONTEXT — v2.2
+# ==============================================================
+#
+# Purpose:
+#   Provide explicit fields required by signal_engine.py STRONG_GAP_BREAKOUT.
+#   These fields are context only; they do not create trade signals by themselves.
+#
+# Fields emitted:
+#   previous_close, session_open, gap_pct, gap_age_minutes,
+#   premarket_high, opening_range_high, opening_range_low,
+#   opening_range_source, gap_direction, strong_gap_up
+#
+# Safety:
+#   - Yahoo quote fields are used only for broad gap context.
+#   - Opening-range values are trusted only when sourced from Alpaca 1Min bars.
+#   - Signal engine still decides WATCH / READY / ACTIVE.
+
+def _now_et_for_scanner():
+    try:
+        if ZoneInfo:
+            return datetime.now(ZoneInfo("America/New_York"))
+    except Exception:
+        pass
+    return datetime.now()
+
+
+def _minutes_since_regular_open_et(now_et=None):
+    try:
+        now_et = now_et or _now_et_for_scanner()
+        session_start = now_et.replace(hour=9, minute=30, second=0, microsecond=0)
+        return max(0.0, (now_et - session_start).total_seconds() / 60.0)
+    except Exception:
+        return 0.0
+
+
+def calculate_gap_context_from_yahoo_quote(q, price=0.0):
+    """
+    Build gap context from Yahoo/yahooquery quote fields.
+
+    This is intentionally conservative: Yahoo does not provide reliable opening
+    range candles here, so opening_range_high/low remain 0 unless we later have
+    Alpaca 1Min bars. Signal engine can use gap_pct/session_open from this and
+    real OR levels from live bars/Alpaca when available.
+    """
+    q = q if isinstance(q, dict) else {}
+    price = _safe_float_local(price, 0.0)
+
+    previous_close = _safe_float_local(
+        q.get("regularMarketPreviousClose")
+        or q.get("previousClose")
+        or q.get("postMarketPreviousClose"),
+        0.0,
+    )
+    session_open = _safe_float_local(
+        q.get("regularMarketOpen")
+        or q.get("open")
+        or q.get("regularMarketPrice")
+        or price,
+        price,
+    )
+    premarket_price = _safe_float_local(q.get("preMarketPrice"), 0.0)
+    # Many Yahoo quote payloads do not expose preMarketHigh. Keep this
+    # conservative and avoid fabricating a high from the full regular session.
+    premarket_high = _safe_float_local(q.get("preMarketHigh") or q.get("preMarketDayHigh"), 0.0)
+    if premarket_high <= 0 and premarket_price > 0:
+        premarket_high = premarket_price
+
+    gap_pct = 0.0
+    if previous_close > 0 and session_open > 0:
+        gap_pct = (session_open - previous_close) / previous_close * 100.0
+
+    if gap_pct > 0.25:
+        gap_direction = "UP"
+    elif gap_pct < -0.25:
+        gap_direction = "DOWN"
+    else:
+        gap_direction = "FLAT"
+
+    return {
+        "previous_close": round(previous_close, 4),
+        "session_open": round(session_open, 4),
+        "gap_pct": round(gap_pct, 2),
+        "gap_age_minutes": round(_minutes_since_regular_open_et(), 1),
+        "premarket_high": round(premarket_high, 4),
+        "opening_range_high": 0.0,
+        "opening_range_low": 0.0,
+        "opening_range_minutes": 0,
+        "opening_range_source": "MISSING",
+        "gap_direction": gap_direction,
+        "strong_gap_up": bool(gap_pct >= 2.0),
+    }
+
+
+def calculate_gap_context_from_intraday_bars(df, previous_close=0.0, premarket_high=0.0):
+    """
+    Build regular-session opening range context from Alpaca 1Min bars.
+
+    Bars are expected to begin at/after 09:30 ET. This gives reliable:
+      - session_open
+      - opening_range_high / low for first 15 minutes
+      - gap_age_minutes from latest bar timestamp
+
+    previous_close/premarket_high are optional and can be supplied from Yahoo.
+    """
+    default = {
+        "previous_close": round(_safe_float_local(previous_close, 0.0), 4),
+        "session_open": 0.0,
+        "gap_pct": 0.0,
+        "gap_age_minutes": 0.0,
+        "premarket_high": round(_safe_float_local(premarket_high, 0.0), 4),
+        "opening_range_high": 0.0,
+        "opening_range_low": 0.0,
+        "opening_range_minutes": 0,
+        "opening_range_source": "MISSING",
+        "gap_direction": "FLAT",
+        "strong_gap_up": False,
+    }
+    try:
+        if df is None or df.empty or "ts" not in df.columns:
+            return default
+
+        work = df.dropna(subset=["ts"]).sort_values("ts").copy()
+        if work.empty:
+            return default
+
+        for col in ["o", "h", "l", "c", "v"]:
+            if col in work.columns:
+                work[col] = pd.to_numeric(work[col], errors="coerce")
+
+        first = work.iloc[0]
+        latest = work.iloc[-1]
+        session_open = _safe_float_local(first.get("o"), _safe_float_local(first.get("c"), 0.0))
+        if session_open <= 0:
+            return default
+
+        latest_ts = latest["ts"]
+        try:
+            if getattr(latest_ts, "tzinfo", None) is None:
+                latest_ts = latest_ts.tz_localize("UTC")
+            latest_et = latest_ts.tz_convert("America/New_York")
+            session_start = latest_et.replace(hour=9, minute=30, second=0, microsecond=0)
+            gap_age = max(0.0, (latest_et - session_start).total_seconds() / 60.0)
+        except Exception:
+            gap_age = _minutes_since_regular_open_et()
+
+        # First 15 regular-session minutes. If fewer than 15 bars exist, use what
+        # exists and label minutes accordingly.
+        opening = work.head(15)
+        opening_high = _safe_float_local(opening["h"].max() if "h" in opening.columns else 0, 0.0)
+        opening_low = _safe_float_local(opening["l"].min() if "l" in opening.columns else 0, 0.0)
+
+        prev = _safe_float_local(previous_close, 0.0)
+        gap_pct = ((session_open - prev) / prev * 100.0) if prev > 0 else 0.0
+        if gap_pct > 0.25:
+            gap_direction = "UP"
+        elif gap_pct < -0.25:
+            gap_direction = "DOWN"
+        else:
+            gap_direction = "FLAT"
+
+        return {
+            "previous_close": round(prev, 4),
+            "session_open": round(session_open, 4),
+            "gap_pct": round(gap_pct, 2),
+            "gap_age_minutes": round(gap_age, 1),
+            "premarket_high": round(_safe_float_local(premarket_high, 0.0), 4),
+            "opening_range_high": round(opening_high, 4),
+            "opening_range_low": round(opening_low, 4),
+            "opening_range_minutes": int(min(len(opening), 15)),
+            "opening_range_source": "ALPACA_1MIN",
+            "gap_direction": gap_direction,
+            "strong_gap_up": bool(gap_pct >= 2.0),
+        }
+    except Exception:
+        return default
 
 
 def _ema(series, span):
@@ -664,6 +843,7 @@ def analyze_early_reclaim_symbol(symbol, rows):
     from_hod_pct = ((price - hod) / hod * 100.0) if hod > 0 else 0.0
     session_open = _safe_float_local(df.iloc[0].get("o"), price)
     intraday_change_pct = ((price - session_open) / session_open * 100.0) if session_open > 0 else 0.0
+    gap_context = calculate_gap_context_from_intraday_bars(df)
 
     return {
         "symbol": symbol,
@@ -700,6 +880,17 @@ def analyze_early_reclaim_symbol(symbol, rows):
         "price_updated_at": latest.get("t", ""),
         "data_source": "Alpaca SIP Early Reclaim",
         "intraday_setup_type": "VWAP_EMA_RECLAIM_RUNNER",
+        "previous_close": gap_context.get("previous_close", 0),
+        "session_open": gap_context.get("session_open", 0),
+        "gap_pct": gap_context.get("gap_pct", 0),
+        "gap_age_minutes": gap_context.get("gap_age_minutes", 0),
+        "premarket_high": gap_context.get("premarket_high", 0),
+        "opening_range_high": gap_context.get("opening_range_high", 0),
+        "opening_range_low": gap_context.get("opening_range_low", 0),
+        "opening_range_minutes": gap_context.get("opening_range_minutes", 0),
+        "opening_range_source": gap_context.get("opening_range_source", "MISSING"),
+        "gap_direction": gap_context.get("gap_direction", "FLAT"),
+        "strong_gap_up": gap_context.get("strong_gap_up", False),
     }
 
 
@@ -788,6 +979,29 @@ def apply_early_reclaim_to_results(results, early_rows):
             stock["from_hod_pct"] = er.get("from_hod_pct", stock.get("from_hod_pct", 0))
             stock["near_hod"] = er.get("near_hod", stock.get("near_hod", False))
             stock["intraday_volume"] = er.get("intraday_volume", stock.get("intraday_volume", 0))
+            # Preserve Yahoo previous-close/gap context when present; use Alpaca
+            # 1Min bars to add reliable opening-range levels.
+            for _field in [
+                "opening_range_high",
+                "opening_range_low",
+                "opening_range_minutes",
+                "opening_range_source",
+            ]:
+                stock[_field] = er.get(_field, stock.get(_field, 0))
+            for _field in [
+                "previous_close",
+                "session_open",
+                "gap_pct",
+                "gap_age_minutes",
+                "premarket_high",
+                "gap_direction",
+                "strong_gap_up",
+            ]:
+                _v = er.get(_field, None)
+                if _v not in [None, "", 0, 0.0, "0", "0.0"]:
+                    stock[_field] = _v
+                else:
+                    stock[_field] = stock.get(_field, _v if _v is not None else 0)
             stock["data_source"] = "Yahoo + Alpaca SIP Early Reclaim"
             stock["score"] = min(100, max(float(stock.get("score", 0) or 0), EARLY_RECLAIM_FORCE_SCORE_FLOOR) + 4)
             existing_tags = str(stock.get("tags", "") or "")
@@ -808,6 +1022,17 @@ def apply_early_reclaim_to_results(results, early_rows):
                 "sector_score": 0,
                 "price": er.get("price", 0),
                 "change_pct": er.get("change_pct", 0),
+                "previous_close": er.get("previous_close", 0),
+                "session_open": er.get("session_open", 0),
+                "gap_pct": er.get("gap_pct", 0),
+                "gap_age_minutes": er.get("gap_age_minutes", 0),
+                "premarket_high": er.get("premarket_high", 0),
+                "opening_range_high": er.get("opening_range_high", 0),
+                "opening_range_low": er.get("opening_range_low", 0),
+                "opening_range_minutes": er.get("opening_range_minutes", 0),
+                "opening_range_source": er.get("opening_range_source", "MISSING"),
+                "gap_direction": er.get("gap_direction", "FLAT"),
+                "strong_gap_up": er.get("strong_gap_up", False),
                 "score": max(EARLY_RECLAIM_FORCE_SCORE_FLOOR, er.get("early_reclaim_score", 0)),
                 "base_score": 0,
                 "ext_penalty": 0,
@@ -1863,7 +2088,13 @@ def main():
 
     tickers = Ticker(universe, asynchronous=True)
     quotes = tickers.price
-    history = tickers.history(period="1y", interval="1d")
+    
+    print(f"  Fetching historical data...")
+    try:
+        history = tickers.history(period="1y", interval="1d")
+    except Exception as e:
+        print(f"  History fetch failed: {e}")
+        history = pd.DataFrame()
 
     print(f"  Fetching key stats...")
     try:
@@ -1916,6 +2147,7 @@ def main():
             today_vol = q.get("regularMarketVolume", 0) or 0
             market_cap = q.get("marketCap", 0) or 0
             exchange = q.get("exchange", "")
+            gap_context = calculate_gap_context_from_yahoo_quote(q, price)
 
             hist_df = None
             try:
@@ -2051,6 +2283,17 @@ def main():
                 "sector_score": sector_score,
                 "price": round(price, 2),
                 "change_pct": round(change_pct, 2),
+                "previous_close": gap_context.get("previous_close", 0),
+                "session_open": gap_context.get("session_open", 0),
+                "gap_pct": gap_context.get("gap_pct", 0),
+                "gap_age_minutes": gap_context.get("gap_age_minutes", 0),
+                "premarket_high": gap_context.get("premarket_high", 0),
+                "opening_range_high": gap_context.get("opening_range_high", 0),
+                "opening_range_low": gap_context.get("opening_range_low", 0),
+                "opening_range_minutes": gap_context.get("opening_range_minutes", 0),
+                "opening_range_source": gap_context.get("opening_range_source", "MISSING"),
+                "gap_direction": gap_context.get("gap_direction", "FLAT"),
+                "strong_gap_up": gap_context.get("strong_gap_up", False),
                 "score": final_score,
                 "base_score": base_total,
                 "ext_penalty": ext_penalty,
@@ -2337,6 +2580,7 @@ def main():
         "symbol",
         "price",
         "change_pct",
+        "gap_pct",
         "score",
         "setup_bucket",
         "risk_category",
