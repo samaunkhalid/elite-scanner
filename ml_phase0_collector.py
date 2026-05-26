@@ -50,7 +50,7 @@ except Exception:  # pragma: no cover
     ZoneInfo = None
 
 
-COLLECTOR_VERSION = "ml_phase0_collector_v1.0.0"
+COLLECTOR_VERSION = "ml_phase0_collector_v1.1.0_gap_fields"
 DEFAULT_OUTPUT_DIR = "ml_phase0_data"
 
 SIGNAL_DESK_FILE = "signal_desk.json"
@@ -88,6 +88,17 @@ CORE_CSV_COLUMNS = [
     "vwap_dist_pct",
     "above_vwap",
     "hod_distance_pct",
+    "gap_pct",
+    "gap_age_minutes",
+    "gap_direction",
+    "strong_gap_up",
+    "previous_close",
+    "session_open",
+    "premarket_high",
+    "opening_range_high",
+    "opening_range_low",
+    "opening_range_minutes",
+    "opening_range_source",
     "macd_1m_histogram",
     "macd_1m_histogram_prev",
     "macd_1m_histogram_prev2",
@@ -429,6 +440,17 @@ def build_snapshot_record(
         "vwap_dist_pct": safe_float(first_present(row, ["vwap_dist_pct", "vwap_distance_pct"], 0.0), 0.0),
         "above_vwap": safe_bool(first_present(row, ["above_vwap", "is_above_vwap"], False)),
         "hod_distance_pct": safe_float(first_present(row, ["hod_distance_pct", "from_hod_pct"], 0.0), 0.0),
+        "gap_pct": safe_float(first_present(row, ["gap_pct", "gap_percent"], 0.0), 0.0),
+        "gap_age_minutes": safe_float(first_present(row, ["gap_age_minutes", "gap_age_min"], 0.0), 0.0),
+        "gap_direction": safe_str(first_present(row, ["gap_direction"], "")),
+        "strong_gap_up": safe_bool(first_present(row, ["strong_gap_up", "is_strong_gap_up"], False)),
+        "previous_close": safe_float(first_present(row, ["previous_close", "prev_close"], 0.0), 0.0),
+        "session_open": safe_float(first_present(row, ["session_open", "regular_open", "open"], 0.0), 0.0),
+        "premarket_high": safe_float(first_present(row, ["premarket_high", "pre_market_high"], 0.0), 0.0),
+        "opening_range_high": safe_float(first_present(row, ["opening_range_high", "or_high"], 0.0), 0.0),
+        "opening_range_low": safe_float(first_present(row, ["opening_range_low", "or_low"], 0.0), 0.0),
+        "opening_range_minutes": safe_float(first_present(row, ["opening_range_minutes", "or_minutes"], 0.0), 0.0),
+        "opening_range_source": safe_str(first_present(row, ["opening_range_source", "or_source"], "")),
         "macd_1m_histogram": m1,
         "macd_1m_histogram_prev": m1p,
         "macd_1m_histogram_prev2": m1p2,
