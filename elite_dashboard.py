@@ -40,7 +40,7 @@ from string import Template
 
 import pandas as pd
 
-DASHBOARD_VERSION = "v2.8.4_normal_layout"
+DASHBOARD_VERSION = "v2.8.6_v284_setup_first_gap_compatible"
 
 try:
     from zoneinfo import ZoneInfo
@@ -4479,6 +4479,57 @@ def build_signal_desk_panel(signals, rejected_candidates=None):
     </section>
     """
 
+
+def is_morning_reclaim_focus_window(now_ny):
+    """
+    Dashboard display window for Priority Morning Reclaim.
+
+    Purpose:
+      - The signal engine still owns Active / Ready / Watch promotion.
+      - This display helper only keeps the morning reclaim lane useful when
+        the engine priority_morning_reclaim array is empty but the Reclaimer
+        scanner lane already has valid monitor candidates.
+
+    Window:
+      09:35 through 11:00 ET.
+    """
+    mins = minutes_of_day(now_ny)
+    return (9 * 60 + 35) <= mins <= (11 * 60)
+
+
+def build_morning_reclaim_fallback_rows(reclaimer_rows, max_cards=3):
+    """
+    Display-only fallback for Priority Morning Reclaim.
+
+    If signal_engine.py returns priority_morning_reclaim = [] but the Reclaimer
+    scanner lane has candidates during the morning window, show the top 3
+    Reclaimer monitor candidates in Priority Morning Reclaim.
+
+    This does NOT promote anything to Active/Ready/Watch and does NOT change
+    signal logic. It only prevents the morning lane from staying empty while
+    Reclaimer candidates exist.
+    """
+    fallback = []
+    for row in unique_rows_by_symbol(reclaimer_rows or []):
+        sym = safe_str(row.get("symbol"), "").upper()
+        if not sym:
+            continue
+        out = dict(row)
+        out["symbol"] = sym
+        out["priority_morning_reclaim"] = True
+        out["morning_reclaim_label"] = "Morning Reclaim Monitor"
+        if not safe_str(out.get("intraday_setup_type"), ""):
+            out["intraday_setup_type"] = (
+                safe_str(out.get("setup_type"))
+                or safe_str(out.get("setup_name"))
+                or "VWAP_EMA_RECLAIM_RUNNER"
+            )
+        fallback.append(out)
+        if len(fallback) >= max_cards:
+            break
+    return fallback
+
+
 # ==============================================================
 # HTML BUILDER
 # ==============================================================
@@ -4522,9 +4573,13 @@ def build_dashboard(potential, active, extended, highrisk, raw, active_watchlist
         active = apply_live_market_overlay(active, live_market_map)
         raw = apply_live_market_overlay(raw, live_market_map)
         reclaimer = load_early_reclaim_rows(raw)
+        priority_payload = signal_payload.get("priority_morning_reclaim", [])
+        if not priority_payload and is_morning_reclaim_focus_window(now_ny):
+            priority_payload = build_morning_reclaim_fallback_rows(reclaimer, max_cards=3)
+
         priority_reclaim_rows, potential, reclaimer, active = ensure_signal_desk_cards_in_main_sections(
             signals,
-            signal_payload.get("priority_morning_reclaim", []),
+            priority_payload,
             potential,
             reclaimer,
             active,
