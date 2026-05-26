@@ -78,7 +78,7 @@ SIGNAL_STATE_FILE = "signal_state.json"
 SUPPRESSED_SIGNALS_FILE = "suppressed_signals.csv"
 SIGNAL_OUTCOMES_FILE = "signal_outcomes.csv"
 SIGNAL_OUTCOMES_SUMMARY_FILE = "signal_outcomes_summary.json"
-SIGNAL_ENGINE_STRATEGY_VERSION = "v2.8.2_watch_ready_balance_1m_active"
+SIGNAL_ENGINE_STRATEGY_VERSION = "v2.8.3_morning_reclaim_monitor_1m_active"
 
 # State retention.
 ACTIVE_STALE_MINUTES = 10
@@ -4193,25 +4193,73 @@ def apply_morning_reclaim_priority_fields(
 
 
 def build_priority_morning_reclaim(signals: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    v2.8.3:
+    The Priority Morning Reclaim panel is a focus/monitor lane from 09:35-11:00.
+    It must not stay empty only because a reclaim candidate is not yet Ready/Active.
+
+    ACTIVE/READY rules remain strict. This function only decides which reclaim
+    candidates are shown in the morning focus lane.
+    """
     if not is_morning_reclaim_window():
         return []
 
-    candidates = [
-        s for s in signals
-        if s.get("priority_morning_reclaim")
-        and safe_float(s.get("morning_reclaim_score"), 0) >= MORNING_RECLAIM_MIN_PRIORITY_SCORE
-    ]
+    candidates: List[Dict[str, Any]] = []
+    seen: set = set()
 
-    candidates.sort(
-        key=lambda s: (
+    status_rank = {"ACTIVE_SIGNAL": 0, "TRIGGER_TOUCHED": 1, "TRIGGER_READY": 2, "WATCH": 3}
+
+    for raw in signals:
+        status = normalize_status(raw.get("signal_status"))
+        if status in {"", "WATCH_REMOVED", "INVALIDATED", "SUPPRESSED"}:
+            continue
+
+        symbol = safe_str(raw.get("symbol"), "").upper()
+        if not symbol or symbol in seen:
+            continue
+
+        setup_type = safe_str(raw.get("setup_type"), "")
+        morning_priority = safe_str(raw.get("morning_reclaim_priority"), "").upper()
+        score = safe_float(raw.get("morning_reclaim_score"), 0)
+        is_reclaim_focus = (
+            raw.get("priority_morning_reclaim")
+            or morning_priority in {"PRIORITY", "CANDIDATE"}
+            or (
+                is_reclaim_lifecycle_setup_type(setup_type)
+                and status in {"WATCH", "TRIGGER_READY", "TRIGGER_TOUCHED", "ACTIVE_SIGNAL"}
+            )
+        )
+
+        if not is_reclaim_focus:
+            continue
+
+        s = dict(raw)
+        if not s.get("morning_reclaim_label"):
+            s["morning_reclaim_label"] = "Morning Reclaim Monitor"
+        if not s.get("morning_reclaim_priority") or s.get("morning_reclaim_priority") == "NONE":
+            s["morning_reclaim_priority"] = "MONITOR"
+        if not s.get("morning_reclaim_note"):
+            s["morning_reclaim_note"] = "Monitor only until MACD, volume, support, and R/R confirm."
+        if not s.get("priority_morning_reclaim") and score >= MORNING_RECLAIM_MIN_WATCH_SCORE:
+            # Keep active strictness unchanged; this flag is only for dashboard focus display.
+            s["priority_morning_reclaim"] = True
+
+        candidates.append(s)
+        seen.add(symbol)
+
+    def rank_key(s: Dict[str, Any]) -> Tuple[int, float, int, float, float, str]:
+        priority = safe_str(s.get("morning_reclaim_priority"), "").upper()
+        priority_rank = {"PRIORITY": 0, "CANDIDATE": 1, "MONITOR": 2, "NONE": 3}.get(priority, 3)
+        return (
+            priority_rank,
             -safe_float(s.get("morning_reclaim_score"), 0),
-            {"ACTIVE_SIGNAL": 0, "TRIGGER_TOUCHED": 1, "TRIGGER_READY": 2, "WATCH": 3}.get(normalize_status(s.get("signal_status")), 9),
-            safe_float(s.get("vwap_dist_pct"), 99),
+            status_rank.get(normalize_status(s.get("signal_status")), 9),
             -safe_float(s.get("confidence"), 0),
+            safe_float(s.get("vwap_dist_pct"), 99),
             safe_str(s.get("symbol"), ""),
         )
-    )
 
+    candidates.sort(key=rank_key)
     return candidates[:max(0, MORNING_RECLAIM_MAX_TICKERS)]
 
 
