@@ -78,7 +78,7 @@ SIGNAL_STATE_FILE = "signal_state.json"
 SUPPRESSED_SIGNALS_FILE = "suppressed_signals.csv"
 SIGNAL_OUTCOMES_FILE = "signal_outcomes.csv"
 SIGNAL_OUTCOMES_SUMMARY_FILE = "signal_outcomes_summary.json"
-SIGNAL_ENGINE_STRATEGY_VERSION = "v2.8.3_morning_reclaim_monitor_1m_active"
+SIGNAL_ENGINE_STRATEGY_VERSION = "v2.8.4_final_setup_first_ready_active_target_gap_openair"
 
 # State retention.
 ACTIVE_STALE_MINUTES = 10
@@ -159,11 +159,21 @@ HOD_BASE_MAX_RANGE_PCT = 2.00
 HOD_BASE_MIN_STRUCTURE_BARS = 3
 HOD_BASE_MAX_VWAP_EXTENSION_PCT = 4.00
 
-MIN_RR_WATCH = 0.20  # v2.8.2: WATCH is monitor-only; Ready/Active still require 1.5R
-MIN_RR = 1.5
-MIN_CONF_WATCH = 55.0  # v2.8.2: allow developing monitor names; Ready/Active remain strict
-MIN_CONF_READY = 75.0
-MIN_CONF_READY_LATE_DAY = 80.0
+# Strong gap breakout discipline.
+# Gap-up names that remain above VWAP all morning are NOT VWAP reclaims.
+# They must be classified separately so Reclaimer labels stay clean.
+STRONG_GAP_MIN_PCT = float(os.getenv("STRONG_GAP_MIN_PCT", "2.0"))
+STRONG_GAP_MAX_VWAP_EXTENSION_PCT = float(os.getenv("STRONG_GAP_MAX_VWAP_EXTENSION_PCT", "4.0"))
+STRONG_GAP_READY_MIN_CONF = float(os.getenv("STRONG_GAP_READY_MIN_CONF", "70"))
+STRONG_GAP_ACTIVE_MIN_CONF = float(os.getenv("STRONG_GAP_ACTIVE_MIN_CONF", "80"))
+
+MIN_RR_WATCH = 0.20   # WATCH is monitor-only.
+MIN_RR_READY = 1.00   # READY = prepare / near-trigger; does not require full Active R/R.
+MIN_RR_ACTIVE = 1.50  # ACTIVE = execution-quality only.
+MIN_RR = MIN_RR_ACTIVE  # Backward-compatible alias for Active checks.
+MIN_CONF_WATCH = 55.0
+MIN_CONF_READY = 70.0
+MIN_CONF_READY_LATE_DAY = 75.0
 MIN_CONF_ACTIVE = 80.0
 
 # Trigger-touch confirmation prevents noisy same-candle Active -> Invalidated events.
@@ -2537,10 +2547,18 @@ def analyze_execution_bars(symbol: str, bars: List[Dict[str, Any]]) -> IntradayM
             vol_ratio = vol_bar / prior_avg_vol if prior_avg_vol > 0 else 0.0
 
             prev_close = safe_float(clean[global_idx - 1].get("c"), 0) if global_idx > 0 else 0
+            prior_lookback = clean[max(0, global_idx - ACTIVE_VWAP_RECENT_BELOW_LOOKBACK_BARS):global_idx]
             was_below = (
-                prev_close > 0 and prev_close < metrics.vwap * 0.998
-            ) or low <= metrics.vwap * 0.998 or open_ < metrics.vwap * 0.998
-            reclaimed = close >= metrics.vwap * 1.001 and high >= metrics.vwap
+                (prev_close > 0 and prev_close < metrics.vwap * 0.998)
+                or low <= metrics.vwap * 0.998
+                or open_ < metrics.vwap * 0.998
+                or any(
+                    safe_float(x.get("c"), 0) < metrics.vwap * 0.998
+                    or safe_float(x.get("l"), 0) < metrics.vwap * 0.998
+                    for x in prior_lookback
+                )
+            )
+            reclaimed = close >= metrics.vwap * 1.0005 and high >= metrics.vwap
             green_or_strong = close >= open_ or close >= ((high + low) / 2.0 if high > low else close)
 
             if was_below and reclaimed and green_or_strong:
@@ -3467,6 +3485,7 @@ def vwap_lifecycle_macd_confirmation(metrics: IntradayMetrics, setup_type: str) 
 ACTIVE_FAMILY_RECLAIMER = "RECLAIMER"
 ACTIVE_FAMILY_VWAP_PULLBACK = "VWAP_PULLBACK_CONTINUATION"
 ACTIVE_FAMILY_HOD_BASE_SQUEEZE = "HOD_BASE_SQUEEZE"
+ACTIVE_FAMILY_STRONG_GAP = "STRONG_GAP_BREAKOUT"
 ACTIVE_FAMILY_OTHER = "OTHER"
 
 RECLAIMER_SETUP_TYPES = {
@@ -3481,6 +3500,9 @@ HOD_BASE_SQUEEZE_SETUP_TYPES = {
     "HOD_BASE_BREAKOUT",
     "BASE_SQUEEZE_BREAKOUT",
 }
+STRONG_GAP_SETUP_TYPES = {
+    "STRONG_GAP_BREAKOUT",
+}
 
 
 def active_strategy_family(setup_type: str) -> str:
@@ -3491,6 +3513,8 @@ def active_strategy_family(setup_type: str) -> str:
         return ACTIVE_FAMILY_VWAP_PULLBACK
     if setup in HOD_BASE_SQUEEZE_SETUP_TYPES:
         return ACTIVE_FAMILY_HOD_BASE_SQUEEZE
+    if setup in STRONG_GAP_SETUP_TYPES:
+        return ACTIVE_FAMILY_STRONG_GAP
     return ACTIVE_FAMILY_OTHER
 
 
@@ -3633,6 +3657,86 @@ def active_support_extension_confirmation(metrics: IntradayMetrics) -> Tuple[boo
     return True, "VWAP/EMA support and extension confirmed"
 
 
+def gap_pct_for_row(row: Optional[Dict[str, Any]], metrics: Optional[IntradayMetrics] = None) -> float:
+    """Best-effort gap/change percentage for separate STRONG_GAP_BREAKOUT setup."""
+    row = row or {}
+    for key in [
+        "gap_pct",
+        "premarket_gap_pct",
+        "pre_market_gap_pct",
+        "extended_gap_pct",
+        "open_gap_pct",
+        "change_pct",
+        "day_change_pct",
+    ]:
+        val = row.get(key)
+        if val not in [None, "", "—"]:
+            parsed = safe_float(val, None)
+            if parsed is not None:
+                return parsed
+    if metrics is not None:
+        return safe_float(metrics.day_change_pct, 0)
+    return 0.0
+
+
+def strong_gap_structure_ok(row: Optional[Dict[str, Any]], metrics: IntradayMetrics) -> Tuple[bool, str]:
+    """
+    Strong gap breakout is separate from VWAP reclaim.
+
+    Valid broad gap-up day logic:
+      - stock gaps / is strongly up
+      - holds above VWAP and opening range/support
+      - not excessively extended from VWAP
+      - has constructive volume/structure
+    """
+    if not metrics.has_data:
+        return False, "Strong gap blocked: no intraday bars"
+
+    gap_pct = gap_pct_for_row(row, metrics)
+    if gap_pct < STRONG_GAP_MIN_PCT:
+        return False, f"Strong gap blocked: gap/change {gap_pct:.2f}% < {STRONG_GAP_MIN_PCT:.1f}%"
+
+    if not metrics.above_vwap:
+        return False, "Strong gap blocked: price is below VWAP"
+
+    if metrics.vwap_dist_pct > STRONG_GAP_MAX_VWAP_EXTENSION_PCT:
+        return False, (
+            f"Strong gap blocked: VWAP extension {metrics.vwap_dist_pct:.2f}% "
+            f"> {STRONG_GAP_MAX_VWAP_EXTENSION_PCT:.1f}%"
+        )
+
+    if metrics.session_open > 0 and metrics.price < metrics.session_open * 0.998:
+        return False, "Strong gap blocked: price is below session open"
+
+    support_hold = (
+        metrics.pullback_holding_vwap
+        or metrics.vwap_clean_hold_count >= 1
+        or metrics.price_above_ema9
+        or (metrics.opening_range_low > 0 and metrics.price >= metrics.opening_range_low)
+    )
+    if not support_hold:
+        return False, "Strong gap blocked: no VWAP/opening-range support hold"
+
+    volume_ok = (
+        metrics.recent_volume_expanding
+        or metrics.volume_stable_or_increasing
+        or metrics.avg_volume_1m_5 >= max(MIN_LIVE_1M_AVG_VOL_WATCH, 1)
+        or metrics.recent_5m_dollar_volume >= MIN_LIVE_5M_DOLLAR_VOL_WATCH
+    )
+    if metrics.volume_fading_vs_morning and not metrics.recent_volume_expanding:
+        return False, f"Strong gap blocked: {volume_fade_label(metrics)}"
+    if not volume_ok:
+        return False, "Strong gap blocked: volume confirmation missing"
+
+    if metrics.macd_1m_bearish_crossover_recent or (
+        metrics.macd_1m_curling_down and not metrics.macd_1m_above_signal
+    ):
+        return False, "Strong gap blocked: 1m MACD bearish"
+
+    return True, f"Strong gap breakout structure confirmed: gap/change {gap_pct:.2f}%, VWAP held"
+
+
+
 def active_family_structure_confirmation(
     setup_type: str,
     metrics: IntradayMetrics,
@@ -3703,6 +3807,12 @@ def active_family_structure_confirmation(
         if not metrics.base_volume_constructive and not metrics.recent_volume_expanding:
             return False, "Family Active blocked: base volume not constructive"
         return True, "Family confirmed: HOD Base/Squeeze Breakout", family
+
+    if family == ACTIVE_FAMILY_STRONG_GAP:
+        ok, reason = strong_gap_structure_ok(row, metrics)
+        if not ok:
+            return False, f"Family Active blocked: {reason}", family
+        return True, "Family confirmed: Strong Gap Breakout", family
 
     return False, f"Family Active blocked: setup {safe_str(setup_type, 'UNKNOWN')} is watch-only, not Active eligible", family
 
@@ -3912,8 +4022,8 @@ def early_reclaim_trigger_ready_bypass(
     if not macd_ok:
         return False, macd_reason
 
-    if rr < MIN_RR:
-        return False, "R/R below 1.5"
+    if rr < MIN_RR_READY:
+        return False, f"R/R below READY minimum {MIN_RR_READY:.1f}"
 
     if confidence < EARLY_RECLAIM_READY_MIN_CONF:
         return False, f"Confidence below early reclaim bypass minimum {EARLY_RECLAIM_READY_MIN_CONF:.0f}"
@@ -4429,52 +4539,248 @@ def nearest_round_level_above(price: float) -> List[float]:
     return sorted(set(round(x, 4) for x in levels))
 
 
-def resistance_levels_above(entry: float, metrics: IntradayMetrics, row: Dict[str, Any]) -> List[float]:
+def real_resistance_levels_above(entry: float, metrics: IntradayMetrics, row: Dict[str, Any]) -> List[float]:
+    """
+    Real target levels only.
+
+    T1 should be a genuine market level, not a tiny synthetic VWAP extension.
+    Sources are current HOD, base/range highs, premarket high, prior day high,
+    scanner-provided resistance, and meaningful round levels.
+    """
     levels: List[float] = []
 
     for level in [
         metrics.hod,
         metrics.base_high,
         safe_float(row.get("premarket_high"), 0),
+        safe_float(row.get("pre_market_high"), 0),
         safe_float(row.get("prior_day_high"), 0),
+        safe_float(row.get("previous_day_high"), 0),
+        safe_float(row.get("range_high"), 0),
+        safe_float(row.get("open_range_high"), 0),
+        safe_float(row.get("opening_range_high"), 0),
+        safe_float(row.get("intraday_resistance"), 0),
         safe_float(row.get("resistance"), 0),
+        safe_float(row.get("resistance_1"), 0),
+        safe_float(row.get("target_resistance"), 0),
     ]:
         if level > entry * 1.001:
             levels.append(level)
 
-    levels.extend(nearest_round_level_above(entry))
-
-    # Extension levels above VWAP.
-    if metrics.vwap > 0:
-        for ext in [1.0, 1.5, 2.0, 3.0, 4.0]:
-            level = metrics.vwap * (1 + ext / 100.0)
-            if level > entry * 1.001:
-                levels.append(level)
+    # Round levels are real psychology/liquidity levels, but ignore tiny nearby
+    # pennies that would create meaningless T1/R:R. Keep only meaningful round
+    # levels at least 0.35% above entry.
+    for level in nearest_round_level_above(entry):
+        if level >= entry * 1.0035:
+            levels.append(level)
 
     return sorted(set(round(x, 4) for x in levels if x > entry * 1.001))
 
 
-def pick_targets(entry: float, risk: float, metrics: IntradayMetrics, row: Dict[str, Any]) -> Tuple[float, float, float, str]:
-    """
-    Resistance-first target logic.
+# Backward-compatible name used by older code.
+def resistance_levels_above(entry: float, metrics: IntradayMetrics, row: Dict[str, Any]) -> List[float]:
+    return real_resistance_levels_above(entry, metrics, row)
 
-    Target 1 is the first real/technical resistance above entry. R/R validates
-    the trade after the target is selected. A fixed R-multiple may be kept only
-    as a fallback/checkpoint when no resistance is available.
-    """
-    min_target = entry + MIN_RR * risk
-    levels = resistance_levels_above(entry, metrics, row)
 
-    if levels:
-        target_1 = min(levels)
+
+def major_round_or_liquidity_level_above(entry: float, min_level: float) -> List[float]:
+    """
+    Return psychology/liquidity levels above entry that are far enough to matter.
+
+    These are allowed as real levels because they are visible on charts/order flow.
+    They are NOT the old tiny VWAP-extension targets.
+    """
+    levels = []
+    for level in nearest_round_level_above(entry):
+        if level >= min_level:
+            levels.append(level)
+    return sorted(set(round(x, 4) for x in levels))
+
+
+def breakout_reference_level(row: Dict[str, Any], metrics: IntradayMetrics) -> float:
+    """
+    Best visible breakout reference already being challenged/broken.
+
+    Used only for OPEN_AIR measured-move logic when no resistance remains above.
+    """
+    refs = [
+        metrics.hod,
+        metrics.base_high,
+        safe_float(row.get("premarket_high"), 0),
+        safe_float(row.get("pre_market_high"), 0),
+        safe_float(row.get("opening_range_high"), 0),
+        safe_float(row.get("open_range_high"), 0),
+        safe_float(row.get("range_high"), 0),
+        safe_float(row.get("intraday_resistance"), 0),
+        safe_float(row.get("resistance"), 0),
+        safe_float(row.get("resistance_1"), 0),
+        safe_float(row.get("prior_day_high"), 0),
+        safe_float(row.get("previous_day_high"), 0),
+    ]
+    price = safe_float(metrics.price, 0)
+    entry = price if price > 0 else safe_float(row.get("price"), 0)
+
+    usable = []
+    for level in refs:
+        level = safe_float(level, 0)
+        if level <= 0 or entry <= 0:
+            continue
+        # A level is a breakout reference if price/entry is at or above it.
+        if entry >= level * 0.997:
+            usable.append(level)
+
+    return max(usable) if usable else 0.0
+
+
+def one_min_macd_not_bearish_for_ready(metrics: IntradayMetrics) -> bool:
+    """READY needs 1m momentum not to be obviously bearish; ACTIVE has stricter MACD gate."""
+    if not metrics.has_data:
+        return False
+    if metrics.macd_1m_bearish_crossover_recent:
+        return False
+    if metrics.macd_1m_curling_down and metrics.macd_1m_histogram_falling and not metrics.macd_1m_above_signal:
+        return False
+    return (
+        metrics.macd_1m_histogram_rising
+        or metrics.macd_1m_curling_up
+        or metrics.macd_1m_above_signal
+        or metrics.macd_1m_bullish_crossover_recent
+    )
+
+
+def open_air_breakout_confirmed(row: Dict[str, Any], metrics: IntradayMetrics, setup_type: str = "") -> Tuple[bool, str]:
+    """
+    No real resistance above is only actionable when the ticker is actually in
+    open-air breakout structure.
+
+    This deliberately does NOT allow generic "above VWAP + up 2%" names.
+    It needs a visible breakout reference: HOD, premarket high, opening range
+    high, range/base high, or prior high being broken/held.
+    """
+    if not metrics.has_data:
+        return False, "No intraday bars"
+
+    if not metrics.above_vwap:
+        return False, "Open-air blocked: price is not above VWAP"
+
+    if metrics.vwap_dist_pct > max(ACTIVE_MAX_VWAP_DIST_PCT, HOD_BASE_MAX_VWAP_EXTENSION_PCT):
+        return False, f"Open-air blocked: extended {metrics.vwap_dist_pct:.2f}% above VWAP"
+
+    reference = breakout_reference_level(row, metrics)
+    if reference <= 0:
+        return False, "Open-air blocked: no breakout reference level"
+
+    price = safe_float(metrics.price, 0)
+    if price <= 0 or price < reference * 0.997:
+        return False, "Open-air blocked: price is not breaking/holding the reference level"
+
+    volume_ok = (
+        metrics.recent_volume_expanding
+        or metrics.base_volume_constructive
+        or metrics.vwap_reclaim_volume_ratio >= ACTIVE_MIN_BREAKOUT_VOLUME_EXPANSION_RATIO
+        or metrics.recent_to_morning_volume_ratio >= 0.90
+    )
+    if not volume_ok:
+        return False, "Open-air blocked: breakout volume not confirmed"
+
+    if not one_min_macd_not_bearish_for_ready(metrics):
+        return False, "Open-air blocked: 1m MACD not improving"
+
+    setup = safe_str(setup_type, "").upper()
+    gap_ok, gap_reason = strong_gap_structure_ok(row, metrics)
+    hod_ok = setup in {"HOD_BASE_BREAKOUT", "BASE_SQUEEZE_BREAKOUT"} and (
+        metrics.consolidating_near_high or metrics.price_near_base_breakout or metrics.base_compression
+    )
+    reference_ok = reference > 0 and price >= reference * 0.997
+
+    if setup == "STRONG_GAP_BREAKOUT" and not gap_ok:
+        return False, gap_reason
+
+    if not (gap_ok or hod_ok or reference_ok):
+        return False, "Open-air blocked: no gap/HOD/base breakout structure"
+
+    return True, f"Open-air breakout confirmed above {reference:.2f}"
+
+
+def measured_open_air_targets(entry: float, risk: float, row: Dict[str, Any], metrics: IntradayMetrics) -> Tuple[float, float]:
+    """
+    Measured-move target used only for confirmed open-air breakouts.
+
+    This is not a fake VWAP extension. It uses range/ATR/risk projection when
+    the chart has already broken visible resistance and no higher resistance is
+    available in the data.
+    """
+    atr_pct = safe_float(row.get("atr_pct"), 0)
+    range_size = 0.0
+
+    if metrics.base_high > 0 and metrics.base_low > 0 and metrics.base_high > metrics.base_low:
+        range_size = max(range_size, metrics.base_high - metrics.base_low)
+
+    open_range_high = safe_float(row.get("opening_range_high") or row.get("open_range_high"), 0)
+    open_range_low = safe_float(row.get("opening_range_low") or row.get("open_range_low"), 0)
+    if open_range_high > 0 and open_range_low > 0 and open_range_high > open_range_low:
+        range_size = max(range_size, open_range_high - open_range_low)
+
+    if atr_pct > 0:
+        # Conservative intraday target: 35% of daily ATR from entry.
+        range_size = max(range_size, entry * (atr_pct / 100.0) * 0.35)
+
+    # Always require at least Active-quality reward if this becomes actionable.
+    move = max(range_size, risk * MIN_RR_ACTIVE, entry * 0.006)
+    target_1 = entry + move
+    target_2 = entry + max(move * 1.6, risk * 2.0)
+    return round(target_1, 4), round(target_2, 4)
+
+
+def pick_targets(entry: float, risk: float, metrics: IntradayMetrics, row: Dict[str, Any], setup_type: str = "") -> Tuple[float, float, float, str]:
+    """
+    Final target logic for v2.8.4.
+
+    Priority:
+      1. Real resistance above entry.
+      2. Real psychology/liquidity level if meaningful.
+      3. OPEN_AIR_MEASURED_MOVE only if breakout structure is confirmed.
+      4. WATCH_ONLY when no real target exists.
+
+    R/R validates the setup after target selection.
+    """
+    min_ready_target = entry + MIN_RR_READY * risk
+    min_active_target = entry + MIN_RR_ACTIVE * risk
+
+    levels = real_resistance_levels_above(entry, metrics, row)
+    usable = [x for x in levels if x >= min_ready_target]
+    if usable:
+        target_1 = usable[0]
         higher = [x for x in levels if x > target_1 * 1.001]
-        target_2 = higher[0] if higher else max(entry + 2.0 * risk, target_1 + 0.5 * risk)
-        return target_1, target_2, min_target, "RESISTANCE_FIRST"
+        target_2 = higher[0] if higher else max(min_active_target, target_1 + 0.5 * risk)
+        return target_1, target_2, min_active_target, "REAL_RESISTANCE_FIRST"
 
-    # Last-resort fallback. The trade still must pass R/R validation.
-    target_1 = min_target
-    target_2 = entry + 2.0 * risk
-    return target_1, target_2, min_target, "R_MULTIPLE_FALLBACK"
+    # If real levels exist but are too close, keep them honest as non-actionable.
+    if levels:
+        target_1 = levels[0]
+        higher = [x for x in levels if x > target_1 * 1.001]
+        target_2 = higher[0] if higher else max(min_active_target, target_1 + 0.5 * risk)
+        return target_1, target_2, min_active_target, "REAL_RESISTANCE_TOO_CLOSE"
+
+    # Meaningful round/liquidity level that gives Ready-quality R/R.
+    round_levels = major_round_or_liquidity_level_above(entry, min_ready_target)
+    if round_levels:
+        target_1 = round_levels[0]
+        higher = [x for x in round_levels if x > target_1 * 1.001]
+        target_2 = higher[0] if higher else max(min_active_target, target_1 + 0.5 * risk)
+        return target_1, target_2, min_active_target, "ROUND_LIQUIDITY_LEVEL"
+
+    # Open-air breakout: no resistance above because price already broke the
+    # obvious levels. This is actionable only with breakout structure.
+    open_air_ok, _ = open_air_breakout_confirmed(row, metrics, setup_type)
+    if open_air_ok:
+        target_1, target_2 = measured_open_air_targets(entry, risk, row, metrics)
+        return target_1, target_2, min_active_target, "OPEN_AIR_MEASURED_MOVE"
+
+    # No reliable target. Keep as Watch only.
+    target_1 = entry + max(MIN_RR_WATCH * risk, entry * 0.002)
+    target_2 = entry + max(MIN_RR_READY * risk, entry * 0.004)
+    return target_1, target_2, min_active_target, "NO_REAL_TARGET_WATCH_ONLY"
 
 
 def build_trade_plan(
@@ -4534,15 +4840,18 @@ def build_trade_plan(
             valid = False
             rejection_reason = f"Stop distance {stop_distance_pct:.2f}% > max {max_stop:.1f}%"
 
-        target_1, target_2, min_target_1, target_source = pick_targets(entry, risk, metrics, row)
+        target_1, target_2, min_target_1, target_source = pick_targets(entry, risk, metrics, row, setup_type)
 
         rr = (target_1 - entry) / risk if risk > 0 else 0.0
 
-        # v2.8.2: Do NOT invalidate the whole plan only because R/R is below 1.5.
-        # WATCH is monitor-only and can still display a structurally usable plan.
-        # TRIGGER_READY / ACTIVE_SIGNAL still require rr >= MIN_RR in the promotion gates.
-        if valid and rr < MIN_RR:
-            rejection_reason = "Target 1 R/R below 1.5; monitor only until resistance/RR improves"
+        # Do NOT invalidate the whole plan only because R/R is below Active minimum.
+        # WATCH is monitor-only and READY has a lower threshold than ACTIVE.
+        if valid and target_source == "NO_REAL_TARGET_WATCH_ONLY":
+            rejection_reason = "No real target or confirmed open-air breakout; monitor only"
+        elif valid and target_source == "REAL_RESISTANCE_TOO_CLOSE":
+            rejection_reason = f"Nearest real resistance gives R/R {rr:.2f} below READY minimum {MIN_RR_READY:.1f}; monitor only"
+        elif valid and rr < MIN_RR_READY:
+            rejection_reason = f"Target 1 R/R below READY minimum {MIN_RR_READY:.1f}; monitor only until resistance/RR improves"
 
     return {
         "setup_type": setup_type,
@@ -4553,8 +4862,9 @@ def build_trade_plan(
         "target_1": round(target_1, 4),
         "target_2": round(target_2, 4),
         "reward_risk": round(rr, 2),
-        "rr_valid_for_ready": bool(rr >= MIN_RR),
-        "monitor_only_rr": bool(rr < MIN_RR),
+        "rr_valid_for_ready": bool(rr >= MIN_RR_READY and target_source not in {"REAL_RESISTANCE_TOO_CLOSE", "NO_REAL_TARGET_WATCH_ONLY"}),
+        "rr_valid_for_active": bool(rr >= MIN_RR_ACTIVE and target_source in {"REAL_RESISTANCE_FIRST", "ROUND_LIQUIDITY_LEVEL", "OPEN_AIR_MEASURED_MOVE"}),
+        "monitor_only_rr": bool(rr < MIN_RR_READY),
         "stop_distance_pct": round(stop_distance_pct, 2),
         "support_level": round(support, 4),
         "structure_label": structure_label,
@@ -4565,48 +4875,53 @@ def build_trade_plan(
     }
 
 
-def choose_best_provisional_plan(
+def choose_setup_first_monitor_plan(
     row: Dict[str, Any],
     metrics: IntradayMetrics,
     quote: Dict[str, Any],
 ) -> Tuple[str, Dict[str, Any]]:
     """
-    Build all setup plans and choose the best valid one.
-    Invalid plans are kept only if no valid plan exists, for diagnostics.
-    """
-    setup_order = [
-        "VWAP_RECLAIM_BREAKOUT",
-        "VWAP_PULLBACK_CONTINUATION",
-        "HOD_BASE_BREAKOUT",
-        "BASE_SQUEEZE_BREAKOUT",
-    ]
-    if scanner_marks_early_reclaim(row):
-        setup_order.insert(0, "VWAP_EMA_RECLAIM_RUNNER")
+    v2.8.4 final monitor-plan selection.
 
-    plans = []
+    IMPORTANT:
+    This is intentionally setup-first, not R/R-first.
+    It uses setup_candidate_order() to classify the chart behavior first, then
+    builds the plan for each candidate setup in that order. A generic high-R/R
+    plan must not steal the label from a true reclaim / continuation / gap setup.
+    """
+    setup_order = setup_candidate_order(metrics, row)
+    if not setup_order:
+        setup_order = [
+            "VWAP_RECLAIM_BREAKOUT",
+            "VWAP_PULLBACK_CONTINUATION",
+            "STRONG_GAP_BREAKOUT",
+            "HOD_BASE_BREAKOUT",
+            "BASE_SQUEEZE_BREAKOUT",
+        ]
+
+    plans: List[Tuple[str, Dict[str, Any]]] = []
+
     for setup in setup_order:
         plan = build_trade_plan(row, metrics, setup, quote)
         plans.append((setup, plan))
 
-    valid_plans = [(s, p) for s, p in plans if p.get("valid") and safe_float(p.get("reward_risk"), 0) >= MIN_RR_WATCH]
+        if plan.get("valid") and safe_float(plan.get("reward_risk"), 0) >= MIN_RR_WATCH:
+            return setup, plan
 
-    if scanner_marks_early_reclaim(row):
-        # Do not let a generic VWAP pullback / HOD plan steal an early reclaim
-        # runner simply because it has a slightly better R/R. Prior reclaim cases showed
-        # that scanner-marked early reclaim rows need to stay in their dedicated
-        # lifecycle so entry stays near VWAP/EMA and ACTIVE confirmation remains strict.
-        for setup_name, setup_plan in valid_plans:
-            if setup_name == "VWAP_EMA_RECLAIM_RUNNER":
-                return setup_name, setup_plan
+    # Diagnostics only: keep setup-order priority instead of sorting by R/R.
+    for setup, plan in plans:
+        if plan.get("valid"):
+            return setup, plan
 
-    if valid_plans:
-        # Prefer better R/R, but keep setup order as tie-break.
-        valid_plans.sort(key=lambda x: (-safe_float(x[1].get("reward_risk"), 0), setup_order.index(x[0])))
-        return valid_plans[0]
+    if plans:
+        return plans[0]
 
-    # Return the "least bad" plan for diagnostics.
-    plans.sort(key=lambda x: (-safe_float(x[1].get("reward_risk"), 0), safe_float(x[1].get("stop_distance_pct"), 999)))
-    return plans[0]
+    return "MONITORING", {
+        "valid": False,
+        "setup_type": "MONITORING",
+        "rejection_reason": "No setup-specific plan could be built",
+        "reward_risk": 0.0,
+    }
 
 
 # ==============================================================
@@ -4965,8 +5280,8 @@ def setup_vwap_ema_reclaim_runner_ready(
     if not macd_ok:
         return False, macd_reason
 
-    if rr < MIN_RR:
-        return False, "R/R below 1.5"
+    if rr < MIN_RR_READY:
+        return False, f"R/R below READY minimum {MIN_RR_READY:.1f}"
 
     required_conf = MIN_CONF_RECLAIM_READY
     if confidence < required_conf:
@@ -5031,8 +5346,8 @@ def setup_vwap_reclaim_ready(metrics: IntradayMetrics, rr: float, confidence: fl
     if not macd_ok:
         return False, macd_reason
 
-    if rr < MIN_RR:
-        return False, "R/R below 1.5"
+    if rr < MIN_RR_READY:
+        return False, f"R/R below READY minimum {MIN_RR_READY:.1f}"
 
     required_conf = MIN_CONF_RECLAIM_READY
     if confidence < required_conf:
@@ -5076,8 +5391,8 @@ def setup_reclaim_pullback_ready(metrics: IntradayMetrics, rr: float, confidence
     if not macd_ok:
         return False, macd_reason
 
-    if rr < MIN_RR:
-        return False, "R/R below 1.5"
+    if rr < MIN_RR_READY:
+        return False, f"R/R below READY minimum {MIN_RR_READY:.1f}"
 
     required_conf = MIN_CONF_RECLAIM_PULLBACK_READY
     if confidence < required_conf:
@@ -5140,8 +5455,8 @@ def setup_vwap_pullback_ready(metrics: IntradayMetrics, rr: float, confidence: f
     if metrics.vwap_recent_touch_count >= 4 and metrics.vwap_touch_status == "MANY_TOUCHES_WITH_WEAK_STRUCTURE":
         return False, "4th+ recent VWAP touches with weak structure"
 
-    if rr < MIN_RR:
-        return False, "R/R below 1.5"
+    if rr < MIN_RR_READY:
+        return False, f"R/R below READY minimum {MIN_RR_READY:.1f}"
 
     required_conf = ready_confidence_required("VALID_AFTERNOON" if is_late_day() else "VALID_MORNING")
     if confidence < required_conf:
@@ -5176,8 +5491,8 @@ def base_squeeze_not_ready_reason(metrics: IntradayMetrics, rr: float, confidenc
         reasons.append("price not close to base breakout")
     if metrics.hod > 0 and pct_change(metrics.base_low, metrics.hod) < -2.5:
         reasons.append("Base too far from HOD")
-    if rr < MIN_RR:
-        reasons.append("R/R below 1.5")
+    if rr < MIN_RR_READY:
+        reasons.append(f"R/R below READY minimum {MIN_RR_READY:.1f}")
     required_conf = ready_confidence_required("VALID_AFTERNOON" if is_late_day() else "VALID_MORNING")
     if confidence < required_conf:
         reasons.append(f"Confidence below {required_conf:.0f}")
@@ -5215,8 +5530,8 @@ def setup_base_squeeze_ready(metrics: IntradayMetrics, rr: float, confidence: fl
     if metrics.hod > 0 and pct_change(metrics.base_low, metrics.hod) < -2.5:
         return False, "Base too far from HOD"
 
-    if rr < MIN_RR:
-        return False, "R/R below 1.5"
+    if rr < MIN_RR_READY:
+        return False, f"R/R below READY minimum {MIN_RR_READY:.1f}"
 
     required_conf = ready_confidence_required("VALID_AFTERNOON" if is_late_day() else "VALID_MORNING")
     if confidence < required_conf:
@@ -5276,6 +5591,33 @@ def hod_base_structure_not_ready_reason(metrics: IntradayMetrics) -> str:
     return "; ".join(reasons) if reasons else "HOD base breakout structure not ready"
 
 
+def setup_strong_gap_breakout_ready(
+    metrics: IntradayMetrics,
+    rr: float,
+    confidence: float,
+    row: Optional[Dict[str, Any]] = None,
+) -> Tuple[bool, str]:
+    """
+    Strong gap breakout is for broad gap-up days where names stay above VWAP
+    from the open. It is NOT a VWAP reclaim.
+    """
+    ok, reason = strong_gap_structure_ok(row, metrics)
+    if not ok:
+        return False, reason
+
+    if rr < MIN_RR_READY:
+        return False, f"R/R below READY minimum {MIN_RR_READY:.1f}"
+
+    required_conf = STRONG_GAP_READY_MIN_CONF
+    if confidence < required_conf:
+        return False, f"Confidence below strong-gap minimum {required_conf:.0f}"
+
+    if metrics.hod > 0 and metrics.hod_distance_pct < -3.0 and not metrics.price_near_base_breakout:
+        return False, f"Strong gap not near breakout/HOD area ({metrics.hod_distance_pct:.2f}% from HOD)"
+
+    return True, reason
+
+
 def setup_hod_base_breakout_ready(metrics: IntradayMetrics, rr: float, confidence: float) -> Tuple[bool, str]:
     """
     HOD breakout is a trigger AFTER a base forms, not a separate vertical-chase setup.
@@ -5311,8 +5653,8 @@ def setup_hod_base_breakout_ready(metrics: IntradayMetrics, rr: float, confidenc
     if structure_reason != "HOD base breakout structure not ready":
         return False, structure_reason
 
-    if rr < MIN_RR:
-        return False, "R/R below 1.5"
+    if rr < MIN_RR_READY:
+        return False, f"R/R below READY minimum {MIN_RR_READY:.1f}"
 
     required_conf = ready_confidence_required("VALID_AFTERNOON" if is_late_day() else "VALID_MORNING")
     if confidence < required_conf:
@@ -5329,73 +5671,156 @@ def setup_hod_breakout_ready(metrics: IntradayMetrics, rr: float, confidence: fl
     return setup_hod_base_breakout_ready(metrics, rr, confidence)
 
 
-def choose_setup(metrics: IntradayMetrics, plan: Dict[str, Any], confidence: float, phase: str, row: Optional[Dict[str, Any]] = None) -> Tuple[str, str, List[str]]:
+# Legacy choose_setup() removed in v2.8.4 final.
+# Ready selection now uses choose_ready_setup_and_plan():
+# setup_candidate_order() -> build setup-specific plan -> validate target/RR/readiness.
+def setup_candidate_order(metrics: IntradayMetrics, row: Dict[str, Any]) -> List[str]:
+    """
+    v2.8.4 final flow: classify chart behavior first, then build/validate the
+    plan for that setup. This prevents a generic high-R/R plan from stealing the
+    setup label before the actual chart sequence is checked.
+    """
+    candidates: List[str] = []
+
+    # True reclaim family first only when there is real below-VWAP -> above-VWAP
+    # evidence or scanner lifecycle evidence.
+    if scanner_marks_early_reclaim(row) or metrics.vwap_reclaim_recent or metrics.vwap_reclaim_lifecycle_active or metrics.reclaim_pullback_holding or vwap_was_below_recently(metrics):
+        if scanner_marks_early_reclaim(row):
+            candidates.append("VWAP_EMA_RECLAIM_RUNNER")
+        candidates.extend(["VWAP_RECLAIM_BREAKOUT", "RECLAIM_PULLBACK_HOLDING"])
+
+    # Strong gap names that stayed above VWAP should not be mislabeled as reclaim.
+    gap_ok, _ = strong_gap_structure_ok(row, metrics)
+    if gap_ok:
+        candidates.append("STRONG_GAP_BREAKOUT")
+
+    # Above-VWAP all-day pullback continuation.
+    if metrics.above_vwap and stayed_above_vwap_recently(metrics) and not vwap_was_below_recently(metrics):
+        candidates.append("VWAP_PULLBACK_CONTINUATION")
+
+    # HOD/base structures.
+    if metrics.consolidating_near_high or metrics.base_compression or metrics.price_near_base_breakout:
+        candidates.extend(["HOD_BASE_BREAKOUT", "BASE_SQUEEZE_BREAKOUT"])
+
+    # Fallback order for diagnostics/Watch only.
+    candidates.extend([
+        "VWAP_PULLBACK_CONTINUATION",
+        "VWAP_RECLAIM_BREAKOUT",
+        "HOD_BASE_BREAKOUT",
+        "BASE_SQUEEZE_BREAKOUT",
+    ])
+
+    out: List[str] = []
+    seen = set()
+    for setup in candidates:
+        if setup not in seen:
+            seen.add(setup)
+            out.append(setup)
+    return out
+
+
+def setup_ready_check(
+    setup_type: str,
+    metrics: IntradayMetrics,
+    plan: Dict[str, Any],
+    confidence: float,
+    phase: str,
+    row: Optional[Dict[str, Any]] = None,
+) -> Tuple[bool, str]:
+    """Run the correct readiness function for a setup-specific plan."""
+    setup = safe_str(setup_type, "").upper()
     rr = safe_float(plan.get("reward_risk"), 0)
-    reasons = []
     row = row or {}
 
-    def _event_allowed(candidate_setup: str) -> Tuple[bool, str]:
-        ok, event_reasons = earnings_reaction_requirements(row, metrics, plan, confidence)
-        if ok:
-            return True, ""
-        return False, "; ".join(event_reasons)
+    if setup == "VWAP_EMA_RECLAIM_RUNNER":
+        return setup_vwap_ema_reclaim_runner_ready(metrics, rr, confidence, row)
+    if setup == "VWAP_RECLAIM_BREAKOUT":
+        return setup_vwap_reclaim_ready(metrics, rr, confidence)
+    if setup == "RECLAIM_PULLBACK_HOLDING":
+        return setup_reclaim_pullback_ready(metrics, rr, confidence)
+    if setup == "VWAP_PULLBACK_CONTINUATION":
+        return setup_vwap_pullback_ready(metrics, rr, confidence)
+    if setup == "STRONG_GAP_BREAKOUT":
+        return setup_strong_gap_breakout_ready(metrics, rr, confidence, row)
+    if setup == "HOD_BASE_BREAKOUT":
+        return setup_hod_base_breakout_ready(metrics, rr, confidence)
+    if setup == "BASE_SQUEEZE_BREAKOUT":
+        return setup_base_squeeze_ready(metrics, rr, confidence)
+    return False, f"Unknown setup {setup or 'UNKNOWN'}"
 
-    early_reclaim_ready, early_reclaim_reason = setup_vwap_ema_reclaim_runner_ready(metrics, rr, confidence, row)
-    if early_reclaim_ready:
-        event_ok, event_reason = _event_allowed("VWAP_EMA_RECLAIM_RUNNER")
-        if event_ok:
-            return "VWAP_EMA_RECLAIM_RUNNER", early_reclaim_reason, reasons
-        reasons.append(f"Earnings reaction filter: {event_reason}")
-    if scanner_marks_early_reclaim(row):
-        reasons.append(f"Early VWAP/EMA reclaim not ready: {early_reclaim_reason}")
 
-    reclaim_ready, reclaim_reason = setup_vwap_reclaim_ready(metrics, rr, confidence)
-    if reclaim_ready:
-        event_ok, event_reason = _event_allowed("VWAP_RECLAIM_BREAKOUT")
-        if event_ok:
-            return "VWAP_RECLAIM_BREAKOUT", reclaim_reason, reasons
-        reasons.append(f"Earnings reaction filter: {event_reason}")
-    reasons.append(f"VWAP reclaim not ready: {reclaim_reason}")
+def plan_has_ready_target(plan: Dict[str, Any]) -> Tuple[bool, str]:
+    """READY requires either real resistance/liquidity or confirmed open-air target."""
+    source = safe_str(plan.get("target_source"), "")
+    if source in {"REAL_RESISTANCE_FIRST", "ROUND_LIQUIDITY_LEVEL", "OPEN_AIR_MEASURED_MOVE"}:
+        return True, source
+    if source == "REAL_RESISTANCE_TOO_CLOSE":
+        return False, "Real resistance too close for Ready"
+    if source == "NO_REAL_TARGET_WATCH_ONLY":
+        return False, "No real target/open-air structure for Ready"
+    return False, f"Unsupported target source {source or 'UNKNOWN'}"
 
-    reclaim_pullback_ready, reclaim_pullback_reason = setup_reclaim_pullback_ready(metrics, rr, confidence)
-    if reclaim_pullback_ready:
-        event_ok, event_reason = _event_allowed("RECLAIM_PULLBACK_HOLDING")
-        if event_ok:
-            return "RECLAIM_PULLBACK_HOLDING", reclaim_pullback_reason, reasons
-        reasons.append(f"Earnings reaction filter: {event_reason}")
-    reasons.append(f"Reclaim pullback not ready: {reclaim_pullback_reason}")
 
-    vwap_ready, vwap_reason = setup_vwap_pullback_ready(metrics, rr, confidence)
-    if vwap_ready:
-        event_ok, event_reason = _event_allowed("VWAP_PULLBACK_CONTINUATION")
-        if event_ok:
-            return "VWAP_PULLBACK_CONTINUATION", vwap_reason, reasons
-        reasons.append(f"Earnings reaction filter: {event_reason}")
-    reasons.append(f"VWAP pullback not ready: {vwap_reason}")
+def plan_has_active_target(plan: Dict[str, Any]) -> Tuple[bool, str]:
+    """ACTIVE requires full R/R and an actionable target source."""
+    source = safe_str(plan.get("target_source"), "")
+    if source not in {"REAL_RESISTANCE_FIRST", "ROUND_LIQUIDITY_LEVEL", "OPEN_AIR_MEASURED_MOVE"}:
+        return False, f"Active blocked: target source {source or 'UNKNOWN'} is not actionable"
+    if safe_float(plan.get("reward_risk"), 0) < MIN_RR_ACTIVE:
+        return False, f"Active blocked: R/R {safe_float(plan.get('reward_risk'), 0):.2f} < {MIN_RR_ACTIVE:.1f}"
+    return True, source
 
-    hod_base_ready, hod_base_reason = setup_hod_base_breakout_ready(metrics, rr, confidence)
-    if hod_base_ready:
-        event_ok, event_reason = _event_allowed("HOD_BASE_BREAKOUT")
-        if event_ok:
-            return "HOD_BASE_BREAKOUT", hod_base_reason, reasons
-        reasons.append(f"Earnings reaction filter: {event_reason}")
-    reasons.append(f"HOD base breakout not ready: {hod_base_reason}")
 
-    base_ready, base_reason = setup_base_squeeze_ready(metrics, rr, confidence)
-    if base_ready:
-        # If this is actually a near-HOD base but failed HOD_BASE_BREAKOUT,
-        # do not relabel it as a generic base squeeze. It needs a proper HOD
-        # base break or a fresh non-HOD base.
-        if metrics.hod > 0 and metrics.hod_distance_pct >= HOD_BASE_MAX_DISTANCE_FROM_HOD_PCT and metrics.consolidating_near_high:
-            reasons.append("Base/flag near HOD requires HOD_BASE_BREAKOUT confirmation; not using generic base label")
-        else:
-            event_ok, event_reason = _event_allowed("BASE_SQUEEZE_BREAKOUT")
-            if event_ok:
-                return "BASE_SQUEEZE_BREAKOUT", base_reason, reasons
-            reasons.append(f"Earnings reaction filter: {event_reason}")
-    reasons.append(f"Base/flag squeeze not ready: {base_reason}")
+def choose_ready_setup_and_plan(
+    row: Dict[str, Any],
+    metrics: IntradayMetrics,
+    quote: Dict[str, Any],
+    regime: Dict[str, Any],
+    phase: str,
+) -> Tuple[str, Dict[str, Any], Dict[str, Any], float, str, List[str]]:
+    """
+    Final v2.8.4 Ready selection:
+      classify setup first -> build setup-specific plan -> validate R/R/target.
+    """
+    fail_reasons: List[str] = []
+    scanner_score = safe_float(row.get("score"), 0)
 
-    return "", "No trigger-ready setup", reasons
+    for setup in setup_candidate_order(metrics, row):
+        plan = build_trade_plan(row, metrics, setup, quote)
+        live = live_signal_score(row, metrics, plan, regime, phase)
+        conf = final_confidence(scanner_score, live)
+
+        if not plan.get("valid"):
+            fail_reasons.append(f"{setup}: Plan invalid: {safe_str(plan.get('rejection_reason'), 'Invalid plan')}")
+            continue
+
+        ready_target_ok, target_reason = plan_has_ready_target(plan)
+        if not ready_target_ok:
+            fail_reasons.append(f"{setup}: {target_reason}")
+            continue
+
+        if safe_float(plan.get("reward_risk"), 0) < MIN_RR_READY:
+            fail_reasons.append(f"{setup}: R/R {safe_float(plan.get('reward_risk'), 0):.2f} < READY minimum {MIN_RR_READY:.1f}")
+            continue
+
+        ready_min_conf = setup_ready_conf_required(setup, phase)
+        if conf < ready_min_conf:
+            fail_reasons.append(f"{setup}: Confidence {conf:.1f} < ready minimum {ready_min_conf:.0f}")
+            continue
+
+        ready_ok, ready_reason = setup_ready_check(setup, metrics, plan, conf, phase, row)
+        if not ready_ok:
+            fail_reasons.append(f"{setup}: {ready_reason}")
+            continue
+
+        event_ok, event_reasons = earnings_reaction_requirements(row, metrics, plan, conf)
+        if not event_ok:
+            fail_reasons.append(f"{setup}: {'; '.join(event_reasons)}")
+            continue
+
+        return setup, plan, live, conf, ready_reason, fail_reasons
+
+    return "", {}, {}, 0.0, "No trigger-ready setup", fail_reasons
 
 
 # ==============================================================
@@ -5606,8 +6031,8 @@ def not_ready_reasons(
         reasons.append(f"Confidence {confidence:.1f} < ready minimum {required_conf:.0f}")
 
     rr = safe_float(plan.get("reward_risk"), 0)
-    if rr < MIN_RR:
-        reasons.append(f"R/R {rr:.2f} < minimum 1.5")
+    if rr < MIN_RR_READY:
+        reasons.append(f"R/R {rr:.2f} < READY minimum {MIN_RR_READY:.1f}")
 
     # Event-risk diagnostics. If this is an earnings-day name, Signal Desk
     # should make clear it is an earnings reaction trade only.
@@ -5631,6 +6056,9 @@ def not_ready_reasons(
     elif setup == "HOD_BASE_BREAKOUT":
         _, reason = setup_hod_breakout_ready(metrics, rr, confidence)
         reasons.append(f"HOD breakout not ready: {reason}")
+    elif setup == "STRONG_GAP_BREAKOUT":
+        _, reason = setup_strong_gap_breakout_ready(metrics, rr, confidence)
+        reasons.append(f"Strong gap breakout not ready: {reason}")
     else:
         # Unknown setup: show only the most relevant lifecycle family first.
         _, reclaim_reason = setup_vwap_reclaim_ready(metrics, rr, confidence)
@@ -6440,7 +6868,20 @@ def trigger_ready_reassessment(
         live,
     )
 
-    setup_ready_type, setup_reason, setup_fail_reasons = choose_setup(metrics, plan, conf, phase, row)
+    # v2.8.4 final: reassess the existing setup directly.
+    # Do not build all plans and choose by R/R; preserved READY signals keep
+    # their setup identity unless the setup-specific readiness check fails.
+    setup_ready_type = ""
+    setup_reason = ""
+    setup_fail_reasons: List[str] = []
+
+    setup_ready_ok, setup_ready_reason = setup_ready_check(setup_type, metrics, plan, conf, phase, row)
+    if setup_ready_ok:
+        setup_ready_type = setup_type
+        setup_reason = setup_ready_reason
+    else:
+        setup_fail_reasons.append(f"{setup_type or 'EXISTING_SETUP'}: {setup_ready_reason}")
+
     existing_reclaim_lifecycle = is_reclaim_lifecycle_setup(existing)
     if existing_reclaim_lifecycle and not setup_ready_type:
         holding, hold_reason = reclaim_lifecycle_holding(existing, metrics)
@@ -6457,8 +6898,8 @@ def trigger_ready_reassessment(
     if not plan.get("valid"):
         fail_reasons.append(f"Plan invalid: {safe_str(plan.get('rejection_reason'), 'Invalid plan')}")
 
-    if safe_float(plan.get("reward_risk"), 0) < MIN_RR:
-        fail_reasons.append(f"R/R {safe_float(plan.get('reward_risk'), 0):.2f} < minimum 1.5")
+    if safe_float(plan.get("reward_risk"), 0) < MIN_RR_READY:
+        fail_reasons.append(f"R/R {safe_float(plan.get('reward_risk'), 0):.2f} < READY minimum {MIN_RR_READY:.1f}")
 
     if conf < ready_min:
         fail_reasons.append(f"Confidence {conf:.1f} < ready minimum {ready_min:.0f}")
@@ -6580,15 +7021,15 @@ def trigger_ready_reassessment(
     event_ok, event_reasons = earnings_reaction_requirements(row, metrics, exact_plan, exact_conf)
     if (
         not exact_plan.get("valid")
-        or safe_float(exact_plan.get("reward_risk"), 0) < MIN_RR
+        or safe_float(exact_plan.get("reward_risk"), 0) < MIN_RR_READY
         or exact_conf < exact_ready_min
         or not event_ok
     ):
         fail = []
         if not exact_plan.get("valid"):
             fail.append(f"Plan invalid: {safe_str(exact_plan.get('rejection_reason'), 'Invalid plan')}")
-        if safe_float(exact_plan.get("reward_risk"), 0) < MIN_RR:
-            fail.append(f"R/R {safe_float(exact_plan.get('reward_risk'), 0):.2f} < minimum 1.5")
+        if safe_float(exact_plan.get("reward_risk"), 0) < MIN_RR_READY:
+            fail.append(f"R/R {safe_float(exact_plan.get('reward_risk'), 0):.2f} < READY minimum {MIN_RR_READY:.1f}")
         if exact_conf < exact_ready_min:
             fail.append(f"Confidence {exact_conf:.1f} < ready minimum {exact_ready_min:.0f}")
         if not event_ok:
@@ -7280,8 +7721,12 @@ def active_promotion_failure_reasons(
     if confidence < MIN_CONF_ACTIVE:
         reasons.append(f"Confidence {confidence:.1f} < active minimum {MIN_CONF_ACTIVE:.0f}")
 
-    if safe_float(plan.get("reward_risk"), 0) < MIN_RR:
-        reasons.append(f"R/R {safe_float(plan.get('reward_risk'), 0):.2f} < minimum {MIN_RR:.1f}")
+    active_target_ok, active_target_reason = plan_has_active_target(plan)
+    if not active_target_ok:
+        reasons.append(active_target_reason)
+
+    if safe_float(plan.get("reward_risk"), 0) < MIN_RR_ACTIVE:
+        reasons.append(f"R/R {safe_float(plan.get('reward_risk'), 0):.2f} < active minimum {MIN_RR_ACTIVE:.1f}")
 
     hard_gate_ok, hard_gate_reason, active_family = active_signal_hard_gate(plan, metrics, setup_type, row)
     if not hard_gate_ok:
@@ -7730,7 +8175,7 @@ def process_new_or_watch(
 
     watch_ok, watch_reasons, rs_long = watch_criteria_pass(row, metrics, regime)
 
-    setup_type, plan = choose_best_provisional_plan(row, metrics, quote)
+    setup_type, plan = choose_setup_first_monitor_plan(row, metrics, quote)
     live = live_signal_score(row, metrics, plan, regime, phase)
     conf = final_confidence(safe_float(row.get("score"), 0), live)
 
@@ -7781,20 +8226,23 @@ def process_new_or_watch(
             log_watch_rejected(symbol, rejected_reasons, conf, metrics, phase)
             return {}, diagnostic_candidate(row, metrics, plan, live, conf, rejected_reasons, phase, regime)
 
-        setup_ready_type, setup_reason, setup_fail_reasons = choose_setup(metrics, plan, conf, phase, row)
+        setup_ready_type, exact_plan, exact_live, exact_conf, setup_reason, setup_fail_reasons = choose_ready_setup_and_plan(
+            row,
+            metrics,
+            quote,
+            regime,
+            phase,
+        )
 
         if setup_ready_type and is_lunch_trigger_ready_allowed_setup(setup_ready_type):
-            exact_plan = build_trade_plan(row, metrics, setup_ready_type, quote)
-            exact_live = live_signal_score(row, metrics, exact_plan, regime, phase)
-            exact_conf = final_confidence(safe_float(row.get("score"), 0), exact_live)
             exact_ready_min_conf = setup_ready_conf_required(setup_ready_type, phase)
             event_ok, event_reasons = earnings_reaction_requirements(row, metrics, exact_plan, exact_conf)
 
             lunch_ready_failures: List[str] = []
             if not exact_plan.get("valid"):
                 lunch_ready_failures.append(f"Plan invalid: {safe_str(exact_plan.get('rejection_reason'), 'Invalid plan')}")
-            if safe_float(exact_plan.get("reward_risk"), 0) < MIN_RR:
-                lunch_ready_failures.append(f"R/R {safe_float(exact_plan.get('reward_risk'), 0):.2f} < minimum {MIN_RR:.1f}")
+            if safe_float(exact_plan.get("reward_risk"), 0) < MIN_RR_READY:
+                lunch_ready_failures.append(f"R/R {safe_float(exact_plan.get('reward_risk'), 0):.2f} < READY minimum {MIN_RR_READY:.1f}")
             if exact_conf < exact_ready_min_conf:
                 lunch_ready_failures.append(f"Confidence {exact_conf:.1f} < ready minimum {exact_ready_min_conf:.0f}")
             if not event_ok:
@@ -7900,85 +8348,79 @@ def process_new_or_watch(
         log_watch_rejected(symbol, rejected_reasons, conf, metrics, phase)
         return {}, diagnostic_candidate(row, metrics, plan, live, conf, rejected_reasons, phase, regime)
 
-    # Decide whether it is trigger-ready.
-    ready_min_conf = ready_confidence_required(phase)
-    early_ready_min_conf = min(ready_min_conf, MIN_CONF_RECLAIM_READY if metrics.vwap_reclaim_recent else ready_min_conf)
-    if plan.get("valid") and safe_float(plan.get("reward_risk"), 0) >= MIN_RR and conf >= early_ready_min_conf:
-        setup_ready_type, setup_reason, setup_fail_reasons = choose_setup(metrics, plan, conf, phase, row)
+    # Decide whether it is trigger-ready using v2.8.4 final flow:
+    # classify setup FIRST -> build setup-specific plan -> validate target/RR.
+    setup_ready_type, exact_plan, exact_live, exact_conf, setup_reason, setup_fail_reasons = choose_ready_setup_and_plan(
+        row,
+        metrics,
+        quote,
+        regime,
+        phase,
+    )
 
-        if setup_ready_type:
-            # Rebuild plan using the exact ready setup type.
-            exact_plan = build_trade_plan(row, metrics, setup_ready_type, quote)
-            exact_live = live_signal_score(row, metrics, exact_plan, regime, phase)
-            exact_conf = final_confidence(safe_float(row.get("score"), 0), exact_live)
-
-            exact_ready_min_conf = setup_ready_conf_required(setup_ready_type, phase)
-            event_ok, event_reasons = earnings_reaction_requirements(row, metrics, exact_plan, exact_conf)
-            if exact_plan.get("valid") and safe_float(exact_plan.get("reward_risk"), 0) >= MIN_RR and exact_conf >= exact_ready_min_conf and event_ok:
-                out = signal_base(
-                    row,
-                    metrics,
-                    exact_plan,
-                    "TRIGGER_READY",
-                    setup_ready_type,
-                    exact_conf,
-                    exact_live,
-                    setup_reason,
-                    phase,
-                    regime,
-                )
-                now_text = iso_now_et()
-                out["ready_since"] = now_text
-                out["detected_at"] = now_text
-
-                if trigger_was_touched_recently(out, metrics):
-                    stale, stale_reason = trigger_pullback_after_touch(out, metrics)
-                    if stale:
-                        invalid = make_invalidated(out, row, metrics, stale_reason, "NEW_BASE_REQUIRED", phase)
-                        return invalid, None
-                    return make_trigger_touched(
-                        out,
-                        row,
-                        metrics,
-                        phase,
-                        "Entry was already touched recently; waiting for renewed hold/volume confirmation before Active Signal.",
-                    ), None
-
-                decision_log(
-                    symbol,
-                    "BECAME_TRIGGER_READY",
-                    setup=setup_ready_type,
-                    confidence=exact_conf,
-                    trigger=exact_plan.get("entry_trigger"),
-                    stop=exact_plan.get("stop_loss"),
-                    target_1=exact_plan.get("target_1"),
-                    target_2=exact_plan.get("target_2"),
-                    rr=exact_plan.get("reward_risk"),
-                    price=metrics.price,
-                    phase=phase,
-                )
-                return out, None
-
-            if not event_ok:
-                setup_fail_reasons.extend(event_reasons)
-
-        # Good plan, but setup itself is not ready. WATCH.
+    if setup_ready_type:
         out = signal_base(
             row,
             metrics,
-            plan,
-            "WATCH",
-            "MONITORING",
-            conf,
-            live,
-            "Clean candidate with usable 5-min trade plan. Waiting for VWAP/EMA hold, higher-low/reclaim, base squeeze, or HOD breakout trigger confirmation.",
+            exact_plan,
+            "TRIGGER_READY",
+            setup_ready_type,
+            exact_conf,
+            exact_live,
+            setup_reason,
             phase,
             regime,
         )
-        out["detected_at"] = iso_now_et()
-        out["not_ready_reasons"] = setup_fail_reasons or not_ready_reasons(metrics, plan, conf)
-        log_watch_evaluated(symbol, out, metrics, phase)
+        now_text = iso_now_et()
+        out["ready_since"] = now_text
+        out["detected_at"] = now_text
+
+        if trigger_was_touched_recently(out, metrics):
+            stale, stale_reason = trigger_pullback_after_touch(out, metrics)
+            if stale:
+                invalid = make_invalidated(out, row, metrics, stale_reason, "NEW_BASE_REQUIRED", phase)
+                return invalid, None
+            return make_trigger_touched(
+                out,
+                row,
+                metrics,
+                phase,
+                "Entry was already touched recently; waiting for renewed hold/volume confirmation before Active Signal.",
+            ), None
+
+        decision_log(
+            symbol,
+            "BECAME_TRIGGER_READY",
+            setup=setup_ready_type,
+            confidence=exact_conf,
+            trigger=exact_plan.get("entry_trigger"),
+            stop=exact_plan.get("stop_loss"),
+            target_1=exact_plan.get("target_1"),
+            target_2=exact_plan.get("target_2"),
+            rr=exact_plan.get("reward_risk"),
+            price=metrics.price,
+            phase=phase,
+            target_source=exact_plan.get("target_source"),
+        )
         return out, None
+
+    # Good monitor candidate, but no setup-specific Ready path passed.
+    out = signal_base(
+        row,
+        metrics,
+        plan,
+        "WATCH",
+        "MONITORING",
+        conf,
+        live,
+        "Monitor candidate. Waiting for setup-specific Ready conditions: reclaim sequence, continuation hold, gap breakout, or HOD/base break.",
+        phase,
+        regime,
+    )
+    out["detected_at"] = iso_now_et()
+    out["not_ready_reasons"] = setup_fail_reasons or not_ready_reasons(metrics, plan, conf)
+    log_watch_evaluated(symbol, out, metrics, phase)
+    return out, None
 
     # WATCH only if plan is valid and at least minimally usable.
     out = signal_base(
