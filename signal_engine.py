@@ -19,7 +19,7 @@ Core design:
   - 5-minute bars = setup structure, stop/target construction, and pattern quality.
   - Long-side only.
   - Red/risk-off market can still allow RELATIVE-STRENGTH WATCH candidates.
-  - Invalid trade plans must NOT appear as WATCH.
+  - Structurally invalid trade plans must NOT appear as WATCH; low R/R can appear as monitor-only WATCH.
   - Late-day setups require stronger volume, no bearish divergence, and EMA9 confirmation.
   - VWAP touch logic is setup-relative: opening VWAP noise is ignored and counts reset after bullish reclaim.
 
@@ -78,7 +78,7 @@ SIGNAL_STATE_FILE = "signal_state.json"
 SUPPRESSED_SIGNALS_FILE = "suppressed_signals.csv"
 SIGNAL_OUTCOMES_FILE = "signal_outcomes.csv"
 SIGNAL_OUTCOMES_SUMMARY_FILE = "signal_outcomes_summary.json"
-SIGNAL_ENGINE_STRATEGY_VERSION = "v2.8.1_1m_macd_primary_5m_context_reclaimer_relax"
+SIGNAL_ENGINE_STRATEGY_VERSION = "v2.8.2_watch_ready_balance_1m_active"
 
 # State retention.
 ACTIVE_STALE_MINUTES = 10
@@ -159,9 +159,9 @@ HOD_BASE_MAX_RANGE_PCT = 2.00
 HOD_BASE_MIN_STRUCTURE_BARS = 3
 HOD_BASE_MAX_VWAP_EXTENSION_PCT = 4.00
 
-MIN_RR_WATCH = 0.75
+MIN_RR_WATCH = 0.20  # v2.8.2: WATCH is monitor-only; Ready/Active still require 1.5R
 MIN_RR = 1.5
-MIN_CONF_WATCH = 60.0
+MIN_CONF_WATCH = 55.0  # v2.8.2: allow developing monitor names; Ready/Active remain strict
 MIN_CONF_READY = 75.0
 MIN_CONF_READY_LATE_DAY = 80.0
 MIN_CONF_ACTIVE = 80.0
@@ -4041,6 +4041,8 @@ def morning_reclaim_priority_score(
         or metrics.vwap_reclaim_recent
         or metrics.vwap_reclaim_lifecycle_active
         or metrics.reclaim_pullback_holding
+        or metrics.pullback_holding_vwap
+        or vwap_was_below_recently(metrics)
         or scanner_has_1m_reclaim_tag(row)
         or is_truthy_value(signal.get("early_reclaim_runner"))
     )
@@ -4130,8 +4132,10 @@ def morning_reclaim_priority_score(
     if rr >= MIN_RR:
         score += 8
         reasons.append(f"R/R {rr:.1f}:1 valid")
+    elif rr >= MIN_RR_WATCH:
+        reasons.append(f"R/R {rr:.2f}:1 monitor only; not Ready/Active")
     else:
-        blockers.append(f"R/R {rr:.2f} below minimum")
+        blockers.append(f"R/R {rr:.2f} too weak even for monitor")
 
     if metrics.vwap_reclaim_age_minutes <= MORNING_RECLAIM_MAX_RECLAIM_AGE_MINUTES:
         score += 2
@@ -4486,9 +4490,11 @@ def build_trade_plan(
 
         rr = (target_1 - entry) / risk if risk > 0 else 0.0
 
+        # v2.8.2: Do NOT invalidate the whole plan only because R/R is below 1.5.
+        # WATCH is monitor-only and can still display a structurally usable plan.
+        # TRIGGER_READY / ACTIVE_SIGNAL still require rr >= MIN_RR in the promotion gates.
         if valid and rr < MIN_RR:
-            valid = False
-            rejection_reason = "Target 1 R/R below 1.5"
+            rejection_reason = "Target 1 R/R below 1.5; monitor only until resistance/RR improves"
 
     return {
         "setup_type": setup_type,
@@ -4499,6 +4505,8 @@ def build_trade_plan(
         "target_1": round(target_1, 4),
         "target_2": round(target_2, 4),
         "reward_risk": round(rr, 2),
+        "rr_valid_for_ready": bool(rr >= MIN_RR),
+        "monitor_only_rr": bool(rr < MIN_RR),
         "stop_distance_pct": round(stop_distance_pct, 2),
         "support_level": round(support, 4),
         "structure_label": structure_label,
@@ -7681,13 +7689,13 @@ def process_new_or_watch(
     rejected_reasons = list(watch_reasons)
 
     if conf < MIN_CONF_WATCH:
-        rejected_reasons.append(f"Confidence {conf:.1f} < WATCH minimum 60")
+        rejected_reasons.append(f"Confidence {conf:.1f} < WATCH minimum {MIN_CONF_WATCH:.0f}")
 
     if not plan.get("valid"):
         rejected_reasons.append(f"Plan invalid: {safe_str(plan.get('rejection_reason'), 'Invalid plan')}")
 
     if plan.get("valid") and safe_float(plan.get("reward_risk"), 0) < MIN_RR_WATCH:
-        rejected_reasons.append(f"R/R {safe_float(plan.get('reward_risk'), 0):.2f} < WATCH minimum 0.75")
+        rejected_reasons.append(f"R/R {safe_float(plan.get('reward_risk'), 0):.2f} < WATCH monitor minimum {MIN_RR_WATCH:.2f}")
 
     # Premarket: monitor only, but still require usable plan for WATCH.
     if phase == "PREMARKET":
