@@ -78,7 +78,7 @@ SIGNAL_STATE_FILE = "signal_state.json"
 SUPPRESSED_SIGNALS_FILE = "suppressed_signals.csv"
 SIGNAL_OUTCOMES_FILE = "signal_outcomes.csv"
 SIGNAL_OUTCOMES_SUMMARY_FILE = "signal_outcomes_summary.json"
-SIGNAL_ENGINE_STRATEGY_VERSION = "v2.8.0_three_family_active_macd_resistance_targets_FIXED_PREV2"
+SIGNAL_ENGINE_STRATEGY_VERSION = "v2.8.1_1m_macd_primary_5m_context_reclaimer_relax"
 
 # State retention.
 ACTIVE_STALE_MINUTES = 10
@@ -3522,10 +3522,16 @@ def stayed_above_vwap_recently(metrics: IntradayMetrics, lookback_bars: int = AC
 
 def active_macd_confirmation(metrics: IntradayMetrics) -> Tuple[bool, str]:
     """
-    Non-negotiable Active MACD gate - HARD REQUIRED.
+    Active MACD gate for 1-minute execution.
 
-    1m MACD is the execution trigger. 5m MACD is the context blocker.
-    NO exceptions. VWAP/support strength CANNOT override failed MACD.
+    Non-negotiable:
+      - 1m MACD is the hard execution trigger.
+      - 5m MACD is context only; it blocks Active only when clearly bearish.
+
+    This matches the trading workflow:
+      - Enter from 1m chart.
+      - Do not wait for full 5m curl-up.
+      - Still reject if 5m is strongly bearish/falling.
 
     Uses prev2 histogram values so "falling for 2 bars" means:
         current < previous < previous_2
@@ -3570,24 +3576,20 @@ def active_macd_confirmation(metrics: IntradayMetrics) -> Tuple[bool, str]:
     if not one_min_ok:
         return False, "MACD Active blocked: 1m MACD must be rising/curling up or bullish crossover"
 
-    # HARD BLOCK: 5m bearish crossover.
-    if metrics.macd_bearish_crossover_recent:
-        return False, "MACD Active blocked: 5m bearish crossover"
-
-    # HARD BLOCK: 5m histogram falling hard while below signal.
-    if five_min_hist_falling_2bars and not metrics.macd_above_signal:
-        return False, "MACD Active blocked: 5m histogram falling hard for 2 bars below signal"
-
-    # HARD REQUIRED: 5m MACD must be improving OR at minimum not bearish.
-    five_min_ok = (
-        metrics.macd_histogram_rising
-        or (metrics.macd_above_signal and not five_min_hist_falling_2bars)
-        or metrics.macd_bullish_crossover_recent
+    # 5m MACD is NOT required to curl up for a 1m entry.
+    # It blocks only when the 5m context is clearly bearish.
+    five_min_clearly_bearish = (
+        not metrics.macd_above_signal
+        and metrics.macd_histogram < 0
+        and (
+            (metrics.macd_bearish_crossover_recent and metrics.macd_histogram_falling)
+            or five_min_hist_falling_2bars
+        )
     )
-    if not five_min_ok:
-        return False, "MACD Active blocked: 5m MACD must be improving or at minimum above signal and not falling"
+    if five_min_clearly_bearish:
+        return False, "MACD Active blocked: 5m context clearly bearish"
 
-    return True, "MACD Active confirmed: 1m curling up AND 5m improving/not bearish"
+    return True, "MACD Active confirmed: 1m curling up; 5m not clearly bearish"
 
 
 def active_volume_confirmation(metrics: IntradayMetrics, family: str) -> Tuple[bool, str]:
@@ -3639,18 +3641,43 @@ def active_family_structure_confirmation(
     family = active_strategy_family(setup_type)
 
     if family == ACTIVE_FAMILY_RECLAIMER:
+        # Reclaimer includes:
+        # - fresh VWAP/EMA reclaim
+        # - reclaim then pullback/hold
+        # - morning reclaim window names
+        #
+        # Do NOT require scanner early_reclaim_runner flag for Active.
+        # The flag is useful context, but live VWAP/support/MACD/volume are the real gates.
         fresh_reclaim = (
             metrics.vwap_reclaim_recent
             or metrics.vwap_reclaim_age_minutes <= ACTIVE_RECLAIM_FRESH_LOOKBACK_MINUTES
             or vwap_was_below_recently(metrics)
             or metrics.vwap_recovered_last_15_1m
+            or metrics.vwap_reclaim_lifecycle_active
+            or metrics.reclaim_pullback_holding
+            or (
+                is_morning_reclaim_actionable_window()
+                and metrics.above_vwap
+                and (
+                    metrics.pullback_holding_vwap
+                    or metrics.vwap_clean_hold_count >= 1
+                    or metrics.vwap_reclaim_ready
+                )
+            )
             or scanner_marks_early_reclaim(row)
-            or (is_morning_reclaim_actionable_window() and metrics.reclaim_pullback_holding)
         )
         if not fresh_reclaim:
-            return False, "Family Active blocked: Reclaimer requires recent VWAP loss/reclaim evidence", family
-        if not (metrics.vwap_reclaim_ready or metrics.reclaim_pullback_holding or scanner_marks_early_reclaim(row)):
-            return False, "Family Active blocked: Reclaimer lacks reclaim/hold structure", family
+            return False, "Family Active blocked: Reclaimer requires recent VWAP loss/reclaim or reclaim-pullback evidence", family
+
+        reclaim_structure_ok = (
+            metrics.vwap_reclaim_ready
+            or metrics.reclaim_pullback_holding
+            or metrics.vwap_reclaim_lifecycle_active
+            or metrics.pullback_holding_vwap
+            or scanner_marks_early_reclaim(row)
+        )
+        if not reclaim_structure_ok:
+            return False, "Family Active blocked: Reclaimer lacks live reclaim/hold support structure", family
         return True, "Family confirmed: Reclaimer", family
 
     if family == ACTIVE_FAMILY_VWAP_PULLBACK:
