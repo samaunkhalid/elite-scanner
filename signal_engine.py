@@ -78,7 +78,7 @@ SIGNAL_STATE_FILE = "signal_state.json"
 SUPPRESSED_SIGNALS_FILE = "suppressed_signals.csv"
 SIGNAL_OUTCOMES_FILE = "signal_outcomes.csv"
 SIGNAL_OUTCOMES_SUMMARY_FILE = "signal_outcomes_summary.json"
-SIGNAL_ENGINE_STRATEGY_VERSION = "v2.8.4_final_setup_first_ready_active_target_gap_openair"
+SIGNAL_ENGINE_STRATEGY_VERSION = "v2.8.5_daytrade_scalp_t1_075r_real_t2"
 
 # State retention.
 ACTIVE_STALE_MINUTES = 10
@@ -171,6 +171,14 @@ MIN_RR_WATCH = 0.20   # WATCH is monitor-only.
 MIN_RR_READY = 1.00   # READY = prepare / near-trigger; does not require full Active R/R.
 MIN_RR_ACTIVE = 1.50  # ACTIVE = execution-quality only.
 MIN_RR = MIN_RR_ACTIVE  # Backward-compatible alias for Active checks.
+
+# v2.8.5 day-trade target display:
+# Backtests on 300 high-volatility tickers and S&P 500 samples showed that
+# intraday ACTIVE signals often move +0.50R to +1.00R, while real-resistance
+# T1 was too far as the first target. Therefore day-trade T1 is a practical
+# scalp/partial target, while T2 remains the real resistance/open-air target.
+DAY_TRADE_T1_SCALP_RR = float(os.getenv("DAY_TRADE_T1_SCALP_RR", "0.75"))
+ACTIONABLE_MAIN_TARGET_SOURCES = {"REAL_RESISTANCE_FIRST", "ROUND_LIQUIDITY_LEVEL", "OPEN_AIR_MEASURED_MOVE"}
 MIN_CONF_WATCH = 55.0
 MIN_CONF_READY = 70.0
 MIN_CONF_READY_LATE_DAY = 75.0
@@ -4734,7 +4742,10 @@ def measured_open_air_targets(entry: float, risk: float, row: Dict[str, Any], me
 
 def pick_targets(entry: float, risk: float, metrics: IntradayMetrics, row: Dict[str, Any], setup_type: str = "") -> Tuple[float, float, float, str]:
     """
-    Final target logic for v2.8.4.
+    Final main-target logic.
+
+    This function finds the REAL/main target first. build_trade_plan() then
+    displays day-trade T1 as 0.75R and keeps this real target as T2.
 
     Priority:
       1. Real resistance above entry.
@@ -4742,7 +4753,7 @@ def pick_targets(entry: float, risk: float, metrics: IntradayMetrics, row: Dict[
       3. OPEN_AIR_MEASURED_MOVE only if breakout structure is confirmed.
       4. WATCH_ONLY when no real target exists.
 
-    R/R validates the setup after target selection.
+    R/R validates the setup against the real/main target, not the scalp T1.
     """
     min_ready_target = entry + MIN_RR_READY * risk
     min_active_target = entry + MIN_RR_ACTIVE * risk
@@ -4783,6 +4794,67 @@ def pick_targets(entry: float, risk: float, metrics: IntradayMetrics, row: Dict[
     return target_1, target_2, min_active_target, "NO_REAL_TARGET_WATCH_ONLY"
 
 
+def apply_daytrade_scalp_t1(
+    entry: float,
+    risk: float,
+    main_target: float,
+    secondary_target: float,
+    target_source: str,
+) -> Dict[str, Any]:
+    """
+    Convert a valid intraday plan into the v2.8.5 target display model.
+
+    - target_1 = 0.75R scalp/partial target for day trades.
+    - target_2 = nearest real resistance / round liquidity / open-air target.
+    - reward_risk remains based on target_2, so READY/ACTIVE validation still
+      requires real target quality and does not weaken execution standards.
+
+    Non-actionable target sources keep their original monitor-only targets.
+    """
+    main_rr = (main_target - entry) / risk if risk > 0 else 0.0
+    secondary_rr = (secondary_target - entry) / risk if risk > 0 else 0.0
+
+    actionable = (
+        target_source in ACTIONABLE_MAIN_TARGET_SOURCES
+        and main_target > entry
+        and main_rr >= MIN_RR_READY
+    )
+
+    if actionable:
+        scalp_target = entry + (DAY_TRADE_T1_SCALP_RR * risk)
+        return {
+            "target_1": scalp_target,
+            "target_2": main_target,
+            "target_3": secondary_target if secondary_target > main_target * 1.001 else 0.0,
+            "reward_risk": main_rr,
+            "target_1_reward_risk": DAY_TRADE_T1_SCALP_RR,
+            "target_2_reward_risk": main_rr,
+            "target_3_reward_risk": secondary_rr if secondary_target > main_target * 1.001 else 0.0,
+            "main_target": main_target,
+            "main_target_reward_risk": main_rr,
+            "target_display_mode": "DAYTRADE_SCALP_T1_REAL_T2",
+            "target_1_source": f"SCALP_{DAY_TRADE_T1_SCALP_RR:.2f}R",
+            "target_2_source": target_source,
+            "target_3_source": "SECONDARY_REAL_TARGET" if secondary_target > main_target * 1.001 else "",
+        }
+
+    return {
+        "target_1": main_target,
+        "target_2": secondary_target,
+        "target_3": 0.0,
+        "reward_risk": main_rr,
+        "target_1_reward_risk": main_rr,
+        "target_2_reward_risk": secondary_rr,
+        "target_3_reward_risk": 0.0,
+        "main_target": main_target,
+        "main_target_reward_risk": main_rr,
+        "target_display_mode": "MONITOR_OR_NON_ACTIONABLE_TARGETS",
+        "target_1_source": target_source,
+        "target_2_source": "SECONDARY_TARGET" if secondary_target > main_target * 1.001 else "",
+        "target_3_source": "",
+    }
+
+
 def build_trade_plan(
     row: Dict[str, Any],
     metrics: IntradayMetrics,
@@ -4812,7 +4884,17 @@ def build_trade_plan(
         stop_distance_pct = 999.0
         target_1 = 0.0
         target_2 = 0.0
+        target_3 = 0.0
         rr = 0.0
+        target_1_reward_risk = 0.0
+        target_2_reward_risk = 0.0
+        target_3_reward_risk = 0.0
+        main_target = 0.0
+        main_target_reward_risk = 0.0
+        target_display_mode = "INVALID_PLAN"
+        target_1_source = "INVALID_PLAN"
+        target_2_source = ""
+        target_3_source = ""
         min_target_1 = 0.0
         target_source = "INVALID_PLAN"
     else:
@@ -4840,18 +4922,39 @@ def build_trade_plan(
             valid = False
             rejection_reason = f"Stop distance {stop_distance_pct:.2f}% > max {max_stop:.1f}%"
 
-        target_1, target_2, min_target_1, target_source = pick_targets(entry, risk, metrics, row, setup_type)
+        raw_target_1, raw_target_2, min_target_1, target_source = pick_targets(entry, risk, metrics, row, setup_type)
 
-        rr = (target_1 - entry) / risk if risk > 0 else 0.0
+        target_package = apply_daytrade_scalp_t1(
+            entry=entry,
+            risk=risk,
+            main_target=raw_target_1,
+            secondary_target=raw_target_2,
+            target_source=target_source,
+        )
+        target_1 = safe_float(target_package.get("target_1"), 0.0)
+        target_2 = safe_float(target_package.get("target_2"), 0.0)
+        target_3 = safe_float(target_package.get("target_3"), 0.0)
+        rr = safe_float(target_package.get("reward_risk"), 0.0)
+        target_1_reward_risk = safe_float(target_package.get("target_1_reward_risk"), 0.0)
+        target_2_reward_risk = safe_float(target_package.get("target_2_reward_risk"), 0.0)
+        target_3_reward_risk = safe_float(target_package.get("target_3_reward_risk"), 0.0)
+        main_target = safe_float(target_package.get("main_target"), raw_target_1)
+        main_target_reward_risk = safe_float(target_package.get("main_target_reward_risk"), rr)
+        target_display_mode = safe_str(target_package.get("target_display_mode"), "")
+        target_1_source = safe_str(target_package.get("target_1_source"), "")
+        target_2_source = safe_str(target_package.get("target_2_source"), "")
+        target_3_source = safe_str(target_package.get("target_3_source"), "")
 
         # Do NOT invalidate the whole plan only because R/R is below Active minimum.
         # WATCH is monitor-only and READY has a lower threshold than ACTIVE.
+        # v2.8.5: R/R validation is based on the real T2/main target, not the
+        # 0.75R day-trade scalp T1.
         if valid and target_source == "NO_REAL_TARGET_WATCH_ONLY":
             rejection_reason = "No real target or confirmed open-air breakout; monitor only"
         elif valid and target_source == "REAL_RESISTANCE_TOO_CLOSE":
             rejection_reason = f"Nearest real resistance gives R/R {rr:.2f} below READY minimum {MIN_RR_READY:.1f}; monitor only"
         elif valid and rr < MIN_RR_READY:
-            rejection_reason = f"Target 1 R/R below READY minimum {MIN_RR_READY:.1f}; monitor only until resistance/RR improves"
+            rejection_reason = f"Main target R/R below READY minimum {MIN_RR_READY:.1f}; monitor only until resistance/RR improves"
 
     return {
         "setup_type": setup_type,
@@ -4861,9 +4964,19 @@ def build_trade_plan(
         "stop_loss": round(stop, 4),
         "target_1": round(target_1, 4),
         "target_2": round(target_2, 4),
+        "target_3": round(target_3, 4),
         "reward_risk": round(rr, 2),
+        "target_1_reward_risk": round(target_1_reward_risk, 2),
+        "target_2_reward_risk": round(target_2_reward_risk, 2),
+        "target_3_reward_risk": round(target_3_reward_risk, 2),
+        "main_target": round(main_target, 4),
+        "main_target_reward_risk": round(main_target_reward_risk, 2),
+        "target_display_mode": target_display_mode,
+        "target_1_source": target_1_source,
+        "target_2_source": target_2_source,
+        "target_3_source": target_3_source,
         "rr_valid_for_ready": bool(rr >= MIN_RR_READY and target_source not in {"REAL_RESISTANCE_TOO_CLOSE", "NO_REAL_TARGET_WATCH_ONLY"}),
-        "rr_valid_for_active": bool(rr >= MIN_RR_ACTIVE and target_source in {"REAL_RESISTANCE_FIRST", "ROUND_LIQUIDITY_LEVEL", "OPEN_AIR_MEASURED_MOVE"}),
+        "rr_valid_for_active": bool(rr >= MIN_RR_ACTIVE and target_source in ACTIONABLE_MAIN_TARGET_SOURCES),
         "monitor_only_rr": bool(rr < MIN_RR_READY),
         "stop_distance_pct": round(stop_distance_pct, 2),
         "support_level": round(support, 4),
@@ -5752,7 +5865,7 @@ def setup_ready_check(
 def plan_has_ready_target(plan: Dict[str, Any]) -> Tuple[bool, str]:
     """READY requires either real resistance/liquidity or confirmed open-air target."""
     source = safe_str(plan.get("target_source"), "")
-    if source in {"REAL_RESISTANCE_FIRST", "ROUND_LIQUIDITY_LEVEL", "OPEN_AIR_MEASURED_MOVE"}:
+    if source in ACTIONABLE_MAIN_TARGET_SOURCES:
         return True, source
     if source == "REAL_RESISTANCE_TOO_CLOSE":
         return False, "Real resistance too close for Ready"
@@ -5764,7 +5877,7 @@ def plan_has_ready_target(plan: Dict[str, Any]) -> Tuple[bool, str]:
 def plan_has_active_target(plan: Dict[str, Any]) -> Tuple[bool, str]:
     """ACTIVE requires full R/R and an actionable target source."""
     source = safe_str(plan.get("target_source"), "")
-    if source not in {"REAL_RESISTANCE_FIRST", "ROUND_LIQUIDITY_LEVEL", "OPEN_AIR_MEASURED_MOVE"}:
+    if source not in ACTIONABLE_MAIN_TARGET_SOURCES:
         return False, f"Active blocked: target source {source or 'UNKNOWN'} is not actionable"
     if safe_float(plan.get("reward_risk"), 0) < MIN_RR_ACTIVE:
         return False, f"Active blocked: R/R {safe_float(plan.get('reward_risk'), 0):.2f} < {MIN_RR_ACTIVE:.1f}"
@@ -6209,6 +6322,14 @@ def diagnostic_candidate(
         "stop_loss": plan.get("stop_loss"),
         "target_1": plan.get("target_1"),
         "target_2": plan.get("target_2"),
+        "target_3": plan.get("target_3"),
+        "target_1_reward_risk": plan.get("target_1_reward_risk"),
+        "target_2_reward_risk": plan.get("target_2_reward_risk"),
+        "main_target": plan.get("main_target"),
+        "main_target_reward_risk": plan.get("main_target_reward_risk"),
+        "target_display_mode": plan.get("target_display_mode"),
+        "target_1_source": plan.get("target_1_source"),
+        "target_2_source": plan.get("target_2_source"),
         "stop_distance_pct": plan.get("stop_distance_pct"),
         "support_level": plan.get("support_level"),
         "structure_label": plan.get("structure_label"),
@@ -6270,7 +6391,17 @@ def signal_base(
         "stop_loss": plan.get("stop_loss"),
         "target_1": plan.get("target_1"),
         "target_2": plan.get("target_2"),
+        "target_3": plan.get("target_3"),
         "reward_risk": plan.get("reward_risk"),
+        "target_1_reward_risk": plan.get("target_1_reward_risk"),
+        "target_2_reward_risk": plan.get("target_2_reward_risk"),
+        "target_3_reward_risk": plan.get("target_3_reward_risk"),
+        "main_target": plan.get("main_target"),
+        "main_target_reward_risk": plan.get("main_target_reward_risk"),
+        "target_display_mode": plan.get("target_display_mode"),
+        "target_1_source": plan.get("target_1_source"),
+        "target_2_source": plan.get("target_2_source"),
+        "target_3_source": plan.get("target_3_source"),
         "stop_distance_pct": plan.get("stop_distance_pct"),
         "support_level": plan.get("support_level"),
         "structure_label": plan.get("structure_label"),
@@ -7135,9 +7266,12 @@ def locked_plan_from_signal(signal: Dict[str, Any]) -> Dict[str, Any]:
     stop = safe_float(signal.get("stop_loss"), 0)
     target_1 = safe_float(signal.get("target_1"), 0)
     target_2 = safe_float(signal.get("target_2"), 0)
+    target_3 = safe_float(signal.get("target_3"), 0)
     rr = safe_float(signal.get("reward_risk"), 0)
 
-    valid = entry > 0 and stop > 0 and target_1 > entry and stop < entry and rr >= MIN_RR
+    # v2.8.5: reward_risk is the main/real target R:R, while target_1 may be
+    # the 0.75R scalp target. ACTIVE still requires real-target R:R >= MIN_RR.
+    valid = entry > 0 and stop > 0 and target_1 > entry and target_2 > entry and stop < entry and rr >= MIN_RR
 
     return {
         "setup_type": safe_str(signal.get("setup_type"), ""),
@@ -7147,7 +7281,17 @@ def locked_plan_from_signal(signal: Dict[str, Any]) -> Dict[str, Any]:
         "stop_loss": round(stop, 4),
         "target_1": round(target_1, 4),
         "target_2": round(target_2, 4),
+        "target_3": round(target_3, 4),
         "reward_risk": round(rr, 2),
+        "target_1_reward_risk": safe_float(signal.get("target_1_reward_risk"), 0),
+        "target_2_reward_risk": safe_float(signal.get("target_2_reward_risk"), rr),
+        "target_3_reward_risk": safe_float(signal.get("target_3_reward_risk"), 0),
+        "main_target": safe_float(signal.get("main_target"), target_2),
+        "main_target_reward_risk": safe_float(signal.get("main_target_reward_risk"), rr),
+        "target_display_mode": safe_str(signal.get("target_display_mode"), "DAYTRADE_SCALP_T1_REAL_T2"),
+        "target_1_source": safe_str(signal.get("target_1_source"), ""),
+        "target_2_source": safe_str(signal.get("target_2_source"), ""),
+        "target_3_source": safe_str(signal.get("target_3_source"), ""),
         "stop_distance_pct": safe_float(signal.get("stop_distance_pct"), 0),
         "support_level": safe_float(signal.get("support_level"), 0),
         "structure_label": safe_str(signal.get("structure_label"), "LOCKED_TRIGGER_READY_PLAN"),
