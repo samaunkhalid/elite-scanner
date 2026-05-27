@@ -1,135 +1,132 @@
 #!/usr/bin/env python3
 """
-Swing Scanner v1.0.1
-Separate 1-3 day swing scanner for Elite Scanner.
+Universal 1-3 Day Swing Scanner
+Version: swing_scanner_v1.1.0_universal
 
 Purpose:
-- Does NOT modify intraday signal_engine.py behavior.
-- Does NOT create day-trade Active signals.
-- Scans historical/live 1-minute parquet files and produces Swing Watch/Ready/Active candidates.
-- Supports independent swing setups and strict day-to-swing promotion logic.
-
-Inputs expected in parquet:
-    symbol, timestamp_utc, date_et, time_et, is_regular_session,
-    open, high, low, close, volume, optional bar_vwap
-
-Default data root:
-    /opt/strategy-discovery/data/raw_1min
-
-Outputs:
-    swing_results/swing_candidates_latest.csv
-    swing_results/swing_candidates_latest.json
-    swing_results/swing_scanner_summary.json
-
-No production files modified.
+- Universal scanner. Not tied to the 300-ticker dataset.
+- Scans whatever universe/data source is passed at runtime.
+- Supports:
+    1) parquet folder validation/live cache mode
+    2) Alpaca live data mode, using a provided universe/symbol list
+- Writes visualization/research output only.
+- No production signal_engine changes.
+- No broker execution.
 """
 
 from __future__ import annotations
 
 import argparse
 import csv
+import gc
 import json
 import math
+import os
 import sys
-import traceback
-from dataclasses import asdict, dataclass, field
-from datetime import datetime, date, timedelta
+import time
+import urllib.parse
+import urllib.request
+from dataclasses import asdict, dataclass
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
-import numpy as np
 import pandas as pd
 
 
-SWING_SCANNER_VERSION = "swing_scanner_v1.0.1"
+SCANNER_VERSION = "swing_scanner_v1.1.0_universal"
 
-DEFAULT_DATA_ROOT = Path("/opt/strategy-discovery/data/raw_1min")
-DEFAULT_OUTPUT_DIR = Path("/opt/elite-scanner/swing_results")
-DEFAULT_INTRADAY_RESULTS = Path("/opt/elite-scanner/historical_sim_results/historical_forward_signals.csv")
+STATUS_RANK = {
+    "SWING_ACTIVE": 3,
+    "SWING_READY": 2,
+    "SWING_WATCH": 1,
+}
 
+SETUP_PRIORITY = {
+    "DAILY_BREAKOUT_CONTINUATION": 3,
+    "SWING_PULLBACK_SUPPORT_HOLD": 2,
+    "GAP_HOLD_SWING": 2,
+    "DAY_TO_SWING_PROMOTION": 1,
+}
 
-# -----------------------------
-# Configuration
-# -----------------------------
-
-MIN_PRICE = 10.0
-MAX_PRICE = 200.0
-MIN_AVG_DAILY_VOLUME = 1_000_000
-IDEAL_ATR_MIN_PCT = 1.0
-IDEAL_ATR_MAX_PCT = 6.0
-ATR_REDUCED_SIZE_MAX_PCT = 10.0
-ATR_EXCELLENT_ONLY_MAX_PCT = 15.0
-
-WATCH_MIN_SCORE = 65.0
-READY_MIN_SCORE = 75.0
-ACTIVE_MIN_SCORE = 80.0
-
-MIN_SWING_RR_READY = 1.5
-MIN_SWING_RR_ACTIVE = 1.5
-
-EARNINGS_BLOCK_DAYS = 3
-MAX_HOLD_DAYS_DEFAULT = 3
-
-# Conservative position sizing tiers based on ATR risk.
-ATR_SIZE_TIERS = [
-    (0.0, 1.0, "LOW_PRIORITY_TOO_SLOW", 0.50),
-    (1.0, 6.0, "IDEAL", 1.00),
-    (6.0, 10.0, "REDUCED_SIZE", 0.50),
-    (10.0, 15.0, "EXCELLENT_ONLY", 0.25),
-    (15.0, 999.0, "MANUAL_REVIEW_OR_REJECT", 0.00),
+OUT_COLUMNS = [
+    "symbol",
+    "setup_type",
+    "swing_status",
+    "score",
+    "confidence",
+    "entry_trigger",
+    "stop_loss",
+    "target_1",
+    "target_2",
+    "reward_risk",
+    "expected_hold_days",
+    "suggested_risk_pct",
+    "close_price",
+    "close_time_et",
+    "latest_date_et",
+    "price",
+    "avg_volume_20d",
+    "atr_pct",
+    "atr_tier",
+    "rsi_14",
+    "sma20",
+    "sma50",
+    "sma200",
+    "above_sma20",
+    "above_sma50",
+    "above_sma200",
+    "daily_trend_score",
+    "intraday_structure_score",
+    "relative_strength_score",
+    "volume_score",
+    "support_stop_score",
+    "target_room_score",
+    "close_quality_score",
+    "rel_volume",
+    "close_location_pct",
+    "gap_pct",
+    "gap_risk",
+    "earnings_risk",
+    "vwap",
+    "close_above_vwap",
+    "late_fade_pct",
+    "panic_selling",
+    "reason",
+    "invalid_if",
+    "blockers",
+    "warnings",
 ]
 
-
-SETUP_DAILY_BREAKOUT = "DAILY_BREAKOUT_CONTINUATION"
-SETUP_PULLBACK_SUPPORT = "SWING_PULLBACK_SUPPORT_HOLD"
-SETUP_GAP_HOLD = "GAP_HOLD_SWING"
-SETUP_DAY_TO_SWING = "DAY_TO_SWING_PROMOTION"
-
-STATUS_REJECTED = "REJECTED"
-STATUS_SWING_WATCH = "SWING_WATCH"
-STATUS_SWING_READY = "SWING_READY"
-STATUS_SWING_ACTIVE = "SWING_ACTIVE"
-
-
-# -----------------------------
-# Data classes
-# -----------------------------
 
 @dataclass
 class SwingCandidate:
     symbol: str
     setup_type: str
     swing_status: str
-
     score: float
     confidence: float
-
     entry_trigger: float
     stop_loss: float
     target_1: float
     target_2: float
     reward_risk: float
-
     expected_hold_days: int
     suggested_risk_pct: float
-
     close_price: float
     close_time_et: str
     latest_date_et: str
-
     price: float
     avg_volume_20d: float
     atr_pct: float
     atr_tier: str
     rsi_14: float
-
     sma20: float
     sma50: float
     sma200: float
     above_sma20: bool
     above_sma50: bool
     above_sma200: bool
-
     daily_trend_score: float
     intraday_structure_score: float
     relative_strength_score: float
@@ -137,78 +134,26 @@ class SwingCandidate:
     support_stop_score: float
     target_room_score: float
     close_quality_score: float
-
     rel_volume: float
     close_location_pct: float
     gap_pct: float
     gap_risk: str
     earnings_risk: str
-
     vwap: float
     close_above_vwap: bool
     late_fade_pct: float
     panic_selling: bool
-
     reason: str
     invalid_if: str
-    blockers: List[str] = field(default_factory=list)
-    warnings: List[str] = field(default_factory=list)
+    blockers: str
+    warnings: str
 
 
-@dataclass
-class SymbolFeatures:
-    symbol: str
-    valid: bool
-    reason: str
-
-    latest_date: str = ""
-    latest_time: str = ""
-    latest_close: float = math.nan
-    latest_open: float = math.nan
-    latest_high: float = math.nan
-    latest_low: float = math.nan
-    latest_volume: float = math.nan
-
-    daily: Optional[pd.DataFrame] = None
-    intraday: Optional[pd.DataFrame] = None
-    last_day_bars: Optional[pd.DataFrame] = None
-
-    sma20: float = math.nan
-    sma50: float = math.nan
-    sma200: float = math.nan
-    ema20: float = math.nan
-    atr14: float = math.nan
-    atr_pct: float = math.nan
-    rsi14: float = math.nan
-    avg_volume20: float = math.nan
-    rel_volume: float = math.nan
-
-    close_location_pct: float = math.nan
-    gap_pct: float = math.nan
-    day_vwap: float = math.nan
-    close_above_vwap: bool = False
-    opening_range_high: float = math.nan
-    opening_range_low: float = math.nan
-    late_fade_pct: float = math.nan
-    panic_selling: bool = False
-
-    ret_5d: float = math.nan
-    ret_20d: float = math.nan
-    rs_score: float = 0.0
-
-    earnings_risk: str = "UNKNOWN"
-    earnings_date: str = ""
-
-
-# -----------------------------
-# Utility functions
-# -----------------------------
-
-def safe_float(v: Any, default: float = math.nan) -> float:
+def safe_float(x: Any, default: float = 0.0) -> float:
     try:
-        if v is None:
+        if x is None:
             return default
-        f = float(v)
+        f = float(x)
         if math.isnan(f) or math.isinf(f):
             return default
         return f
@@ -216,1121 +161,917 @@ def safe_float(v: Any, default: float = math.nan) -> float:
         return default
 
 
+def round4(x: Any) -> float:
+    return round(safe_float(x), 4)
+
+
 def pct(a: float, b: float) -> float:
-    if not b or math.isnan(a) or math.isnan(b):
-        return math.nan
-    return (a - b) / b * 100.0
-
-
-def clamp(x: float, lo: float, hi: float) -> float:
-    if math.isnan(x):
-        return lo
-    return max(lo, min(hi, x))
-
-
-def now_iso() -> str:
-    return datetime.now().isoformat(timespec="seconds")
+    b = safe_float(b)
+    if b == 0:
+        return 0.0
+    return (safe_float(a) - b) / b * 100.0
 
 
 def normalize_symbol_from_file(path: Path) -> str:
-    name = path.name
-    for suffix in ["_1Min.parquet", "_1min.parquet", ".parquet"]:
+    name = path.stem
+    for suffix in ["_1Min", "_1min", "_1MIN", "_minute", "_Minute"]:
         if name.endswith(suffix):
             return name[: -len(suffix)].upper()
-    return path.stem.upper()
+    return name.upper()
 
 
-def score_linear(value: float, low: float, high: float, max_score: float) -> float:
-    if math.isnan(value):
-        return 0.0
-    if value <= low:
-        return 0.0
-    if value >= high:
-        return max_score
-    return (value - low) / (high - low) * max_score
+def load_symbols_from_file(path: Optional[str]) -> List[str]:
+    if not path:
+        return []
+    p = Path(path)
+    if not p.exists():
+        raise FileNotFoundError(f"symbols file not found: {path}")
+    raw = p.read_text(errors="ignore").splitlines()
+    symbols: List[str] = []
+    for line in raw:
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        # Accept CSV first column or plain text.
+        first = line.split(",")[0].strip().upper()
+        if first and first not in {"SYMBOL", "TICKER"}:
+            symbols.append(first)
+    return sorted(set(symbols))
 
 
-def score_band(value: float, ideal_low: float, ideal_high: float, hard_low: float, hard_high: float, max_score: float) -> float:
-    if math.isnan(value):
-        return 0.0
-    if ideal_low <= value <= ideal_high:
-        return max_score
-    if hard_low < value < ideal_low:
-        return (value - hard_low) / max(ideal_low - hard_low, 1e-9) * max_score
-    if ideal_high < value < hard_high:
-        return (hard_high - value) / max(hard_high - ideal_high, 1e-9) * max_score
-    return 0.0
+def parse_symbols_arg(symbols: Optional[str]) -> List[str]:
+    if not symbols:
+        return []
+    return sorted(set(s.strip().upper() for s in symbols.split(",") if s.strip()))
 
 
-def calculate_rsi(series: pd.Series, period: int = 14) -> pd.Series:
-    close = pd.to_numeric(series, errors="coerce")
-    delta = close.diff()
-    gain = delta.clip(lower=0)
-    loss = -delta.clip(upper=0)
-    avg_gain = gain.ewm(alpha=1 / period, min_periods=period, adjust=False).mean()
-    avg_loss = loss.ewm(alpha=1 / period, min_periods=period, adjust=False).mean()
-    rs = avg_gain / avg_loss.replace(0, np.nan)
-    out = 100 - (100 / (1 + rs))
-    return out.fillna(50.0)
+def infer_datetime_columns(df: pd.DataFrame) -> pd.DataFrame:
+    out = df.copy()
 
-
-def calculate_atr(daily: pd.DataFrame, period: int = 14) -> pd.Series:
-    high = pd.to_numeric(daily["high"], errors="coerce")
-    low = pd.to_numeric(daily["low"], errors="coerce")
-    close = pd.to_numeric(daily["close"], errors="coerce")
-    prev_close = close.shift(1)
-    tr = pd.concat([
-        high - low,
-        (high - prev_close).abs(),
-        (low - prev_close).abs(),
-    ], axis=1).max(axis=1)
-    return tr.rolling(period, min_periods=max(3, period // 2)).mean()
-
-
-def weighted_vwap(df: pd.DataFrame) -> float:
-    vol = pd.to_numeric(df["volume"], errors="coerce").fillna(0)
-    if "bar_vwap" in df.columns:
-        price = pd.to_numeric(df["bar_vwap"], errors="coerce")
-        price = price.fillna(pd.to_numeric(df["close"], errors="coerce"))
+    if "timestamp_utc" in out.columns:
+        out["timestamp_utc"] = pd.to_datetime(out["timestamp_utc"], utc=True, errors="coerce")
+        out["dt_et"] = out["timestamp_utc"].dt.tz_convert("America/New_York")
+    elif "timestamp" in out.columns:
+        out["timestamp_utc"] = pd.to_datetime(out["timestamp"], utc=True, errors="coerce")
+        out["dt_et"] = out["timestamp_utc"].dt.tz_convert("America/New_York")
+    elif "t" in out.columns:
+        out["timestamp_utc"] = pd.to_datetime(out["t"], utc=True, errors="coerce")
+        out["dt_et"] = out["timestamp_utc"].dt.tz_convert("America/New_York")
+    elif "date" in out.columns:
+        out["dt_et"] = pd.to_datetime(out["date"], errors="coerce")
     else:
-        price = (
-            pd.to_numeric(df["high"], errors="coerce")
-            + pd.to_numeric(df["low"], errors="coerce")
-            + pd.to_numeric(df["close"], errors="coerce")
-        ) / 3.0
-    denom = vol.sum()
-    if denom <= 0:
-        return safe_float(df["close"].iloc[-1])
-    return safe_float((price * vol).sum() / denom)
+        # Last fallback: use index if datelike.
+        out["dt_et"] = pd.to_datetime(out.index, errors="coerce")
 
+    if "date_et" not in out.columns:
+        out["date_et"] = pd.to_datetime(out["dt_et"], errors="coerce").dt.strftime("%Y-%m-%d")
+    else:
+        out["date_et"] = out["date_et"].astype(str)
 
-def load_earnings_calendar(path: Optional[Path]) -> Dict[str, str]:
-    if not path or not path.exists():
-        return {}
-    try:
-        rows = list(csv.DictReader(path.open("r", encoding="utf-8", errors="ignore")))
-    except Exception:
-        return {}
-    out: Dict[str, str] = {}
-    for r in rows:
-        sym = str(r.get("symbol") or r.get("ticker") or "").upper().strip()
-        dt = str(r.get("earnings_date") or r.get("date") or r.get("report_date") or "").strip()
-        if sym and dt:
-            out[sym] = dt
+    if "is_regular_session" not in out.columns:
+        # If we have ET timestamps, classify 09:30 <= t < 16:00.
+        try:
+            t = out["dt_et"].dt.time
+            out["is_regular_session"] = (
+                (t >= pd.to_datetime("09:30").time()) &
+                (t < pd.to_datetime("16:00").time())
+            )
+        except Exception:
+            out["is_regular_session"] = True
+
     return out
 
 
-def earnings_risk_for_symbol(symbol: str, latest_date: str, earnings: Dict[str, str]) -> Tuple[str, str]:
-    dt_text = earnings.get(symbol.upper(), "")
-    if not dt_text:
-        return "UNKNOWN", ""
-    try:
-        e_date = pd.to_datetime(dt_text).date()
-        ref = pd.to_datetime(latest_date).date()
-        delta = (e_date - ref).days
-        if 0 <= delta <= EARNINGS_BLOCK_DAYS:
-            return "BLOCK_FUTURE_EARNINGS", str(e_date)
-        if delta < 0:
-            return "POST_EARNINGS", str(e_date)
-        return "CLEAR", str(e_date)
-    except Exception:
-        return "UNKNOWN", dt_text
+def standardize_ohlcv_columns(df: pd.DataFrame) -> pd.DataFrame:
+    out = df.copy()
+    mapping = {
+        "o": "open",
+        "h": "high",
+        "l": "low",
+        "c": "close",
+        "v": "volume",
+        "vw": "vwap",
+    }
+    for old, new in mapping.items():
+        if new not in out.columns and old in out.columns:
+            out[new] = out[old]
+    required = ["open", "high", "low", "close", "volume"]
+    for col in required:
+        if col not in out.columns:
+            out[col] = 0.0
+        out[col] = pd.to_numeric(out[col], errors="coerce")
+    out = out.dropna(subset=["open", "high", "low", "close"])
+    out["volume"] = pd.to_numeric(out["volume"], errors="coerce").fillna(0)
+    return out
 
 
-def atr_tier(atr_pct: float) -> Tuple[str, float]:
-    for lo, hi, label, size_mult in ATR_SIZE_TIERS:
-        if lo <= atr_pct < hi:
-            return label, size_mult
-    return "UNKNOWN", 0.0
-
-
-def parse_parquet(path: Path) -> pd.DataFrame:
-    df = pd.read_parquet(path)
-    if df.empty:
-        return df
-
-    # Normalize expected columns.
-    lower_map = {c.lower(): c for c in df.columns}
-    rename = {}
-    for want in ["open", "high", "low", "close", "volume", "symbol", "timestamp_utc", "date_et", "time_et", "is_regular_session", "bar_vwap"]:
-        if want not in df.columns and want.lower() in lower_map:
-            rename[lower_map[want.lower()]] = want
-    if rename:
-        df = df.rename(columns=rename)
-
-    if "timestamp_utc" in df.columns:
-        df["timestamp_utc"] = pd.to_datetime(df["timestamp_utc"], utc=True, errors="coerce")
-        df["dt_et"] = df["timestamp_utc"].dt.tz_convert("America/New_York")
-        if "date_et" not in df.columns:
-            df["date_et"] = df["dt_et"].dt.date.astype(str)
-        if "time_et" not in df.columns:
-            df["time_et"] = df["dt_et"].dt.strftime("%H:%M:%S")
-    else:
-        # Fallback if date_et/time_et exist.
-        if "date_et" in df.columns and "time_et" in df.columns:
-            dt = pd.to_datetime(df["date_et"].astype(str) + " " + df["time_et"].astype(str), errors="coerce")
-            df["dt_et"] = dt.dt.tz_localize("America/New_York", nonexistent="shift_forward", ambiguous="NaT")
-        else:
-            raise ValueError("Missing timestamp_utc or date_et/time_et")
-
-    if "is_regular_session" not in df.columns:
-        # Use time to infer regular session.
-        t = df["dt_et"].dt.strftime("%H:%M")
-        df["is_regular_session"] = (t >= "09:30") & (t <= "16:00")
-
-    for c in ["open", "high", "low", "close", "volume"]:
-        if c not in df.columns:
-            raise ValueError(f"Missing required column: {c}")
-        df[c] = pd.to_numeric(df[c], errors="coerce")
-
-    df = df.dropna(subset=["dt_et", "open", "high", "low", "close"]).sort_values("dt_et").reset_index(drop=True)
-    return df
-
-
-def aggregate_daily(regular: pd.DataFrame) -> pd.DataFrame:
+def daily_from_intraday(df: pd.DataFrame) -> pd.DataFrame:
+    df = standardize_ohlcv_columns(infer_datetime_columns(df))
+    regular = df[df["is_regular_session"] == True].copy()
+    if regular.empty:
+        regular = df.copy()
+    regular = regular.dropna(subset=["date_et"])
     if regular.empty:
         return pd.DataFrame()
-    g = regular.groupby("date_et", sort=True)
-    daily = pd.DataFrame({
-        "open": g["open"].first(),
-        "high": g["high"].max(),
-        "low": g["low"].min(),
-        "close": g["close"].last(),
-        "volume": g["volume"].sum(),
-        "bars": g["close"].count(),
-    })
-    daily.index = daily.index.astype(str)
-    daily["vwap"] = g.apply(weighted_vwap)
-    daily = daily.reset_index().rename(columns={"date_et": "date_et"})
-    daily["sma20"] = daily["close"].rolling(20, min_periods=5).mean()
-    daily["sma50"] = daily["close"].rolling(50, min_periods=15).mean()
-    daily["sma200"] = daily["close"].rolling(200, min_periods=50).mean()
-    daily["ema20"] = daily["close"].ewm(span=20, min_periods=5, adjust=False).mean()
-    daily["atr14"] = calculate_atr(daily, 14)
-    daily["rsi14"] = calculate_rsi(daily["close"], 14)
-    daily["avg_volume20"] = daily["volume"].rolling(20, min_periods=5).mean()
+    grouped = regular.groupby("date_et", sort=True)
+    daily = grouped.agg(
+        open=("open", "first"),
+        high=("high", "max"),
+        low=("low", "min"),
+        close=("close", "last"),
+        volume=("volume", "sum"),
+    ).reset_index()
+    daily["date_et"] = daily["date_et"].astype(str)
     return daily
 
 
-def build_features(path: Path, earnings: Dict[str, str], lookback_days: int) -> SymbolFeatures:
-    symbol = normalize_symbol_from_file(path)
-    try:
-        df = parse_parquet(path)
-        if df.empty:
-            return SymbolFeatures(symbol=symbol, valid=False, reason="empty parquet")
-
-        regular = df[df["is_regular_session"] == True].copy()
-        if regular.empty:
-            return SymbolFeatures(symbol=symbol, valid=False, reason="no regular-session bars")
-
-        daily = aggregate_daily(regular)
-        if len(daily) < 60:
-            return SymbolFeatures(symbol=symbol, valid=False, reason=f"not enough daily bars: {len(daily)}")
-
-        if lookback_days > 0 and len(daily) > lookback_days:
-            # Keep enough prior history for SMA/ATR by not trimming the main daily table.
-            pass
-
-        last = daily.iloc[-1]
-        prev = daily.iloc[-2] if len(daily) >= 2 else last
-        latest_date = str(last["date_et"])
-        last_day = regular[regular["date_et"].astype(str) == latest_date].copy()
-
-        if last_day.empty:
-            return SymbolFeatures(symbol=symbol, valid=False, reason="missing last day bars")
-
-        latest_time = str(last_day["time_et"].iloc[-1]) if "time_et" in last_day.columns else str(last_day["dt_et"].iloc[-1])
-        close = safe_float(last["close"])
-        day_open = safe_float(last["open"])
-        day_high = safe_float(last["high"])
-        day_low = safe_float(last["low"])
-        day_vol = safe_float(last["volume"])
-
-        sma20 = safe_float(last.get("sma20"))
-        sma50 = safe_float(last.get("sma50"))
-        sma200 = safe_float(last.get("sma200"))
-        ema20 = safe_float(last.get("ema20"))
-        atr14 = safe_float(last.get("atr14"))
-        atr_pct_val = atr14 / close * 100.0 if close > 0 and not math.isnan(atr14) else math.nan
-        rsi14 = safe_float(last.get("rsi14"), 50.0)
-        avg_vol20 = safe_float(last.get("avg_volume20"))
-        rel_vol = day_vol / avg_vol20 if avg_vol20 and avg_vol20 > 0 else math.nan
-
-        close_loc = ((close - day_low) / max(day_high - day_low, 1e-9)) * 100.0
-        gap = pct(day_open, safe_float(prev["close"]))
-        day_vwap = safe_float(last.get("vwap"), weighted_vwap(last_day))
-        close_above_vwap = close >= day_vwap if not math.isnan(day_vwap) else False
-
-        first30 = last_day.head(30)
-        orh = safe_float(first30["high"].max())
-        orl = safe_float(first30["low"].min())
-
-        late = last_day.tail(30)
-        late_high = safe_float(late["high"].max())
-        late_close = safe_float(late["close"].iloc[-1])
-        late_fade = pct(late_close, late_high) if late_high > 0 else math.nan
-
-        # Panic selling = high volume + bearish price action + VWAP/support loss + bearish late close.
-        red_day = close < day_open
-        close_below_support = (not close_above_vwap) or (not math.isnan(ema20) and close < ema20)
-        late_bearish = close_loc < 35.0 and (not math.isnan(late_fade) and late_fade <= -1.0)
-        panic = bool((rel_vol >= 2.0 if not math.isnan(rel_vol) else False) and red_day and close_below_support and late_bearish)
-
-        # Returns for relative strength cross-sectional scoring later.
-        ret5 = pct(close, safe_float(daily["close"].iloc[-6])) if len(daily) > 6 else math.nan
-        ret20 = pct(close, safe_float(daily["close"].iloc[-21])) if len(daily) > 21 else math.nan
-
-        erisk, edate = earnings_risk_for_symbol(symbol, latest_date, earnings)
-
-        return SymbolFeatures(
-            symbol=symbol,
-            valid=True,
-            reason="ok",
-            latest_date=latest_date,
-            latest_time=latest_time,
-            latest_close=close,
-            latest_open=day_open,
-            latest_high=day_high,
-            latest_low=day_low,
-            latest_volume=day_vol,
-            daily=daily,
-            intraday=regular,
-            last_day_bars=last_day,
-            sma20=sma20,
-            sma50=sma50,
-            sma200=sma200,
-            ema20=ema20,
-            atr14=atr14,
-            atr_pct=atr_pct_val,
-            rsi14=rsi14,
-            avg_volume20=avg_vol20,
-            rel_volume=rel_vol,
-            close_location_pct=close_loc,
-            gap_pct=gap,
-            day_vwap=day_vwap,
-            close_above_vwap=close_above_vwap,
-            opening_range_high=orh,
-            opening_range_low=orl,
-            late_fade_pct=late_fade,
-            panic_selling=panic,
-            ret_5d=ret5,
-            ret_20d=ret20,
-            earnings_risk=erisk,
-            earnings_date=edate,
-        )
-
-    except Exception as e:
-        return SymbolFeatures(symbol=symbol, valid=False, reason=f"read/feature error: {e}")
-
-
-def assign_relative_strength_scores(features: List[SymbolFeatures]) -> None:
-    vals = []
-    for f in features:
-        if f.valid:
-            # Blend 5d and 20d relative performance; penalize missing values.
-            val = 0.6 * (f.ret_5d if not math.isnan(f.ret_5d) else 0.0) + 0.4 * (f.ret_20d if not math.isnan(f.ret_20d) else 0.0)
-            vals.append((f.symbol, val))
-    if not vals:
-        return
-    series = pd.Series({s: v for s, v in vals}).rank(pct=True) * 100.0
-    for f in features:
-        if f.valid and f.symbol in series:
-            f.rs_score = safe_float(series[f.symbol], 50.0)
-
-
-# -----------------------------
-# Hard blockers and scoring
-# -----------------------------
-
-def hard_blockers_common(f: SymbolFeatures) -> List[str]:
-    blockers: List[str] = []
-    price = f.latest_close
-
-    if price < MIN_PRICE or price > MAX_PRICE:
-        blockers.append(f"price_outside_{MIN_PRICE:g}_{MAX_PRICE:g}")
-
-    if math.isnan(f.avg_volume20) or f.avg_volume20 < MIN_AVG_DAILY_VOLUME:
-        blockers.append("avg_volume_below_1m")
-
-    # Hard reject only if below BOTH SMA50 and SMA200.
-    below50 = not math.isnan(f.sma50) and price < f.sma50
-    below200 = not math.isnan(f.sma200) and price < f.sma200
-    if below50 and below200:
-        blockers.append("below_both_sma50_and_sma200")
-
-    tier, _ = atr_tier(f.atr_pct)
-    if tier == "MANUAL_REVIEW_OR_REJECT":
-        blockers.append("atr_over_15_manual_review")
-
-    if f.earnings_risk == "BLOCK_FUTURE_EARNINGS":
-        blockers.append("earnings_within_next_3_days")
-
-    if f.panic_selling:
-        blockers.append("panic_selling")
-
-    return blockers
-
-
-def score_daily_trend(f: SymbolFeatures, setup_type: str) -> float:
-    # Normal continuation: daily trend matters more.
-    max_score = 30.0 if setup_type in {SETUP_DAILY_BREAKOUT, SETUP_PULLBACK_SUPPORT} else 24.0
-
-    score = 0.0
-    price = f.latest_close
-    if not math.isnan(f.sma20) and price > f.sma20:
-        score += max_score * 0.25
-    if not math.isnan(f.sma50) and price > f.sma50:
-        score += max_score * 0.25
-    if not math.isnan(f.sma200) and price > f.sma200:
-        score += max_score * 0.20
-    if not math.isnan(f.sma20) and not math.isnan(f.sma50) and f.sma20 >= f.sma50:
-        score += max_score * 0.15
-    if f.rsi14 >= 50:
-        score += max_score * 0.15
-    return clamp(score, 0.0, max_score)
-
-
-def score_intraday_structure(f: SymbolFeatures) -> float:
-    # Use latest day 30m/1h structure; max 15.
-    if f.last_day_bars is None or f.last_day_bars.empty:
-        return 0.0
-
-    bars = f.last_day_bars.copy()
-    bars = bars.set_index("dt_et").sort_index()
-    try:
-        m30 = bars.resample("30min").agg({"open": "first", "high": "max", "low": "min", "close": "last", "volume": "sum"}).dropna()
-    except Exception:
-        return 0.0
-
-    if len(m30) < 3:
-        return 4.0
-
-    score = 0.0
-    last = m30.iloc[-1]
-    prev = m30.iloc[-2]
-    first = m30.iloc[0]
-    if last["close"] > prev["close"]:
-        score += 4.0
-    if last["close"] > first["open"]:
-        score += 3.0
-    if f.close_above_vwap:
-        score += 4.0
-    if f.close_location_pct >= 60:
-        score += 2.0
-    if f.late_fade_pct > -1.0:
-        score += 2.0
-    return clamp(score, 0.0, 15.0)
-
-
-def score_volume(f: SymbolFeatures) -> float:
-    # Relative volume quality; max 15.
-    rv = f.rel_volume
-    if math.isnan(rv):
-        return 0.0
-    if rv >= 2.0:
-        return 15.0
-    if rv >= 1.5:
-        return 12.0
-    if rv >= 1.2:
-        return 9.0
-    if rv >= 1.0:
-        return 6.0
-    return 2.0
-
-
-def score_support_stop(f: SymbolFeatures, stop: float, entry: float) -> float:
-    # Max 15. Prefer stops below real support without insane distance.
-    risk_pct = (entry - stop) / entry * 100.0 if entry > 0 and stop > 0 else math.nan
-    if math.isnan(risk_pct) or risk_pct <= 0:
-        return 0.0
-
-    score = 0.0
-    if f.close_above_vwap:
-        score += 4.0
-    if not math.isnan(f.ema20) and f.latest_close >= f.ema20:
-        score += 3.0
-    if f.latest_low > stop:
-        score += 2.0
-
-    # For swings, risk around 1-4% is usually workable; ATR tier adjusts size.
-    if 1.0 <= risk_pct <= 4.0:
-        score += 6.0
-    elif 0.5 <= risk_pct < 1.0 or 4.0 < risk_pct <= 6.0:
-        score += 3.0
-
-    return clamp(score, 0.0, 15.0)
-
-
-def score_target_room(rr: float) -> float:
-    if math.isnan(rr):
-        return 0.0
-    if rr >= 2.5:
-        return 10.0
-    if rr >= 2.0:
-        return 8.0
-    if rr >= 1.5:
-        return 6.0
-    if rr >= 1.2:
-        return 3.0
-    return 0.0
-
-
-def score_close_quality(f: SymbolFeatures) -> float:
-    # Max 10.
-    score = 0.0
-    if f.close_location_pct >= 70:
-        score += 4.0
-    elif f.close_location_pct >= 55:
-        score += 3.0
-    elif f.close_location_pct >= 40:
-        score += 1.5
-
-    if f.close_above_vwap:
-        score += 3.0
-
-    if f.late_fade_pct >= -0.5:
-        score += 3.0
-    elif f.late_fade_pct >= -1.5:
-        score += 1.0
-
-    return clamp(score, 0.0, 10.0)
-
-
-def gap_risk_label(f: SymbolFeatures) -> str:
-    gp = abs(f.gap_pct) if not math.isnan(f.gap_pct) else 0.0
-    tier, _ = atr_tier(f.atr_pct)
-    if gp >= 12 or tier == "MANUAL_REVIEW_OR_REJECT":
-        return "HIGH"
-    if gp >= 8 or tier == "EXCELLENT_ONLY":
-        return "ELEVATED"
-    if gp >= 5 or tier == "REDUCED_SIZE":
-        return "MODERATE"
-    return "NORMAL"
-
-
-# -----------------------------
-# Resistance / target logic
-# -----------------------------
-
-def recent_resistance_levels(daily: pd.DataFrame, entry: float, lookback: int = 120) -> List[float]:
-    if daily is None or daily.empty:
-        return []
-    d = daily.tail(lookback).copy()
-    highs = pd.to_numeric(d["high"], errors="coerce").dropna().tolist()
-    levels: List[float] = []
-
-    for h in highs:
-        if h > entry * 1.005:
-            levels.append(float(h))
-
-    # Add obvious round levels above entry.
-    if entry > 0:
-        increments = [0.5, 1.0, 2.5, 5.0]
-        inc = 0.5 if entry < 20 else 1.0 if entry < 50 else 2.5 if entry < 100 else 5.0
-        base = math.ceil(entry / inc) * inc
-        for k in range(1, 8):
-            lvl = base + inc * k
-            if lvl > entry * 1.005:
-                levels.append(float(lvl))
-
-    uniq = sorted(set(round(x, 4) for x in levels if x > entry))
-    return uniq
-
-
-def pick_targets(f: SymbolFeatures, entry: float, stop: float, setup_type: str) -> Tuple[float, float, float, str]:
-    risk = entry - stop
-    if risk <= 0:
-        return math.nan, math.nan, math.nan, "INVALID_RISK"
-
-    levels = recent_resistance_levels(f.daily, entry, lookback=160)
-
-    # T1 = first real resistance above entry, unless too close.
-    meaningful_min = entry + risk * MIN_SWING_RR_READY
-    usable = [lvl for lvl in levels if lvl >= meaningful_min]
-
-    if usable:
-        t1 = usable[0]
-        t2 = usable[1] if len(usable) > 1 else max(t1 + risk, entry + 2.0 * risk)
-        rr = (t1 - entry) / risk
-        return float(t1), float(t2), float(rr), "REAL_DAILY_RESISTANCE"
-
-    # For open-air daily/gap breakouts, measured move is allowed as real structure,
-    # not fake VWAP extension.
-    open_air_ok = setup_type in {SETUP_DAILY_BREAKOUT, SETUP_GAP_HOLD} and (
-        f.latest_close >= f.latest_high * 0.98
-        and f.close_location_pct >= 65
-        and f.rel_volume >= 1.3
-        and f.close_above_vwap
-    )
-
-    if open_air_ok:
-        measured = max(f.atr14 * 1.5 if not math.isnan(f.atr14) else 0.0, risk * 1.5)
-        t1 = entry + measured
-        t2 = entry + measured * 1.6
-        rr = (t1 - entry) / risk
-        return float(t1), float(t2), float(rr), "OPEN_AIR_MEASURED_MOVE"
-
-    # No trusted target: allow Watch, block Ready/Active.
-    return entry + risk * 1.0, entry + risk * 1.5, 1.0, "NO_REAL_TARGET_WATCH_ONLY"
-
-
-# -----------------------------
-# Setup detection and plan builders
-# -----------------------------
-
-def is_daily_breakout_continuation(f: SymbolFeatures) -> bool:
-    d = f.daily
-    if d is None or len(d) < 30:
-        return False
-    prev_high = safe_float(d.iloc[-21:-1]["high"].max())
-    close = f.latest_close
-    if math.isnan(prev_high):
-        return False
-    return bool(
-        close > prev_high * 1.002
-        and f.close_location_pct >= 60
-        and f.rel_volume >= 1.3
-        and close > f.sma50
-        and close > f.sma200
-        and f.rsi14 >= 50
-    )
-
-
-def is_swing_pullback_support_hold(f: SymbolFeatures) -> bool:
-    d = f.daily
-    if d is None or len(d) < 30:
-        return False
-    close = f.latest_close
-    low = f.latest_low
-    if math.isnan(f.ema20) or math.isnan(f.sma50):
-        return False
-
-    # Uptrend but pullback held EMA20/SMA20/prior support.
-    trend_ok = close > f.sma50 and (math.isnan(f.sma200) or close > f.sma200) and f.rsi14 >= 45
-    held_ema20 = low <= f.ema20 * 1.015 and close >= f.ema20
-    selling_faded = f.close_location_pct >= 45 and f.late_fade_pct > -1.5
-    return bool(trend_ok and held_ema20 and selling_faded and f.close_above_vwap)
-
-
-def is_gap_hold_swing(f: SymbolFeatures) -> bool:
-    gp = f.gap_pct
-    if math.isnan(gp):
-        return False
-    gap_ok = 2.0 <= gp <= 8.0
-    held_or = f.latest_close >= f.opening_range_low if not math.isnan(f.opening_range_low) else True
-    return bool(
-        gap_ok
-        and held_or
-        and f.close_above_vwap
-        and f.close_location_pct >= 55
-        and f.rel_volume >= 1.3
-        and f.late_fade_pct > -2.0
-    )
-
-
-def build_plan_for_setup(f: SymbolFeatures, setup_type: str) -> Tuple[float, float, float, float, float, str, str]:
-    """Return entry, stop, target1, target2, rr, target_source, invalid_if."""
-    close = f.latest_close
-    atr = f.atr14 if not math.isnan(f.atr14) else close * 0.03
-    buffer = max(atr * 0.15, close * 0.003)
-
-    if setup_type == SETUP_DAILY_BREAKOUT:
-        entry = max(f.latest_high * 1.001, close * 1.002)
-        support = max(safe_float(f.daily.iloc[-2]["high"]) if f.daily is not None and len(f.daily) >= 2 else f.latest_low, f.opening_range_high if not math.isnan(f.opening_range_high) else f.latest_low)
-        stop = min(f.latest_low - buffer, support - buffer)
-        invalid_if = "Invalid if price loses breakout level / prior-day high with volume."
-
-    elif setup_type == SETUP_PULLBACK_SUPPORT:
-        entry = max(f.latest_high * 1.001, close * 1.001)
-        support_candidates = [f.latest_low]
-        if not math.isnan(f.ema20):
-            support_candidates.append(f.ema20)
-        if not math.isnan(f.day_vwap):
-            support_candidates.append(f.day_vwap)
-        support = min(support_candidates)
-        stop = support - buffer
-        invalid_if = "Invalid if pullback low / EMA20 / VWAP support breaks."
-
-    elif setup_type == SETUP_GAP_HOLD:
-        entry = max(f.latest_high * 1.001, f.opening_range_high * 1.001 if not math.isnan(f.opening_range_high) else close * 1.002)
-        support = f.opening_range_low if not math.isnan(f.opening_range_low) else f.latest_low
-        stop = min(support - buffer, f.day_vwap - buffer if not math.isnan(f.day_vwap) else support - buffer)
-        invalid_if = "Invalid if opening-range low or VWAP support breaks."
-
-    elif setup_type == SETUP_DAY_TO_SWING:
-        entry = close
-        support = max(f.day_vwap if not math.isnan(f.day_vwap) else f.latest_low, f.latest_low)
-        stop = min(f.latest_low - buffer, support - buffer)
-        invalid_if = "Invalid if EOD VWAP/support or entry hold fails next session."
-
+def latest_regular_day_slice(df: pd.DataFrame) -> pd.DataFrame:
+    df = standardize_ohlcv_columns(infer_datetime_columns(df))
+    regular = df[df["is_regular_session"] == True].copy()
+    if regular.empty:
+        regular = df.copy()
+    if regular.empty or "date_et" not in regular.columns:
+        return pd.DataFrame()
+    latest = str(regular["date_et"].dropna().max())
+    day = regular[regular["date_et"].astype(str) == latest].copy()
+    return day
+
+
+def add_daily_indicators(daily: pd.DataFrame) -> pd.DataFrame:
+    d = daily.copy().sort_values("date_et").reset_index(drop=True)
+    for col in ["open", "high", "low", "close", "volume"]:
+        d[col] = pd.to_numeric(d[col], errors="coerce")
+    d["sma20"] = d["close"].rolling(20, min_periods=20).mean()
+    d["sma50"] = d["close"].rolling(50, min_periods=50).mean()
+    d["sma200"] = d["close"].rolling(200, min_periods=200).mean()
+
+    prev_close = d["close"].shift(1)
+    tr = pd.concat([
+        (d["high"] - d["low"]).abs(),
+        (d["high"] - prev_close).abs(),
+        (d["low"] - prev_close).abs(),
+    ], axis=1).max(axis=1)
+    d["atr14"] = tr.rolling(14, min_periods=14).mean()
+    d["atr_pct"] = d["atr14"] / d["close"] * 100.0
+
+    delta = d["close"].diff()
+    gain = delta.clip(lower=0).rolling(14, min_periods=14).mean()
+    loss = (-delta.clip(upper=0)).rolling(14, min_periods=14).mean()
+    rs = gain / loss.replace(0, pd.NA)
+    d["rsi_14"] = 100 - (100 / (1 + rs))
+    d["avg_volume_20d"] = d["volume"].rolling(20, min_periods=10).mean()
+    d["rel_volume"] = d["volume"] / d["avg_volume_20d"].replace(0, pd.NA)
+
+    d["ret_5d_pct"] = (d["close"] / d["close"].shift(5) - 1) * 100
+    d["ret_20d_pct"] = (d["close"] / d["close"].shift(20) - 1) * 100
+    d["gap_pct"] = (d["open"] / d["close"].shift(1) - 1) * 100
+
+    day_range = (d["high"] - d["low"]).replace(0, pd.NA)
+    d["close_location_pct"] = (d["close"] - d["low"]) / day_range * 100.0
+
+    return d
+
+
+def calc_intraday_metrics(day: pd.DataFrame) -> Dict[str, float]:
+    if day.empty:
+        return {
+            "vwap": 0.0,
+            "close_above_vwap": False,
+            "late_fade_pct": 0.0,
+            "intraday_structure_score": 0.0,
+            "panic_selling": False,
+            "close_time_et": "",
+        }
+    day = standardize_ohlcv_columns(infer_datetime_columns(day)).sort_values("dt_et")
+    close = safe_float(day["close"].iloc[-1])
+    high = safe_float(day["high"].max())
+    low = safe_float(day["low"].min())
+    vol = pd.to_numeric(day["volume"], errors="coerce").fillna(0)
+
+    typical = (day["high"] + day["low"] + day["close"]) / 3.0
+    v = vol.sum()
+    vwap = safe_float((typical * vol).sum() / v) if v > 0 else close
+    late_fade_pct = pct(close, high) if high > 0 else 0.0  # negative from HOD
+
+    # Simple structure score based on last third vs first third.
+    n = len(day)
+    if n >= 30:
+        first = safe_float(day["close"].iloc[max(0, n // 3 - 1)])
+        last = close
+        mid = safe_float(day["close"].iloc[max(0, (2 * n) // 3 - 1)])
+        if last > mid > first:
+            structure = 15.0
+        elif last > vwap:
+            structure = 11.0
+        elif last > first:
+            structure = 8.0
+        else:
+            structure = 3.0
     else:
-        entry = close
-        stop = f.latest_low - buffer
-        invalid_if = "Invalid if support breaks."
+        structure = 8.0 if close >= vwap else 3.0
 
-    # Prevent absurd stop > entry or too tight stop.
-    if stop >= entry:
-        stop = entry - max(atr * 0.5, entry * 0.015)
+    # Panic selling = high late fade + below vwap + weak close location + late volume pressure.
+    rng = high - low
+    close_loc = (close - low) / rng * 100.0 if rng > 0 else 50.0
+    panic = bool(close < vwap and late_fade_pct <= -2.0 and close_loc < 35.0)
 
-    t1, t2, rr, source = pick_targets(f, entry, stop, setup_type)
-    return entry, stop, t1, t2, rr, source, invalid_if
-
-
-def build_candidate(f: SymbolFeatures, setup_type: str, mode: str = "independent") -> SwingCandidate:
-    blockers = hard_blockers_common(f)
-    warnings: List[str] = []
-
-    tier, size_mult = atr_tier(f.atr_pct)
-    if tier in {"REDUCED_SIZE", "EXCELLENT_ONLY"}:
-        warnings.append(f"ATR tier {tier}; reduce size.")
-    if f.earnings_risk == "UNKNOWN":
-        warnings.append("Earnings risk unknown; manual check required.")
-    if f.gap_risk if False else False:
+    close_time = ""
+    try:
+        close_time = str(day["dt_et"].iloc[-1].strftime("%H:%M:%S"))
+    except Exception:
         pass
 
-    entry, stop, t1, t2, rr, target_source, invalid_if = build_plan_for_setup(f, setup_type)
-
-    daily_score = score_daily_trend(f, setup_type)
-    intraday_score = score_intraday_structure(f)
-    rs_score = score_linear(f.rs_score, 40.0, 85.0, 15.0)
-    volume_score = score_volume(f)
-    support_score = score_support_stop(f, stop, entry)
-    target_score = score_target_room(rr)
-    close_score = score_close_quality(f)
-
-    # Setup-specific weighting adjustment: gap setups use volume/close more.
-    if setup_type == SETUP_GAP_HOLD:
-        daily_score = min(daily_score, 24.0)
-        volume_score = min(15.0, volume_score + 2.0)
-        close_score = min(10.0, close_score + 1.0)
-
-    total_score = daily_score + intraday_score + rs_score + volume_score + support_score + target_score + close_score
-    confidence = clamp(total_score, 0.0, 100.0)
-
-    # No real target means Watch only. Ready/Active blocked unless real/open-air target.
-    no_real_target = target_source == "NO_REAL_TARGET_WATCH_ONLY"
-    if no_real_target:
-        warnings.append("No real swing target found; Watch only until structure improves.")
-
-    if f.latest_close < f.latest_open and f.close_location_pct < 35:
-        warnings.append("Weak daily close.")
-
-    if blockers:
-        status = STATUS_REJECTED
-    elif confidence >= ACTIVE_MIN_SCORE and rr >= MIN_SWING_RR_ACTIVE and not no_real_target:
-        # Active only if current/latest bar was during regular market and trigger is already crossed.
-        # If scanner is run after-hours, treat as Ready, not Active.
-        last_time = str(f.latest_time)
-        regular_time = "09:30" <= last_time[:5] <= "16:00"
-        if regular_time and f.latest_close >= entry:
-            status = STATUS_SWING_ACTIVE
-        else:
-            status = STATUS_SWING_READY
-    elif confidence >= READY_MIN_SCORE and rr >= MIN_SWING_RR_READY and not no_real_target:
-        status = STATUS_SWING_READY
-    elif confidence >= WATCH_MIN_SCORE:
-        status = STATUS_SWING_WATCH
-    else:
-        status = STATUS_REJECTED
-
-    gap_risk = gap_risk_label(f)
-    if gap_risk in {"ELEVATED", "HIGH"}:
-        warnings.append(f"Gap/ATR risk {gap_risk}; reduce size or skip.")
-
-    suggested_risk_pct = round(1.0 * size_mult, 3)
-    if gap_risk == "ELEVATED":
-        suggested_risk_pct = min(suggested_risk_pct, 0.5)
-    elif gap_risk == "HIGH":
-        suggested_risk_pct = min(suggested_risk_pct, 0.25)
-
-    reason = (
-        f"{setup_type}: score={confidence:.1f}; "
-        f"trend={daily_score:.1f}, 30m/1h={intraday_score:.1f}, RS={rs_score:.1f}, "
-        f"vol={volume_score:.1f}, support={support_score:.1f}, target={target_score:.1f}, close={close_score:.1f}; "
-        f"target_source={target_source}"
-    )
-
-    return SwingCandidate(
-        symbol=f.symbol,
-        setup_type=setup_type,
-        swing_status=status,
-        score=round(total_score, 2),
-        confidence=round(confidence, 2),
-        entry_trigger=round(entry, 4),
-        stop_loss=round(stop, 4),
-        target_1=round(t1, 4),
-        target_2=round(t2, 4),
-        reward_risk=round(rr, 3) if not math.isnan(rr) else math.nan,
-        expected_hold_days=MAX_HOLD_DAYS_DEFAULT,
-        suggested_risk_pct=suggested_risk_pct,
-        close_price=round(f.latest_close, 4),
-        close_time_et=str(f.latest_time),
-        latest_date_et=str(f.latest_date),
-        price=round(f.latest_close, 4),
-        avg_volume_20d=round(f.avg_volume20, 0) if not math.isnan(f.avg_volume20) else math.nan,
-        atr_pct=round(f.atr_pct, 3) if not math.isnan(f.atr_pct) else math.nan,
-        atr_tier=tier,
-        rsi_14=round(f.rsi14, 2) if not math.isnan(f.rsi14) else math.nan,
-        sma20=round(f.sma20, 4) if not math.isnan(f.sma20) else math.nan,
-        sma50=round(f.sma50, 4) if not math.isnan(f.sma50) else math.nan,
-        sma200=round(f.sma200, 4) if not math.isnan(f.sma200) else math.nan,
-        above_sma20=bool(f.latest_close > f.sma20) if not math.isnan(f.sma20) else False,
-        above_sma50=bool(f.latest_close > f.sma50) if not math.isnan(f.sma50) else False,
-        above_sma200=bool(f.latest_close > f.sma200) if not math.isnan(f.sma200) else False,
-        daily_trend_score=round(daily_score, 2),
-        intraday_structure_score=round(intraday_score, 2),
-        relative_strength_score=round(rs_score, 2),
-        volume_score=round(volume_score, 2),
-        support_stop_score=round(support_score, 2),
-        target_room_score=round(target_score, 2),
-        close_quality_score=round(close_score, 2),
-        rel_volume=round(f.rel_volume, 3) if not math.isnan(f.rel_volume) else math.nan,
-        close_location_pct=round(f.close_location_pct, 2) if not math.isnan(f.close_location_pct) else math.nan,
-        gap_pct=round(f.gap_pct, 3) if not math.isnan(f.gap_pct) else math.nan,
-        gap_risk=gap_risk,
-        earnings_risk=f.earnings_risk,
-        vwap=round(f.day_vwap, 4) if not math.isnan(f.day_vwap) else math.nan,
-        close_above_vwap=f.close_above_vwap,
-        late_fade_pct=round(f.late_fade_pct, 3) if not math.isnan(f.late_fade_pct) else math.nan,
-        panic_selling=f.panic_selling,
-        reason=reason,
-        invalid_if=invalid_if,
-        blockers=blockers,
-        warnings=warnings,
-    )
+    return {
+        "vwap": round4(vwap),
+        "close_above_vwap": bool(close >= vwap),
+        "late_fade_pct": round4(late_fade_pct),
+        "intraday_structure_score": round4(structure),
+        "panic_selling": panic,
+        "close_time_et": close_time,
+    }
 
 
-def candidates_for_symbol(f: SymbolFeatures) -> List[SwingCandidate]:
-    if not f.valid:
-        return []
-
-    setups: List[str] = []
-    if is_daily_breakout_continuation(f):
-        setups.append(SETUP_DAILY_BREAKOUT)
-    if is_swing_pullback_support_hold(f):
-        setups.append(SETUP_PULLBACK_SUPPORT)
-    if is_gap_hold_swing(f):
-        setups.append(SETUP_GAP_HOLD)
-
-    cands = [build_candidate(f, s) for s in setups]
-
-    # If no setup but still interesting, do not emit generic noise.
-    return cands
+def atr_tier(atr_pct: float) -> str:
+    atr_pct = safe_float(atr_pct)
+    if atr_pct < 1.0:
+        return "LOW"
+    if atr_pct <= 6.0:
+        return "IDEAL"
+    if atr_pct <= 10.0:
+        return "ELEVATED_REDUCED_SIZE"
+    if atr_pct <= 15.0:
+        return "HIGH_MANUAL_CAUTION"
+    return "EXTREME_REJECT"
 
 
-# -----------------------------
-# Day-to-swing promotion
-# -----------------------------
+def gap_risk(gap_pct: float) -> str:
+    g = abs(safe_float(gap_pct))
+    if g <= 3:
+        return "NORMAL"
+    if g <= 8:
+        return "ELEVATED"
+    if g <= 12:
+        return "HIGH"
+    return "EXTREME"
 
-def load_intraday_active_unresolved(path: Path) -> pd.DataFrame:
-    if not path.exists():
-        return pd.DataFrame()
+
+def earnings_risk_for(symbol: str, latest_date: str, earnings_map: Dict[str, str]) -> Tuple[str, Optional[str]]:
+    if not earnings_map:
+        return "UNKNOWN", "Earnings risk unknown; manual check required."
+    dt_s = earnings_map.get(symbol.upper())
+    if not dt_s:
+        return "CLEAR", None
     try:
-        df = pd.read_csv(path)
+        latest = pd.to_datetime(latest_date).date()
+        ed = pd.to_datetime(dt_s).date()
+        delta = (ed - latest).days
+        if 0 <= delta <= 3:
+            return "BLOCKED_UPCOMING_EARNINGS", f"Earnings within {delta} calendar days."
+        if -3 <= delta < 0:
+            return "POST_EARNINGS", None
+        return "CLEAR", None
     except Exception:
-        return pd.DataFrame()
-
-    needed = {"symbol", "final_status_after_active_replay", "outcome"}
-    if not needed.issubset(set(df.columns)):
-        return pd.DataFrame()
-
-    return df[
-        (df["final_status_after_active_replay"] == "ACTIVE_SIGNAL")
-        & (df["outcome"] == "OPEN_AT_FORWARD_END")
-    ].copy()
+        return "UNKNOWN", "Earnings date parse error; manual check required."
 
 
-def passes_day_to_swing_eod(f: SymbolFeatures, signal_row: pd.Series) -> Tuple[bool, List[str]]:
-    reasons: List[str] = []
-    entry = safe_float(signal_row.get("entry_trigger"))
-    if math.isnan(entry):
-        entry = safe_float(signal_row.get("price_at_signal"), f.latest_close)
-
-    if f.latest_close < entry * 0.99:
-        reasons.append("close_below_entry_by_more_than_1pct")
-    if not f.close_above_vwap:
-        reasons.append("close_below_vwap")
-    if f.close_location_pct < 25 and (not f.close_above_vwap or f.latest_close < entry):
-        reasons.append("bottom_25pct_close_plus_weakness")
-    if not math.isnan(f.late_fade_pct) and f.late_fade_pct <= -2.0:
-        reasons.append("heavy_late_day_fade")
-    if f.panic_selling:
-        reasons.append("panic_selling")
-    if f.earnings_risk == "BLOCK_FUTURE_EARNINGS":
-        reasons.append("earnings_within_next_3_days")
-
-    return len(reasons) == 0, reasons
-
-
-def build_day_to_swing_candidates(
-    features_by_symbol: Dict[str, SymbolFeatures],
-    intraday_results_path: Path,
-) -> List[SwingCandidate]:
-    unresolved = load_intraday_active_unresolved(intraday_results_path)
-    if unresolved.empty:
-        return []
-
-    out: List[SwingCandidate] = []
-    # Latest row per symbol/date to avoid duplicates.
-    for _, r in unresolved.tail(5000).iterrows():
-        sym = str(r.get("symbol", "")).upper()
-        f = features_by_symbol.get(sym)
-        if not f or not f.valid:
-            continue
-
-        ok, reasons = passes_day_to_swing_eod(f, r)
-        if not ok:
-            continue
-
-        cand = build_candidate(f, SETUP_DAY_TO_SWING, mode="promotion")
-        cand.reason = "Day-to-swing promotion: unresolved intraday ACTIVE passed EOD validation. " + cand.reason
-        cand.invalid_if = "Invalid if next session loses EOD VWAP/support or opens below stop."
-        cand.warnings.append("Promoted from intraday Active; not a blind overnight hold.")
-        out.append(cand)
-
+def load_earnings_csv(path: Optional[str]) -> Dict[str, str]:
+    if not path:
+        return {}
+    p = Path(path)
+    if not p.exists():
+        raise FileNotFoundError(f"earnings CSV not found: {path}")
+    out: Dict[str, str] = {}
+    with p.open(newline="", errors="ignore") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            sym = (row.get("symbol") or row.get("ticker") or "").strip().upper()
+            dt = (row.get("earnings_date") or row.get("date") or row.get("report_date") or "").strip()
+            if sym and dt:
+                out[sym] = dt
     return out
 
 
-# -----------------------------
-# Main runner
-# -----------------------------
-
-def select_files(data_root: Path, limit_files: int = 0) -> List[Path]:
-    files = sorted(data_root.rglob("*.parquet"))
-    if limit_files and limit_files > 0:
-        files = files[:limit_files]
-    return files
-
-
-
-
-def dedupe_candidates(candidates: List[SwingCandidate]) -> Tuple[List[SwingCandidate], Dict[str, Any]]:
-    """
-    Remove duplicate swing cards before output.
-
-    Primary duplicate key:
-        symbol + setup_type + latest_date_et
-
-    This prevents day-to-swing promotion from producing repeated cards for the
-    same ticker/setup/date when multiple intraday rows reference the same EOD
-    swing setup.
-
-    Keep priority:
-        1. Better status: ACTIVE > READY > WATCH > REJECTED
-        2. Higher score
-        3. Higher reward/risk
-        4. Cleaner warning/blocker count
-    """
-    status_rank = {
-        STATUS_SWING_ACTIVE: 0,
-        STATUS_SWING_READY: 1,
-        STATUS_SWING_WATCH: 2,
-        STATUS_REJECTED: 9,
-    }
-
-    def clean_key(c: SwingCandidate) -> Tuple[str, str, str]:
-        return (
-            str(c.symbol or "").upper().strip(),
-            str(c.setup_type or "").upper().strip(),
-            str(c.latest_date_et or "").strip(),
-        )
-
-    def candidate_sort_key(c: SwingCandidate) -> Tuple[int, float, float, int]:
-        rr = safe_float(c.reward_risk, 0.0)
-        return (
-            status_rank.get(c.swing_status, 9),
-            -safe_float(c.score, 0.0),
-            -rr,
-            len(c.blockers or []) + len(c.warnings or []),
-        )
-
-    best_by_key: Dict[Tuple[str, str, str], SwingCandidate] = {}
-    duplicate_examples: List[Dict[str, Any]] = []
-    duplicate_count = 0
-
-    for c in candidates:
-        key = clean_key(c)
-        if key not in best_by_key:
-            best_by_key[key] = c
-            continue
-
-        duplicate_count += 1
-        existing = best_by_key[key]
-        winner = sorted([existing, c], key=candidate_sort_key)[0]
-        loser = c if winner is existing else existing
-        best_by_key[key] = winner
-
-        if len(duplicate_examples) < 20:
-            duplicate_examples.append({
-                "symbol": key[0],
-                "setup_type": key[1],
-                "latest_date_et": key[2],
-                "kept_status": winner.swing_status,
-                "kept_score": round(safe_float(winner.score, 0.0), 2),
-                "dropped_status": loser.swing_status,
-                "dropped_score": round(safe_float(loser.score, 0.0), 2),
-            })
-
-    deduped = list(best_by_key.values())
-
-    # Additional safety: prevent multiple identical cards caused by text/status
-    # differences but same trading plan. Keep strongest card per symbol/setup/date.
-    dedupe_meta = {
-        "pre_dedupe_count": len(candidates),
-        "post_dedupe_count": len(deduped),
-        "duplicates_removed": duplicate_count,
-        "dedupe_key": "symbol+setup_type+latest_date_et",
-        "duplicate_examples": duplicate_examples,
-    }
-    return deduped, dedupe_meta
+def recent_resistance_targets(d: pd.DataFrame, entry: float, risk: float) -> Tuple[float, float, str]:
+    hist = d.iloc[:-1].tail(80).copy()
+    levels: List[float] = []
+    if not hist.empty:
+        for window in [10, 20, 50, 80]:
+            sub = hist.tail(window)
+            if not sub.empty:
+                levels.append(safe_float(sub["high"].max()))
+        # Round-number liquidity above entry.
+        if entry > 0:
+            inc = 0.5 if entry < 50 else 1.0 if entry < 150 else 2.5
+            next_round = math.ceil(entry / inc) * inc
+            if next_round > entry:
+                levels.append(next_round)
+    levels = sorted(set(round4(x) for x in levels if safe_float(x) > entry * 1.002))
+    if levels:
+        t1 = levels[0]
+        t2 = levels[1] if len(levels) > 1 else max(t1, entry + 2.0 * risk)
+        return round4(t1), round4(t2), "REAL_DAILY_RESISTANCE"
+    # Open air fallback is measured move, not fake VWAP target.
+    t1 = entry + max(1.5 * risk, safe_float(d["atr14"].iloc[-1], 0.0))
+    t2 = entry + max(2.5 * risk, 1.5 * safe_float(d["atr14"].iloc[-1], 0.0))
+    return round4(t1), round4(t2), "OPEN_AIR_MEASURED_MOVE"
 
 
-def write_outputs(candidates: List[SwingCandidate], summary: Dict[str, Any], output_dir: Path, top: int) -> None:
-    output_dir.mkdir(parents=True, exist_ok=True)
+def score_common(latest: pd.Series, intraday: Dict[str, Any]) -> Dict[str, float]:
+    close = safe_float(latest["close"])
+    sma20 = safe_float(latest.get("sma20"))
+    sma50 = safe_float(latest.get("sma50"))
+    sma200 = safe_float(latest.get("sma200"))
+    rsi = safe_float(latest.get("rsi_14"))
+    relv = safe_float(latest.get("rel_volume"), 0.0)
+    ret5 = safe_float(latest.get("ret_5d_pct"), 0.0)
+    ret20 = safe_float(latest.get("ret_20d_pct"), 0.0)
+    close_loc = safe_float(latest.get("close_location_pct"), 50.0)
 
-    rows = [asdict(c) for c in candidates]
-    # Serialize lists as joined text for CSV.
-    csv_rows: List[Dict[str, Any]] = []
-    for r in rows:
-        rr = dict(r)
-        rr["blockers"] = "; ".join(rr.get("blockers") or [])
-        rr["warnings"] = "; ".join(rr.get("warnings") or [])
-        csv_rows.append(rr)
+    trend = 0.0
+    if close > sma200 > 0:
+        trend += 10
+    if close > sma50 > 0:
+        trend += 8
+    if close > sma20 > 0:
+        trend += 6
+    if sma20 > sma50 > 0:
+        trend += 4
+    if 45 <= rsi <= 70:
+        trend += 2
+    trend = min(30.0, trend)
 
-    csv_path = output_dir / "swing_candidates_latest.csv"
-    json_path = output_dir / "swing_candidates_latest.json"
-    summary_path = output_dir / "swing_scanner_summary.json"
+    rs = 0.0
+    if ret5 > 0:
+        rs += 5
+    if ret20 > 0:
+        rs += 6
+    if ret5 > 2:
+        rs += 2
+    if ret20 > 5:
+        rs += 2
+    rs = min(15.0, rs)
 
-    if csv_rows:
-        with csv_path.open("w", newline="", encoding="utf-8") as f:
-            writer = csv.DictWriter(f, fieldnames=list(csv_rows[0].keys()))
-            writer.writeheader()
-            writer.writerows(csv_rows[:top] if top > 0 else csv_rows)
-    else:
-        with csv_path.open("w", newline="", encoding="utf-8") as f:
-            f.write("symbol,setup_type,swing_status,score,reason\n")
+    vol = 0.0
+    if relv >= 1.0:
+        vol += 6
+    if relv >= 1.2:
+        vol += 3
+    if relv >= 1.5:
+        vol += 4
+    if relv >= 2.0:
+        vol += 2
+    vol = min(15.0, vol)
 
-    with json_path.open("w", encoding="utf-8") as f:
-        json.dump(rows[:top] if top > 0 else rows, f, indent=2)
-
-    with summary_path.open("w", encoding="utf-8") as f:
-        json.dump(summary, f, indent=2)
-
-
-def build_summary(candidates: List[SwingCandidate], total_files: int, valid_features: int, rejected_features: int, output_dir: Path, dedupe_meta: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    from collections import Counter
-
-    status_counts = Counter(c.swing_status for c in candidates)
-    setup_counts = Counter(c.setup_type for c in candidates)
-    blocker_counts: Counter[str] = Counter()
-    warning_counts: Counter[str] = Counter()
-
-    for c in candidates:
-        blocker_counts.update(c.blockers)
-        warning_counts.update(c.warnings)
+    close_quality = 0.0
+    if close_loc >= 50:
+        close_quality += 4
+    if close_loc >= 65:
+        close_quality += 3
+    if bool(intraday.get("close_above_vwap")):
+        close_quality += 2
+    if safe_float(intraday.get("late_fade_pct")) > -1.5:
+        close_quality += 1
+    close_quality = min(10.0, close_quality)
 
     return {
-        "version": SWING_SCANNER_VERSION,
-        "run_time": now_iso(),
-        "total_files": total_files,
-        "valid_feature_rows": valid_features,
-        "rejected_feature_rows": rejected_features,
-        "total_candidates": len(candidates),
-        "dedupe": dedupe_meta or {},
-        "status_counts": dict(status_counts),
-        "setup_counts": dict(setup_counts),
-        "top_blockers": dict(blocker_counts.most_common(20)),
-        "top_warnings": dict(warning_counts.most_common(20)),
-        "outputs": {
-            "csv": str(output_dir / "swing_candidates_latest.csv"),
-            "json": str(output_dir / "swing_candidates_latest.json"),
-            "summary": str(output_dir / "swing_scanner_summary.json"),
-        },
-        "note": "Separate Swing Scanner only. No intraday signals modified. No production files modified.",
+        "daily_trend_score": round4(trend),
+        "intraday_structure_score": round4(safe_float(intraday.get("intraday_structure_score"), 0.0)),
+        "relative_strength_score": round4(rs),
+        "volume_score": round4(vol),
+        "close_quality_score": round4(close_quality),
     }
 
 
-def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="1-3 Day Swing Scanner for Elite Scanner")
-    p.add_argument("--data-root", type=Path, default=DEFAULT_DATA_ROOT)
-    p.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
-    p.add_argument("--earnings-csv", type=Path, default=None, help="Optional earnings calendar CSV with symbol,date columns")
-    p.add_argument("--intraday-results", type=Path, default=DEFAULT_INTRADAY_RESULTS, help="Optional historical/day-trade results for day-to-swing promotion")
-    p.add_argument("--mode", choices=["independent", "promotion", "both"], default="both")
-    p.add_argument("--limit-files", type=int, default=0)
-    p.add_argument("--lookback-days", type=int, default=260)
-    p.add_argument("--top", type=int, default=50)
+def build_candidate(
+    symbol: str,
+    setup_type: str,
+    status: str,
+    latest: pd.Series,
+    daily: pd.DataFrame,
+    intraday: Dict[str, Any],
+    scores: Dict[str, float],
+    support_stop_score: float,
+    target_room_score: float,
+    entry: float,
+    stop: float,
+    target1: float,
+    target2: float,
+    target_source: str,
+    warnings: List[str],
+) -> Optional[SwingCandidate]:
+    risk = entry - stop
+    if entry <= 0 or stop <= 0 or risk <= 0:
+        return None
+    rr = (target1 - entry) / risk if target1 > entry else 0.0
+
+    total = (
+        scores["daily_trend_score"]
+        + scores["intraday_structure_score"]
+        + scores["relative_strength_score"]
+        + scores["volume_score"]
+        + support_stop_score
+        + target_room_score
+        + scores["close_quality_score"]
+    )
+    total = max(0.0, min(100.0, total))
+
+    if total >= 80 and rr >= 1.2:
+        status = "SWING_READY"
+    elif total >= 65:
+        status = "SWING_WATCH"
+    else:
+        return None
+
+    atrp = safe_float(latest.get("atr_pct"))
+    suggested_risk = 1.0
+    if atrp > 10:
+        suggested_risk = 0.35
+    elif atrp > 6:
+        suggested_risk = 0.5
+
+    reason = (
+        f"{setup_type}: score={total:.1f}; "
+        f"trend={scores['daily_trend_score']:.1f}, "
+        f"30m/1h={scores['intraday_structure_score']:.1f}, "
+        f"RS={scores['relative_strength_score']:.1f}, "
+        f"vol={scores['volume_score']:.1f}, "
+        f"support={support_stop_score:.1f}, "
+        f"target={target_room_score:.1f}, "
+        f"close={scores['close_quality_score']:.1f}; "
+        f"target_source={target_source}"
+    )
+
+    invalid = {
+        "SWING_PULLBACK_SUPPORT_HOLD": "Invalid if pullback low / EMA20 / VWAP support breaks.",
+        "DAILY_BREAKOUT_CONTINUATION": "Invalid if breakout level fails and price closes back inside prior range.",
+        "GAP_HOLD_SWING": "Invalid if gap-day low / opening range support fails.",
+        "DAY_TO_SWING_PROMOTION": "Invalid if EOD support, VWAP, or prior day low fails.",
+    }.get(setup_type, "Invalid if support breaks.")
+
+    return SwingCandidate(
+        symbol=symbol,
+        setup_type=setup_type,
+        swing_status=status,
+        score=round4(total),
+        confidence=round4(total),
+        entry_trigger=round4(entry),
+        stop_loss=round4(stop),
+        target_1=round4(target1),
+        target_2=round4(target2),
+        reward_risk=round4(rr),
+        expected_hold_days=3,
+        suggested_risk_pct=round4(suggested_risk),
+        close_price=round4(latest["close"]),
+        close_time_et=str(intraday.get("close_time_et", "")),
+        latest_date_et=str(latest["date_et"]),
+        price=round4(latest["close"]),
+        avg_volume_20d=round4(latest.get("avg_volume_20d")),
+        atr_pct=round4(atrp),
+        atr_tier=atr_tier(atrp),
+        rsi_14=round4(latest.get("rsi_14")),
+        sma20=round4(latest.get("sma20")),
+        sma50=round4(latest.get("sma50")),
+        sma200=round4(latest.get("sma200")),
+        above_sma20=bool(latest["close"] > safe_float(latest.get("sma20"))),
+        above_sma50=bool(latest["close"] > safe_float(latest.get("sma50"))),
+        above_sma200=bool(latest["close"] > safe_float(latest.get("sma200"))),
+        daily_trend_score=round4(scores["daily_trend_score"]),
+        intraday_structure_score=round4(scores["intraday_structure_score"]),
+        relative_strength_score=round4(scores["relative_strength_score"]),
+        volume_score=round4(scores["volume_score"]),
+        support_stop_score=round4(support_stop_score),
+        target_room_score=round4(target_room_score),
+        close_quality_score=round4(scores["close_quality_score"]),
+        rel_volume=round4(latest.get("rel_volume")),
+        close_location_pct=round4(latest.get("close_location_pct")),
+        gap_pct=round4(latest.get("gap_pct")),
+        gap_risk=gap_risk(safe_float(latest.get("gap_pct"))),
+        earnings_risk="",  # filled later
+        vwap=round4(intraday.get("vwap")),
+        close_above_vwap=bool(intraday.get("close_above_vwap")),
+        late_fade_pct=round4(intraday.get("late_fade_pct")),
+        panic_selling=bool(intraday.get("panic_selling")),
+        reason=reason,
+        invalid_if=invalid,
+        blockers="",
+        warnings="; ".join(warnings),
+    )
+
+
+def scan_symbol(
+    symbol: str,
+    daily_raw: pd.DataFrame,
+    latest_intraday: pd.DataFrame,
+    args: argparse.Namespace,
+    earnings_map: Dict[str, str],
+) -> Tuple[List[SwingCandidate], List[str]]:
+    blockers: List[str] = []
+    warnings: List[str] = []
+    candidates: List[SwingCandidate] = []
+
+    daily = add_daily_indicators(daily_raw)
+    if daily.empty or len(daily) < 220:
+        return [], ["Not enough daily history for SMA200/warmup."]
+
+    latest = daily.iloc[-1]
+    close = safe_float(latest["close"])
+    avg_vol = safe_float(latest.get("avg_volume_20d"))
+    atrp = safe_float(latest.get("atr_pct"))
+    sma50 = safe_float(latest.get("sma50"))
+    sma200 = safe_float(latest.get("sma200"))
+    rsi = safe_float(latest.get("rsi_14"))
+    relv = safe_float(latest.get("rel_volume"))
+
+    # Universal hard blockers. These do not depend on dataset name.
+    if close < args.min_price or close > args.max_price:
+        blockers.append(f"Price outside range {args.min_price}-{args.max_price}.")
+    if avg_vol < args.min_avg_volume:
+        blockers.append(f"Avg volume below {args.min_avg_volume}.")
+    if close < sma50 and close < sma200:
+        blockers.append("Below BOTH SMA50 and SMA200.")
+    if atrp > args.max_atr_pct:
+        blockers.append(f"ATR% {atrp:.2f} above max {args.max_atr_pct}.")
+    if pd.isna(latest.get("sma200")) or sma200 <= 0:
+        blockers.append("SMA200 unavailable.")
+
+    erisk, ewarn = earnings_risk_for(symbol, str(latest["date_et"]), earnings_map)
+    if erisk == "BLOCKED_UPCOMING_EARNINGS":
+        blockers.append(ewarn or "Upcoming earnings inside hold window.")
+    elif ewarn:
+        warnings.append(ewarn)
+
+    intraday = calc_intraday_metrics(latest_intraday)
+    if bool(intraday.get("panic_selling")):
+        blockers.append("Panic selling / heavy late-day bearish close.")
+
+    if blockers:
+        return [], blockers + warnings
+
+    scores = score_common(latest, intraday)
+    atr = safe_float(latest.get("atr14"))
+    if atr <= 0:
+        return [], ["ATR unavailable."]
+
+    high = safe_float(latest["high"])
+    low = safe_float(latest["low"])
+    open_ = safe_float(latest["open"])
+    gap = safe_float(latest.get("gap_pct"))
+    close_loc = safe_float(latest.get("close_location_pct"))
+
+    # Common support stop.
+    support_candidates = [low, safe_float(latest.get("sma20")), safe_float(intraday.get("vwap"))]
+    support_candidates = [x for x in support_candidates if x and x > 0 and x < close]
+    support = max(support_candidates) if support_candidates else low
+    stop = max(0.01, support - 0.55 * atr)
+
+    # Entry is next-day trigger above high or small confirmation above close.
+    entry = max(high + 0.05 * atr, close * 1.003)
+    target1, target2, target_source = recent_resistance_targets(daily, entry, entry - stop)
+    rr = (target1 - entry) / (entry - stop) if entry > stop else 0
+
+    support_stop_score = 15.0 if 0 < ((entry - stop) / close * 100) <= max(1.2 * atrp, 2.0) else 9.0
+    target_room_score = 10.0 if rr >= 2 else 8.0 if rr >= 1.5 else 6.0 if rr >= 1.2 else 2.0
+
+    prev20_high = safe_float(daily["high"].iloc[-21:-1].max()) if len(daily) >= 21 else 0.0
+
+    # Setup 1: Daily breakout continuation
+    breakout = (
+        close > prev20_high * 1.001
+        and close > safe_float(latest.get("sma50"))
+        and close > safe_float(latest.get("sma200"))
+        and relv >= 1.15
+        and close_loc >= 60
+        and rr >= 1.2
+    )
+    if breakout:
+        cand = build_candidate(
+            symbol, "DAILY_BREAKOUT_CONTINUATION", "SWING_READY", latest, daily, intraday,
+            scores, support_stop_score, target_room_score, entry, stop, target1, target2,
+            target_source, warnings
+        )
+        if cand:
+            cand.earnings_risk = erisk
+            candidates.append(cand)
+
+    # Setup 2: Swing pullback support hold
+    near_sma20 = abs(close - safe_float(latest.get("sma20"))) / close * 100 <= max(atrp * 0.8, 1.5) if close > 0 else False
+    pullback = (
+        close > sma50
+        and close > sma200
+        and 45 <= rsi <= 68
+        and close_loc >= 50
+        and (near_sma20 or bool(intraday.get("close_above_vwap")))
+        and rr >= 1.2
+    )
+    if pullback:
+        cand = build_candidate(
+            symbol, "SWING_PULLBACK_SUPPORT_HOLD", "SWING_READY", latest, daily, intraday,
+            scores, support_stop_score, target_room_score, entry, stop, target1, target2,
+            target_source, warnings
+        )
+        if cand:
+            cand.earnings_risk = erisk
+            candidates.append(cand)
+
+    # Setup 3: Gap hold swing
+    gap_hold = (
+        2.0 <= gap <= 8.0
+        and close_loc >= 55
+        and bool(intraday.get("close_above_vwap"))
+        and safe_float(intraday.get("late_fade_pct")) > -2.5
+        and rr >= 1.2
+    )
+    if gap_hold:
+        gap_stop = max(0.01, min(open_, low) - 0.35 * atr)
+        cand = build_candidate(
+            symbol, "GAP_HOLD_SWING", "SWING_READY", latest, daily, intraday,
+            scores, support_stop_score, target_room_score, entry, gap_stop, target1, target2,
+            target_source, warnings
+        )
+        if cand:
+            cand.earnings_risk = erisk
+            candidates.append(cand)
+
+    return candidates, warnings
+
+
+def dedupe_candidates(candidates: Sequence[SwingCandidate]) -> List[SwingCandidate]:
+    best: Dict[Tuple[str, str, str], SwingCandidate] = {}
+    for c in candidates:
+        key = (c.symbol, c.setup_type, c.latest_date_et)
+        old = best.get(key)
+        if old is None:
+            best[key] = c
+            continue
+        old_rank = (
+            STATUS_RANK.get(old.swing_status, 0),
+            safe_float(old.score),
+            safe_float(old.reward_risk),
+            -len(old.blockers or ""),
+            -len(old.warnings or ""),
+        )
+        new_rank = (
+            STATUS_RANK.get(c.swing_status, 0),
+            safe_float(c.score),
+            safe_float(c.reward_risk),
+            -len(c.blockers or ""),
+            -len(c.warnings or ""),
+        )
+        if new_rank > old_rank:
+            best[key] = c
+    out = list(best.values())
+    out.sort(key=lambda x: (
+        STATUS_RANK.get(x.swing_status, 0),
+        safe_float(x.score),
+        safe_float(x.reward_risk),
+        SETUP_PRIORITY.get(x.setup_type, 0),
+    ), reverse=True)
+    return out
+
+
+def parquet_sources(data_root: Path, symbols: Sequence[str], limit: Optional[int]) -> List[Tuple[str, Path]]:
+    files = sorted(data_root.rglob("*.parquet"))
+    sym_filter = {s.upper() for s in symbols} if symbols else set()
+    out: List[Tuple[str, Path]] = []
+    for f in files:
+        sym = normalize_symbol_from_file(f)
+        if sym_filter and sym not in sym_filter:
+            continue
+        out.append((sym, f))
+    if limit:
+        out = out[:limit]
+    return out
+
+
+def read_parquet_symbol(path: Path) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    df = pd.read_parquet(path)
+    daily = daily_from_intraday(df)
+    latest_day = latest_regular_day_slice(df)
+    # Free memory held by raw intraday ASAP.
+    del df
+    gc.collect()
+    return daily, latest_day
+
+
+def alpaca_headers() -> Dict[str, str]:
+    key = os.getenv("ALPACA_API_KEY") or os.getenv("ALPACA_KEY_ID")
+    secret = os.getenv("ALPACA_SECRET_KEY") or os.getenv("ALPACA_API_SECRET")
+    if not key or not secret:
+        raise RuntimeError("Alpaca credentials missing. Set ALPACA_API_KEY/ALPACA_SECRET_KEY.")
+    return {
+        "APCA-API-KEY-ID": key,
+        "APCA-API-SECRET-KEY": secret,
+    }
+
+
+def alpaca_get_json(url: str) -> Dict[str, Any]:
+    req = urllib.request.Request(url, headers=alpaca_headers())
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def fetch_alpaca_bars(symbol: str, timeframe: str, start: datetime, end: datetime, feed: str) -> pd.DataFrame:
+    base = "https://data.alpaca.markets/v2/stocks/bars"
+    params = {
+        "symbols": symbol,
+        "timeframe": timeframe,
+        "start": start.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "end": end.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "adjustment": "raw",
+        "feed": feed,
+        "limit": "10000",
+    }
+    url = base + "?" + urllib.parse.urlencode(params)
+    data = alpaca_get_json(url)
+    bars = (data.get("bars") or {}).get(symbol, [])
+    if not bars:
+        return pd.DataFrame()
+    df = pd.DataFrame(bars)
+    # Alpaca returns t/o/h/l/c/v/vw/n.
+    df = standardize_ohlcv_columns(infer_datetime_columns(df))
+    return df
+
+
+def read_alpaca_symbol(symbol: str, feed: str) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    now = datetime.now(timezone.utc)
+    daily_start = now - timedelta(days=420)
+    minute_start = now - timedelta(days=7)
+
+    daily_bars = fetch_alpaca_bars(symbol, "1Day", daily_start, now, feed)
+    if daily_bars.empty:
+        return pd.DataFrame(), pd.DataFrame()
+    daily = daily_from_intraday(daily_bars) if "date_et" not in daily_bars.columns else daily_bars.copy()
+    if "date_et" not in daily.columns:
+        daily = daily_from_intraday(daily_bars)
+    else:
+        # If Alpaca 1Day returned one row per day, standardize to daily columns.
+        daily = standardize_ohlcv_columns(infer_datetime_columns(daily))
+        daily = daily[["date_et", "open", "high", "low", "close", "volume"]].copy()
+
+    minute_bars = fetch_alpaca_bars(symbol, "1Min", minute_start, now, feed)
+    latest_day = latest_regular_day_slice(minute_bars) if not minute_bars.empty else pd.DataFrame()
+    return daily, latest_day
+
+
+def run_scan(args: argparse.Namespace) -> Tuple[List[SwingCandidate], Dict[str, Any]]:
+    earnings_map = load_earnings_csv(args.earnings_csv)
+    explicit_symbols = sorted(set(parse_symbols_arg(args.symbols) + load_symbols_from_file(args.symbols_file)))
+
+    candidates: List[SwingCandidate] = []
+    rejected: Dict[str, int] = {}
+    warnings_count: Dict[str, int] = {}
+    file_errors: Dict[str, str] = {}
+
+    if args.source == "parquet":
+        if not args.data_root:
+            raise SystemExit("--data-root is required when --source parquet")
+        root = Path(args.data_root)
+        if not root.exists():
+            raise FileNotFoundError(f"data root not found: {root}")
+        sources = parquet_sources(root, explicit_symbols, args.limit_files)
+        total = len(sources)
+        print(f"Parquet files: {total}", flush=True)
+        iterator = sources
+    else:
+        if not explicit_symbols:
+            raise SystemExit("--symbols or --symbols-file is required when --source alpaca")
+        syms = explicit_symbols[: args.limit_symbols] if args.limit_symbols else explicit_symbols
+        total = len(syms)
+        print(f"Alpaca symbols: {total}", flush=True)
+        iterator = [(sym, None) for sym in syms]  # type: ignore[list-item]
+
+    for idx, (symbol, obj) in enumerate(iterator, start=1):
+        if idx == 1 or idx % 50 == 0 or idx == total:
+            label = str(obj.name if isinstance(obj, Path) else symbol)
+            print(f"[{idx}/{total}] {label}", flush=True)
+        try:
+            if args.source == "parquet":
+                daily, latest_day = read_parquet_symbol(obj)  # type: ignore[arg-type]
+            else:
+                daily, latest_day = read_alpaca_symbol(symbol, args.alpaca_feed)
+
+            cs, notes = scan_symbol(symbol, daily, latest_day, args, earnings_map)
+            for n in notes:
+                if "Earnings risk unknown" in n or "manual" in n:
+                    warnings_count[n] = warnings_count.get(n, 0) + 1
+                else:
+                    rejected[n] = rejected.get(n, 0) + 1
+            candidates.extend(cs)
+
+            del daily, latest_day, cs
+            if idx % 25 == 0:
+                gc.collect()
+        except Exception as e:
+            file_errors[symbol] = repr(e)
+            continue
+
+    before = len(candidates)
+    candidates = dedupe_candidates(candidates)
+    after = len(candidates)
+
+    summary: Dict[str, Any] = {
+        "version": SCANNER_VERSION,
+        "run_time": datetime.now().isoformat(timespec="seconds"),
+        "source": args.source,
+        "data_root": args.data_root or "",
+        "symbols_file": args.symbols_file or "",
+        "mode": args.mode,
+        "total_inputs": total,
+        "total_candidates_before_dedupe": before,
+        "total_candidates": after,
+        "dedupe_removed": before - after,
+        "status_counts": {},
+        "setup_counts": {},
+        "top_blockers": dict(sorted(rejected.items(), key=lambda kv: kv[1], reverse=True)[:20]),
+        "top_warnings": dict(sorted(warnings_count.items(), key=lambda kv: kv[1], reverse=True)[:20]),
+        "file_errors": dict(list(file_errors.items())[:20]),
+        "note": "Universal Swing Scanner. Dataset is selected only by CLI args. Research/visualization output only.",
+    }
+
+    for c in candidates:
+        summary["status_counts"][c.swing_status] = summary["status_counts"].get(c.swing_status, 0) + 1
+        summary["setup_counts"][c.setup_type] = summary["setup_counts"].get(c.setup_type, 0) + 1
+
+    return candidates, summary
+
+
+def write_outputs(candidates: Sequence[SwingCandidate], summary: Dict[str, Any], out_dir: Path) -> None:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    csv_path = out_dir / "swing_candidates_latest.csv"
+    json_path = out_dir / "swing_candidates_latest.json"
+    summary_path = out_dir / "swing_scanner_summary.json"
+
+    rows = [asdict(c) for c in candidates]
+    # Ensure stable columns.
+    df = pd.DataFrame(rows)
+    if df.empty:
+        df = pd.DataFrame(columns=OUT_COLUMNS)
+    else:
+        for col in OUT_COLUMNS:
+            if col not in df.columns:
+                df[col] = ""
+        df = df[OUT_COLUMNS]
+
+    df.to_csv(csv_path, index=False)
+    json_path.write_text(json.dumps(rows, indent=2), encoding="utf-8")
+    summary["outputs"] = {
+        "csv": str(csv_path),
+        "json": str(json_path),
+        "summary": str(summary_path),
+    }
+    summary_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
+
+    print(f"Saved: {csv_path}")
+    print(f"Saved: {json_path}")
+    print(f"Saved: {summary_path}")
+
+
+def build_arg_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(description="Universal 1-3 Day Swing Scanner")
+    p.add_argument("--source", choices=["parquet", "alpaca"], default="parquet",
+                   help="Data source. parquet=folder of parquet files. alpaca=Alpaca live API.")
+    p.add_argument("--data-root", default=None,
+                   help="Parquet folder. Required for --source parquet. No dataset is hardcoded.")
+    p.add_argument("--symbols", default=None,
+                   help="Comma-separated symbol list. Optional for parquet, required for alpaca unless --symbols-file is given.")
+    p.add_argument("--symbols-file", default=None,
+                   help="Plain text/CSV universe file. First column must be symbol.")
+    p.add_argument("--limit-files", type=int, default=None,
+                   help="Testing only: limit parquet files.")
+    p.add_argument("--limit-symbols", type=int, default=None,
+                   help="Testing only: limit Alpaca symbols.")
+    p.add_argument("--mode", choices=["independent", "day-to-swing", "both"], default="independent",
+                   help="Currently independent scanner is primary. day-to-swing reserved for EOD integration.")
+    p.add_argument("--output-dir", default="/opt/elite-scanner/swing_results")
+    p.add_argument("--earnings-csv", default=None)
+    p.add_argument("--alpaca-feed", default=os.getenv("ALPACA_FEED", "sip"), choices=["sip", "iex", "otc"])
+    p.add_argument("--min-price", type=float, default=10.0)
+    p.add_argument("--max-price", type=float, default=200.0)
+    p.add_argument("--min-avg-volume", type=float, default=1_000_000.0)
+    p.add_argument("--max-atr-pct", type=float, default=15.0)
     p.add_argument("--dry-run", action="store_true")
-    return p.parse_args(argv)
+    return p
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
-    args = parse_args(argv)
+    args = build_arg_parser().parse_args(argv)
 
-    print("=== SWING SCANNER ===")
-    print(f"Version: {SWING_SCANNER_VERSION}")
-    print(f"Data root: {args.data_root}")
+    print("=== UNIVERSAL SWING SCANNER ===")
+    print(f"Version: {SCANNER_VERSION}")
+    print(f"Source: {args.source}")
+    print(f"Data root: {args.data_root or ''}")
     print(f"Mode: {args.mode}")
     print("No production files modified.")
 
-    files = select_files(args.data_root, args.limit_files)
-    print(f"Parquet files: {len(files)}")
-    if not files:
-        print("No parquet files found.")
-        return 2
-
-    earnings = load_earnings_calendar(args.earnings_csv)
-
-    features: List[SymbolFeatures] = []
-    for idx, f in enumerate(files, 1):
-        if idx == 1 or idx % 50 == 0 or idx == len(files):
-            print(f"[{idx}/{len(files)}] {f.name}")
-        feat = build_features(f, earnings, args.lookback_days)
-        features.append(feat)
-
-    assign_relative_strength_scores(features)
-    features_by_symbol = {f.symbol: f for f in features if f.valid}
-
-    candidates: List[SwingCandidate] = []
-
-    if args.mode in {"independent", "both"}:
-        for f in features:
-            candidates.extend(candidates_for_symbol(f))
-
-    if args.mode in {"promotion", "both"}:
-        candidates.extend(build_day_to_swing_candidates(features_by_symbol, args.intraday_results))
-
-    # Remove rejected candidates from final display unless they are useful for debugging.
-    display_raw = [c for c in candidates if c.swing_status != STATUS_REJECTED]
-
-    # Dedupe before output so dashboard never shows repeated cards.
-    display, dedupe_meta = dedupe_candidates(display_raw)
-
-    # Sort: Active/Ready first, then score.
-    status_rank = {STATUS_SWING_ACTIVE: 0, STATUS_SWING_READY: 1, STATUS_SWING_WATCH: 2, STATUS_REJECTED: 9}
-    display.sort(key=lambda c: (status_rank.get(c.swing_status, 9), -c.score, c.symbol))
-
-    summary = build_summary(
-        display,
-        total_files=len(files),
-        valid_features=sum(1 for f in features if f.valid),
-        rejected_features=sum(1 for f in features if not f.valid),
-        output_dir=args.output_dir,
-        dedupe_meta=dedupe_meta,
-    )
+    candidates, summary = run_scan(args)
 
     if args.dry_run:
         print("DRY RUN: no files written.")
     else:
-        write_outputs(display, summary, args.output_dir, args.top)
-        print(f"Saved: {args.output_dir / 'swing_candidates_latest.csv'}")
-        print(f"Saved: {args.output_dir / 'swing_candidates_latest.json'}")
-        print(f"Saved: {args.output_dir / 'swing_scanner_summary.json'}")
+        write_outputs(candidates, summary, Path(args.output_dir))
 
-    if summary.get("dedupe"):
-        print("Dedupe:", summary["dedupe"])
-    print("Status counts:", summary["status_counts"])
-    print("Setup counts:", summary["setup_counts"])
+    print("Status counts:", summary.get("status_counts", {}))
+    print("Setup counts:", summary.get("setup_counts", {}))
     print("Done.")
     return 0
 
