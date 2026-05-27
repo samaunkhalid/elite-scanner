@@ -40,7 +40,7 @@ from string import Template
 
 import pandas as pd
 
-DASHBOARD_VERSION = "v2.8.6_v284_setup_first_gap_compatible"
+DASHBOARD_VERSION = "v2.8.7_day_trade_swing_trade_sections"
 
 try:
     from zoneinfo import ZoneInfo
@@ -4534,6 +4534,285 @@ def build_morning_reclaim_fallback_rows(reclaimer_rows, max_cards=3):
 # HTML BUILDER
 # ==============================================================
 
+
+# ==============================================================
+# DAY TRADE / SWING TRADE DASHBOARD SECTIONS
+# ==============================================================
+
+def status_family(value):
+    text = safe_str(value).upper()
+    if text in ["ACTIVE_SIGNAL", "ACTIVE"]:
+        return "ACTIVE"
+    if text in ["TRIGGER_READY", "TRIGGER_TOUCHED", "READY"]:
+        return "READY"
+    if text in ["WATCH", "MONITOR"]:
+        return "WATCH"
+    if text in ["INVALIDATED", "REJECTED", "WATCH_REMOVED"]:
+        return "INVALIDATED"
+    return text or "UNKNOWN"
+
+
+def build_day_trade_summary_bar(signal_payload, potential_rows=None, reclaimer_rows=None, scanner_regular_ready=False):
+    """Compact Day Trade bar shown directly above Signal Desk.
+
+    Day Trade section is intraday only:
+      - Signal Desk / Morning Reclaim / Potential / Reclaimer
+      - T1 is the practical 0.75R scalp target
+      - T2 is real resistance / open-air target
+    """
+    potential_rows = potential_rows or []
+    reclaimer_rows = reclaimer_rows or []
+    signals = signal_payload.get("signals", []) if isinstance(signal_payload, dict) else []
+    rejected = signal_payload.get("rejected_candidates", []) if isinstance(signal_payload, dict) else []
+
+    active_count = 0
+    ready_count = 0
+    watch_count = 0
+    invalidated_count = 0
+
+    for s in signals:
+        fam = status_family(
+            s.get("signal_status")
+            or s.get("latest_signal_status")
+            or s.get("readiness_grade")
+            or s.get("actionability")
+        )
+        if fam == "ACTIVE":
+            active_count += 1
+        elif fam == "READY":
+            ready_count += 1
+        elif fam == "WATCH":
+            watch_count += 1
+        elif fam == "INVALIDATED":
+            invalidated_count += 1
+
+    freshness = "Ready" if scanner_regular_ready else "Session-gated / waiting"
+    generated = header_time_label(signal_payload.get("generated_at_et")) if isinstance(signal_payload, dict) else "—"
+
+    return f"""
+    <section class="trade-section-header day-trade-header" id="daytrade-summary">
+        <div class="trade-section-title">
+            <span class="trade-kicker">Day Trade</span>
+            <h2>Intraday Signal Desk</h2>
+            <p>Execution-focused intraday setups. T1 is the tested 0.75R scalp/partial target; T2 remains real resistance or open-air target.</p>
+        </div>
+        <div class="trade-summary-grid">
+            <div class="trade-summary-cell">
+                <span>Active</span>
+                <strong>{active_count}</strong>
+            </div>
+            <div class="trade-summary-cell">
+                <span>Ready / Touched</span>
+                <strong>{ready_count}</strong>
+            </div>
+            <div class="trade-summary-cell">
+                <span>Watch</span>
+                <strong>{watch_count}</strong>
+            </div>
+            <div class="trade-summary-cell">
+                <span>Potential</span>
+                <strong>{len(potential_rows)}</strong>
+            </div>
+            <div class="trade-summary-cell">
+                <span>Reclaimer</span>
+                <strong>{len(reclaimer_rows)}</strong>
+            </div>
+            <div class="trade-summary-cell">
+                <span>Rejected</span>
+                <strong>{len(rejected) + invalidated_count}</strong>
+            </div>
+        </div>
+        <div class="trade-section-note">
+            <span>Signal Refresh: {esc(generated)}</span>
+            <span>Scanner Status: {esc(freshness)}</span>
+            <span>Risk rule: default 1% account risk max per trade.</span>
+        </div>
+    </section>
+    """
+
+
+def load_swing_candidates(limit=12):
+    """Load latest Swing Scanner output.
+
+    This is research / visualization only until swing forward backtesting and
+    swing outcomes are finalized. The scanner is universal and writes under
+    swing_results/.
+    """
+    paths = [
+        os.path.join("swing_results", "swing_candidates_latest.csv"),
+        "swing_candidates_latest.csv",
+    ]
+
+    rows = []
+    for path in paths:
+        if os.path.exists(path):
+            rows = load_csv_records(path)
+            break
+
+    if not rows:
+        return []
+
+    status_rank = {
+        "SWING_ACTIVE": 0,
+        "SWING_READY": 1,
+        "SWING_WATCH": 2,
+    }
+
+    def key(row):
+        return (
+            status_rank.get(safe_str(row.get("swing_status")).upper(), 9),
+            -safe_float(row.get("score"), 0),
+            -safe_float(row.get("reward_risk"), 0),
+            safe_str(row.get("symbol")),
+        )
+
+    rows = sorted(rows, key=key)
+    if limit:
+        rows = rows[:limit]
+    return rows
+
+
+def swing_status_class(status):
+    text = safe_str(status).upper()
+    if text == "SWING_ACTIVE":
+        return "swing-status-active"
+    if text == "SWING_READY":
+        return "swing-status-ready"
+    return "swing-status-watch"
+
+
+def swing_setup_label(value):
+    text = safe_str(value, "SWING_SETUP").upper()
+    return text.replace("_", " ").title()
+
+
+def format_percent_dash(value):
+    v = safe_float(value, None)
+    if v is None:
+        return "—"
+    return f"{v:.1f}%"
+
+
+def build_swing_candidate_card(row):
+    symbol = esc(safe_str(row.get("symbol"), "—").upper())
+    setup = esc(swing_setup_label(row.get("setup_type")))
+    status = safe_str(row.get("swing_status"), "SWING_WATCH").upper()
+    status_label = esc(status.replace("_", " "))
+    status_cls = swing_status_class(status)
+    score = safe_float(row.get("score"), 0)
+    rr = safe_float(row.get("reward_risk"), 0)
+    entry = format_price_dash(row.get("entry_trigger"))
+    stop = format_price_dash(row.get("stop_loss"))
+    t1 = format_price_dash(row.get("target_1"))
+    t2 = format_price_dash(row.get("target_2"))
+    close_price = format_price_dash(row.get("close_price") or row.get("price"))
+    latest_date = esc(safe_str(row.get("latest_date_et"), "—"))
+    close_time = esc(safe_str(row.get("close_time_et"), "—"))
+    hold_days = esc(safe_str(row.get("expected_hold_days"), "1–3"))
+    atr = format_percent_dash(row.get("atr_pct"))
+    atr_tier = esc(safe_str(row.get("atr_tier"), "—"))
+    earnings = esc(safe_str(row.get("earnings_risk"), "UNKNOWN"))
+    gap_risk = esc(safe_str(row.get("gap_risk"), "—"))
+    reason = esc(safe_str(row.get("reason"), "Swing scanner candidate."))
+    invalid_if = esc(safe_str(row.get("invalid_if"), "Invalid if swing support breaks."))
+    warnings = safe_str(row.get("warnings"), "")
+    warning_html = ""
+    if warnings:
+        warning_html = f'<div class="swing-warning">{esc(warnings)}</div>'
+
+    return f"""
+    <article class="swing-card">
+        <div class="swing-card-top">
+            <div>
+                <div class="swing-symbol">{symbol}</div>
+                <div class="swing-setup">{setup}</div>
+            </div>
+            <div class="swing-score">
+                <span class="{status_cls}">{status_label}</span>
+                <strong>{score:.0f}</strong>
+            </div>
+        </div>
+
+        <div class="swing-price-grid">
+            <div><span>Entry</span><strong>{entry}</strong></div>
+            <div><span>Stop</span><strong>{stop}</strong></div>
+            <div><span>T1</span><strong>{t1}</strong></div>
+            <div><span>T2</span><strong>{t2}</strong></div>
+        </div>
+
+        <div class="swing-meta-grid">
+            <div><span>R/R</span><strong>{rr:.2f}</strong></div>
+            <div><span>Hold</span><strong>{hold_days}d</strong></div>
+            <div><span>Close</span><strong>{close_price}</strong></div>
+            <div><span>ATR</span><strong>{atr}</strong></div>
+        </div>
+
+        <div class="swing-tags">
+            <span>ATR: {atr_tier}</span>
+            <span>Gap: {gap_risk}</span>
+            <span>Earnings: {earnings}</span>
+            <span>{latest_date} {close_time}</span>
+        </div>
+
+        <p class="swing-reason">{reason}</p>
+        <p class="swing-invalid">{invalid_if}</p>
+        {warning_html}
+    </article>
+    """
+
+
+def build_swing_trade_section(rows):
+    """Research-only Swing Trade section.
+
+    The section is intentionally independent from signal_desk.json and from
+    day-trade alerts/execution. It visualizes swing_scanner.py output only.
+    """
+    rows = rows or []
+
+    if rows:
+        cards = "\n".join(build_swing_candidate_card(r) for r in rows)
+    else:
+        cards = """
+        <div class="swing-empty">
+            <strong>No current Swing Scanner candidates.</strong>
+            <span>Scanner is selective by design. No trade action is implied.</span>
+        </div>
+        """
+
+    active = sum(1 for r in rows if safe_str(r.get("swing_status")).upper() == "SWING_ACTIVE")
+    ready = sum(1 for r in rows if safe_str(r.get("swing_status")).upper() == "SWING_READY")
+    watch = sum(1 for r in rows if safe_str(r.get("swing_status")).upper() == "SWING_WATCH")
+
+    return f"""
+    <section class="trade-block swing-trade-block" id="swingtrade">
+        <div class="trade-block-heading">
+            <div>
+                <span class="trade-kicker swing-kicker">Swing Trade</span>
+                <h2>1–3 Day Swing Desk</h2>
+                <p>Research / visualization only until swing forward backtest and swing outcomes are finalized.</p>
+            </div>
+            <div class="swing-counts">
+                <span>Active <strong>{active}</strong></span>
+                <span>Ready <strong>{ready}</strong></span>
+                <span>Watch <strong>{watch}</strong></span>
+            </div>
+        </div>
+
+        <div class="swing-research-banner">
+            Research Only — not a live trade instruction. Confirm earnings, news, liquidity, spread, daily chart, and risk before any manual decision. Swing Active entries are regular-market only.
+        </div>
+
+        <div class="swing-card-grid">
+            {cards}
+        </div>
+
+        <div class="swing-outcomes-placeholder" id="swing-outcomes">
+            <strong>Swing Outcomes</strong>
+            <span>Pending: 1-day / 2-day / 3-day swing outcomes, T1/T2 hit, stop hit, time exit, gap risk, and exit-R tracking.</span>
+        </div>
+    </section>
+    """
+
 def build_dashboard(potential, active, extended, highrisk, raw, active_watchlist, regime):
     now_utc, now_ny = get_times()
     status, status_class = get_market_status(now_ny)
@@ -4560,6 +4839,9 @@ def build_dashboard(potential, active, extended, highrisk, raw, active_watchlist
     afterhours_section = ""
     early_reclaim_section = ""
     priority_reclaim_section = ""
+    swing_rows = load_swing_candidates(limit=12)
+    swing_section_html = build_swing_trade_section(swing_rows)
+    day_trade_bar_html = ""
 
     if market_open and scanner_regular_ready:
         signals = signal_payload.get("signals", [])
@@ -4573,6 +4855,12 @@ def build_dashboard(potential, active, extended, highrisk, raw, active_watchlist
         active = apply_live_market_overlay(active, live_market_map)
         raw = apply_live_market_overlay(raw, live_market_map)
         reclaimer = load_early_reclaim_rows(raw)
+        day_trade_bar_html = build_day_trade_summary_bar(
+            signal_payload,
+            potential_rows=potential,
+            reclaimer_rows=reclaimer,
+            scanner_regular_ready=scanner_regular_ready,
+        )
         priority_payload = signal_payload.get("priority_morning_reclaim", [])
         if not priority_payload and is_morning_reclaim_focus_window(now_ny):
             priority_payload = build_morning_reclaim_fallback_rows(reclaimer, max_cards=3)
@@ -4633,12 +4921,14 @@ def build_dashboard(potential, active, extended, highrisk, raw, active_watchlist
 
         nav_tabs = f"""
         <div class="nav-tabs">
+            <a href="#daytrade">Day Trade</a>
             <a href="#signals">Signal Desk</a>
             <a href="#priority-reclaim">Priority Morning Reclaim</a>
             <a href="#potential">Potential Momentum</a>
             <a href="#reclaimer">Reclaimer</a>
             <a href="#sectors">Sector Rotation</a>
             <a href="#outcomes">Outcomes</a>
+            <a href="#swingtrade">Swing Trade</a>
             <a href="#desk">Table View</a>
         </div>
         """
@@ -4658,6 +4948,7 @@ def build_dashboard(potential, active, extended, highrisk, raw, active_watchlist
             "Pre-market monitor window",
             "Pre-market movers are ranked by latest pre-market price versus the previous regular close. Monitor only — no entries before regular market open; wait at least 15–30 minutes after 09:30 ET before execution.",
         )
+        day_trade_bar_html = build_day_trade_summary_bar(signal_payload, scanner_regular_ready=False)
         signal_outcomes_html = ""
         potential_section = ""
         active_section = ""
@@ -4674,9 +4965,11 @@ def build_dashboard(potential, active, extended, highrisk, raw, active_watchlist
 
         nav_tabs = """
         <div class="nav-tabs">
+            <a href="#daytrade">Day Trade</a>
             <a href="#signals">Signal Desk Disabled</a>
             <a href="#premarket">Pre-Market Movers</a>
             <a href="#sectors">Sector Rotation</a>
+            <a href="#swingtrade">Swing Trade</a>
         </div>
         """
 
@@ -4709,6 +5002,7 @@ def build_dashboard(potential, active, extended, highrisk, raw, active_watchlist
             "After-hours monitor window",
             "After-hours movers are ranked by latest after-hours price versus the regular 16:00 close. Monitor only — no after-hours entries; use this section for next-session watchlist preparation.",
         )
+        day_trade_bar_html = build_day_trade_summary_bar(signal_payload, scanner_regular_ready=False)
         signal_outcomes_html = ""
         potential_section = ""
         active_section = ""
@@ -4733,9 +5027,11 @@ def build_dashboard(potential, active, extended, highrisk, raw, active_watchlist
 
         nav_tabs = """
         <div class="nav-tabs">
+            <a href="#daytrade">Day Trade</a>
             <a href="#signals">Signal Desk Disabled</a>
             <a href="#afterhours">After-Hours Movers</a>
             <a href="#sectors">Sector Rotation</a>
+            <a href="#swingtrade">Swing Trade</a>
         </div>
         """
 
@@ -4749,6 +5045,7 @@ def build_dashboard(potential, active, extended, highrisk, raw, active_watchlist
             signal_desk_html = build_waiting_first_scanner_panel(status, scanner_time_label)
         else:
             signal_desk_html = build_market_inactive_signal_panel(status)
+        day_trade_bar_html = build_day_trade_summary_bar(signal_payload, scanner_regular_ready=False)
 
         signal_outcomes_html = ""
         potential_section = ""
@@ -4757,7 +5054,9 @@ def build_dashboard(potential, active, extended, highrisk, raw, active_watchlist
         desk_table = ""
         nav_tabs = """
         <div class="nav-tabs">
+            <a href="#daytrade">Day Trade</a>
             <a href="#signals">Signal Desk</a>
+            <a href="#swingtrade">Swing Trade</a>
         </div>
         """
 
@@ -6963,6 +7262,328 @@ td small {
     }
 }
 
+
+/* ==============================================================
+   TRADE SECTION STRUCTURE — DAY TRADE + SWING TRADE
+   ============================================================== */
+
+.trade-block {
+    margin: 18px 0 24px;
+    border: 1px solid rgba(148, 163, 184, 0.14);
+    border-radius: 18px;
+    background: rgba(15, 23, 42, 0.36);
+    padding: 16px;
+}
+
+.trade-block-heading,
+.trade-section-header {
+    border: 1px solid rgba(148, 163, 184, 0.14);
+    border-radius: 16px;
+    padding: 16px;
+    margin-bottom: 14px;
+    background:
+        linear-gradient(135deg, rgba(14, 165, 233, 0.10), rgba(15, 23, 42, 0.72));
+}
+
+.day-trade-header {
+    margin-top: 0;
+}
+
+.trade-section-title h2,
+.trade-block-heading h2 {
+    font-size: 20px;
+    font-weight: 800;
+    letter-spacing: -0.02em;
+    margin: 2px 0 4px;
+}
+
+.trade-section-title p,
+.trade-block-heading p {
+    color: #94a3b8;
+    font-size: 12px;
+    max-width: 880px;
+}
+
+.trade-kicker {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    font-size: 11px;
+    font-weight: 800;
+    color: #38bdf8;
+}
+
+.swing-kicker {
+    color: #a78bfa;
+}
+
+.trade-summary-grid {
+    margin-top: 14px;
+    display: grid;
+    grid-template-columns: repeat(6, minmax(92px, 1fr));
+    gap: 10px;
+}
+
+.trade-summary-cell {
+    border: 1px solid rgba(148, 163, 184, 0.12);
+    border-radius: 12px;
+    padding: 10px 12px;
+    background: rgba(2, 6, 23, 0.38);
+}
+
+.trade-summary-cell span {
+    display: block;
+    color: #94a3b8;
+    font-size: 11px;
+    margin-bottom: 3px;
+}
+
+.trade-summary-cell strong {
+    display: block;
+    font-size: 18px;
+    color: #e5e7eb;
+}
+
+.trade-section-note {
+    margin-top: 12px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.trade-section-note span {
+    color: #cbd5e1;
+    font-size: 11px;
+    border: 1px solid rgba(148, 163, 184, 0.12);
+    border-radius: 999px;
+    padding: 5px 9px;
+    background: rgba(15, 23, 42, 0.52);
+}
+
+.swing-trade-block {
+    background:
+        radial-gradient(circle at top left, rgba(139, 92, 246, 0.10), transparent 26%),
+        rgba(15, 23, 42, 0.34);
+}
+
+.trade-block-heading {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 16px;
+}
+
+.swing-counts {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+}
+
+.swing-counts span {
+    border: 1px solid rgba(167, 139, 250, 0.22);
+    border-radius: 999px;
+    padding: 6px 10px;
+    color: #c4b5fd;
+    background: rgba(88, 28, 135, 0.18);
+    font-size: 12px;
+    font-weight: 650;
+}
+
+.swing-research-banner {
+    margin-bottom: 14px;
+    padding: 11px 13px;
+    border-radius: 13px;
+    color: #fde68a;
+    border: 1px solid rgba(245, 158, 11, 0.24);
+    background: rgba(120, 53, 15, 0.16);
+    font-size: 12px;
+    line-height: 1.45;
+}
+
+.swing-card-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 14px;
+}
+
+.swing-card,
+.swing-empty,
+.swing-outcomes-placeholder {
+    border: 1px solid rgba(148, 163, 184, 0.14);
+    border-radius: 16px;
+    background: rgba(2, 6, 23, 0.42);
+    padding: 14px;
+}
+
+.swing-card-top {
+    display: flex;
+    justify-content: space-between;
+    gap: 14px;
+    align-items: flex-start;
+    margin-bottom: 12px;
+}
+
+.swing-symbol {
+    font-size: 22px;
+    font-weight: 850;
+    letter-spacing: -0.03em;
+}
+
+.swing-setup {
+    color: #94a3b8;
+    font-size: 12px;
+    margin-top: 2px;
+}
+
+.swing-score {
+    display: flex;
+    align-items: flex-end;
+    flex-direction: column;
+    gap: 5px;
+}
+
+.swing-score span {
+    border-radius: 999px;
+    padding: 4px 8px;
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: 0.04em;
+}
+
+.swing-score strong {
+    font-size: 20px;
+}
+
+.swing-status-active {
+    color: #86efac;
+    background: rgba(34, 197, 94, 0.13);
+    border: 1px solid rgba(34, 197, 94, 0.30);
+}
+
+.swing-status-ready {
+    color: #fde68a;
+    background: rgba(245, 158, 11, 0.13);
+    border: 1px solid rgba(245, 158, 11, 0.30);
+}
+
+.swing-status-watch {
+    color: #bfdbfe;
+    background: rgba(59, 130, 246, 0.12);
+    border: 1px solid rgba(59, 130, 246, 0.25);
+}
+
+.swing-price-grid,
+.swing-meta-grid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 8px;
+    margin-bottom: 10px;
+}
+
+.swing-price-grid div,
+.swing-meta-grid div {
+    border-radius: 10px;
+    border: 1px solid rgba(148, 163, 184, 0.10);
+    background: rgba(15, 23, 42, 0.48);
+    padding: 8px;
+}
+
+.swing-price-grid span,
+.swing-meta-grid span {
+    display: block;
+    color: #94a3b8;
+    font-size: 10px;
+    margin-bottom: 2px;
+}
+
+.swing-price-grid strong,
+.swing-meta-grid strong {
+    color: #e5e7eb;
+    font-size: 13px;
+}
+
+.swing-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin: 10px 0;
+}
+
+.swing-tags span {
+    border-radius: 999px;
+    padding: 4px 8px;
+    color: #cbd5e1;
+    background: rgba(30, 41, 59, 0.72);
+    border: 1px solid rgba(148, 163, 184, 0.10);
+    font-size: 10px;
+}
+
+.swing-reason,
+.swing-invalid,
+.swing-warning {
+    color: #cbd5e1;
+    font-size: 12px;
+    line-height: 1.45;
+    margin-top: 8px;
+}
+
+.swing-invalid {
+    color: #fca5a5;
+}
+
+.swing-warning {
+    color: #fde68a;
+}
+
+.swing-empty {
+    grid-column: 1 / -1;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    color: #94a3b8;
+}
+
+.swing-empty strong {
+    color: #e5e7eb;
+}
+
+.swing-outcomes-placeholder {
+    margin-top: 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    color: #94a3b8;
+}
+
+.swing-outcomes-placeholder strong {
+    color: #e5e7eb;
+}
+
+@media (max-width: 980px) {
+    .trade-summary-grid {
+        grid-template-columns: repeat(3, minmax(92px, 1fr));
+    }
+
+    .swing-card-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .trade-block-heading {
+        flex-direction: column;
+    }
+}
+
+@media (max-width: 640px) {
+    .trade-summary-grid,
+    .swing-price-grid,
+    .swing-meta-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+}
+
 </style>
 </head>
 <body>
@@ -6987,19 +7608,25 @@ td small {
 <main class="container">
     $regime_html
     $macro_html
-    $signal_desk_html
-
     $nav_tabs
 
-    $priority_reclaim_section
+    <section class="trade-block day-trade-block" id="daytrade">
+        $day_trade_bar_html
+        $signal_desk_html
 
-    <div id="premarket">$premarket_section</div>
-    <div id="potential">$potential_section</div>
-    <div id="reclaimer">$early_reclaim_section</div>
-    <div id="afterhours">$afterhours_section</div>
+        $priority_reclaim_section
+
+        <div id="premarket">$premarket_section</div>
+        <div id="potential">$potential_section</div>
+        <div id="reclaimer">$early_reclaim_section</div>
+        <div id="afterhours">$afterhours_section</div>
+        $signal_outcomes_html
+        <div id="desk">$desk_table</div>
+    </section>
+
+    $swing_section_html
+
     <div id="sectors">$sector_snapshot</div>
-    $signal_outcomes_html
-    <div id="desk">$desk_table</div>
 
     <div class="footer-note">
         © Elite Scanner Pro Desk. Data refreshes during market hours via Elite Runner; page auto-refreshes every 60 seconds with cache-busting. Extended/high-risk names are saved to CSV but hidden. Alpaca SIP data enabled; confirm spread, liquidity, VWAP, and news before execution.
@@ -7018,8 +7645,10 @@ td small {
         regime_html=regime_html,
         macro_html=macro_html,
         sector_snapshot=sector_snapshot,
+        day_trade_bar_html=day_trade_bar_html,
         signal_desk_html=signal_desk_html,
         signal_outcomes_html=signal_outcomes_html,
+        swing_section_html=swing_section_html,
         nav_tabs=nav_tabs,
         priority_reclaim_section=priority_reclaim_section,
         premarket_section=premarket_section,
@@ -7070,7 +7699,9 @@ def main():
         ]
 
     regime = load_regime()
+    swing_latest = load_swing_candidates(limit=1000)
 
+    print(f"  Swing Candidates:        {len(swing_latest)} (research only)")
     print(f"  Potential Momentum:       {len(potential)}")
     print(f"  Active Momentum:        {len(active)} (hidden on dashboard)")
     print(f"  Reclaimer:  {len(load_early_reclaim_rows(raw))} (visible section max 8)")
