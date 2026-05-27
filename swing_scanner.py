@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Swing Scanner v1.0.0
+Swing Scanner v1.0.1
 Separate 1-3 day swing scanner for Elite Scanner.
 
 Purpose:
@@ -41,7 +41,7 @@ import numpy as np
 import pandas as pd
 
 
-SWING_SCANNER_VERSION = "swing_scanner_v1.0.0"
+SWING_SCANNER_VERSION = "swing_scanner_v1.0.1"
 
 DEFAULT_DATA_ROOT = Path("/opt/strategy-discovery/data/raw_1min")
 DEFAULT_OUTPUT_DIR = Path("/opt/elite-scanner/swing_results")
@@ -1102,6 +1102,89 @@ def select_files(data_root: Path, limit_files: int = 0) -> List[Path]:
     return files
 
 
+
+
+def dedupe_candidates(candidates: List[SwingCandidate]) -> Tuple[List[SwingCandidate], Dict[str, Any]]:
+    """
+    Remove duplicate swing cards before output.
+
+    Primary duplicate key:
+        symbol + setup_type + latest_date_et
+
+    This prevents day-to-swing promotion from producing repeated cards for the
+    same ticker/setup/date when multiple intraday rows reference the same EOD
+    swing setup.
+
+    Keep priority:
+        1. Better status: ACTIVE > READY > WATCH > REJECTED
+        2. Higher score
+        3. Higher reward/risk
+        4. Cleaner warning/blocker count
+    """
+    status_rank = {
+        STATUS_SWING_ACTIVE: 0,
+        STATUS_SWING_READY: 1,
+        STATUS_SWING_WATCH: 2,
+        STATUS_REJECTED: 9,
+    }
+
+    def clean_key(c: SwingCandidate) -> Tuple[str, str, str]:
+        return (
+            str(c.symbol or "").upper().strip(),
+            str(c.setup_type or "").upper().strip(),
+            str(c.latest_date_et or "").strip(),
+        )
+
+    def candidate_sort_key(c: SwingCandidate) -> Tuple[int, float, float, int]:
+        rr = safe_float(c.reward_risk, 0.0)
+        return (
+            status_rank.get(c.swing_status, 9),
+            -safe_float(c.score, 0.0),
+            -rr,
+            len(c.blockers or []) + len(c.warnings or []),
+        )
+
+    best_by_key: Dict[Tuple[str, str, str], SwingCandidate] = {}
+    duplicate_examples: List[Dict[str, Any]] = []
+    duplicate_count = 0
+
+    for c in candidates:
+        key = clean_key(c)
+        if key not in best_by_key:
+            best_by_key[key] = c
+            continue
+
+        duplicate_count += 1
+        existing = best_by_key[key]
+        winner = sorted([existing, c], key=candidate_sort_key)[0]
+        loser = c if winner is existing else existing
+        best_by_key[key] = winner
+
+        if len(duplicate_examples) < 20:
+            duplicate_examples.append({
+                "symbol": key[0],
+                "setup_type": key[1],
+                "latest_date_et": key[2],
+                "kept_status": winner.swing_status,
+                "kept_score": round(safe_float(winner.score, 0.0), 2),
+                "dropped_status": loser.swing_status,
+                "dropped_score": round(safe_float(loser.score, 0.0), 2),
+            })
+
+    deduped = list(best_by_key.values())
+
+    # Additional safety: prevent multiple identical cards caused by text/status
+    # differences but same trading plan. Keep strongest card per symbol/setup/date.
+    dedupe_meta = {
+        "pre_dedupe_count": len(candidates),
+        "post_dedupe_count": len(deduped),
+        "duplicates_removed": duplicate_count,
+        "dedupe_key": "symbol+setup_type+latest_date_et",
+        "duplicate_examples": duplicate_examples,
+    }
+    return deduped, dedupe_meta
+
+
 def write_outputs(candidates: List[SwingCandidate], summary: Dict[str, Any], output_dir: Path, top: int) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1134,7 +1217,7 @@ def write_outputs(candidates: List[SwingCandidate], summary: Dict[str, Any], out
         json.dump(summary, f, indent=2)
 
 
-def build_summary(candidates: List[SwingCandidate], total_files: int, valid_features: int, rejected_features: int, output_dir: Path) -> Dict[str, Any]:
+def build_summary(candidates: List[SwingCandidate], total_files: int, valid_features: int, rejected_features: int, output_dir: Path, dedupe_meta: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     from collections import Counter
 
     status_counts = Counter(c.swing_status for c in candidates)
@@ -1153,6 +1236,7 @@ def build_summary(candidates: List[SwingCandidate], total_files: int, valid_feat
         "valid_feature_rows": valid_features,
         "rejected_feature_rows": rejected_features,
         "total_candidates": len(candidates),
+        "dedupe": dedupe_meta or {},
         "status_counts": dict(status_counts),
         "setup_counts": dict(setup_counts),
         "top_blockers": dict(blocker_counts.most_common(20)),
@@ -1217,7 +1301,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         candidates.extend(build_day_to_swing_candidates(features_by_symbol, args.intraday_results))
 
     # Remove rejected candidates from final display unless they are useful for debugging.
-    display = [c for c in candidates if c.swing_status != STATUS_REJECTED]
+    display_raw = [c for c in candidates if c.swing_status != STATUS_REJECTED]
+
+    # Dedupe before output so dashboard never shows repeated cards.
+    display, dedupe_meta = dedupe_candidates(display_raw)
 
     # Sort: Active/Ready first, then score.
     status_rank = {STATUS_SWING_ACTIVE: 0, STATUS_SWING_READY: 1, STATUS_SWING_WATCH: 2, STATUS_REJECTED: 9}
@@ -1229,6 +1316,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         valid_features=sum(1 for f in features if f.valid),
         rejected_features=sum(1 for f in features if not f.valid),
         output_dir=args.output_dir,
+        dedupe_meta=dedupe_meta,
     )
 
     if args.dry_run:
@@ -1239,6 +1327,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         print(f"Saved: {args.output_dir / 'swing_candidates_latest.json'}")
         print(f"Saved: {args.output_dir / 'swing_scanner_summary.json'}")
 
+    if summary.get("dedupe"):
+        print("Dedupe:", summary["dedupe"])
     print("Status counts:", summary["status_counts"])
     print("Setup counts:", summary["setup_counts"])
     print("Done.")
