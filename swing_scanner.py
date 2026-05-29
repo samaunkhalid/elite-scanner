@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
 """
 Universal 1-3 Day Swing Scanner
-Version: swing_scanner_v1.1.0_universal
+top-level version = v1.2.4_display_quality_floor
+institutional_model.version = v1.2.3_unique_ticker_shortlist
 
 Purpose:
 - Universal scanner. Not tied to the 300-ticker dataset.
 - Scans whatever universe/data source is passed at runtime.
 - Supports:
-    1) parquet folder validation/live cache mode
-    2) Alpaca live data mode, using a provided universe/symbol list
+    1) daily+1H parquet swing mode plus legacy raw parquet validation mode
+    2) Alpaca live data mode, using auto-discovered dynamic universe plus optional user seeds
+    3) institutional swing filtering: SMA/EMA, MACD, smart money, news, sector, volume, setup-specific R/R
+    4) tiered shortlist behavior: hard reject severe risk, downgrade soft weakness to Watch, rank top 8-10
 - Writes visualization/research output only.
 - No production signal_engine changes.
 - No broker execution.
@@ -34,7 +37,7 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 import pandas as pd
 
 
-SCANNER_VERSION = "swing_scanner_v1.1.0_universal"
+SCANNER_VERSION = "swing_scanner_v1.2.4_display_quality_floor"
 
 STATUS_RANK = {
     "SWING_ACTIVE": 3,
@@ -47,7 +50,42 @@ SETUP_PRIORITY = {
     "SWING_PULLBACK_SUPPORT_HOLD": 2,
     "GAP_HOLD_SWING": 2,
     "DAY_TO_SWING_PROMOTION": 1,
+    "INSTITUTIONAL_SWING_CANDIDATE_POOL": 0,
 }
+
+INSTITUTIONAL_SCORE_WEIGHTS = {
+    "trend_sma_ema": 15.0,
+    "setup_quality": 15.0,
+    "macd_momentum": 10.0,
+    "smart_money_confirmation": 20.0,
+    "news_catalyst": 15.0,
+    "volume_accumulation": 10.0,
+    "sector_market": 10.0,
+    "risk_stop": 5.0,
+}
+
+SETUP_RR_GATES = {
+    "DAILY_BREAKOUT_CONTINUATION": 1.85,
+    "SWING_PULLBACK_SUPPORT_HOLD": 1.55,
+    "GAP_HOLD_SWING": 1.35,
+    "DAY_TO_SWING_PROMOTION": 1.50,
+    "INSTITUTIONAL_SWING_CANDIDATE_POOL": 99.0,
+}
+
+SETUP_WATCH_RR_GATES = {
+    "DAILY_BREAKOUT_CONTINUATION": 1.25,
+    "SWING_PULLBACK_SUPPORT_HOLD": 1.20,
+    "GAP_HOLD_SWING": 1.15,
+    "DAY_TO_SWING_PROMOTION": 1.20,
+    "INSTITUTIONAL_SWING_CANDIDATE_POOL": 1.20,
+}
+
+SWING_READY_SCORE = 86.0
+SWING_WATCH_SCORE = 72.0
+SWING_POOL_WATCH_SCORE = 72.0
+SWING_PROXY_WATCH_SCORE = 72.0
+SWING_POOL_DISPLAY_SCORE = 72.0
+SWING_POOL_DISPLAY_RR_MIN = 1.20
 
 OUT_COLUMNS = [
     "symbol",
@@ -67,15 +105,54 @@ OUT_COLUMNS = [
     "latest_date_et",
     "price",
     "avg_volume_20d",
+    "avg_dollar_volume_20d",
     "atr_pct",
     "atr_tier",
     "rsi_14",
     "sma20",
     "sma50",
     "sma200",
+    "ema9",
+    "ema20",
+    "ema21",
+    "macd_line",
+    "macd_signal",
+    "macd_hist",
+    "macd_state",
+    "macd_hist_slope",
     "above_sma20",
     "above_sma50",
     "above_sma200",
+    "above_ema20",
+    "above_ema21",
+    "trend_sma_ema_score",
+    "setup_quality_score",
+    "macd_momentum_score",
+    "smart_money_confirmation_score",
+    "news_catalyst_score",
+    "volume_accumulation_score",
+    "sector_market_score",
+    "risk_stop_score",
+    "institutional_grade",
+    "setup_rr_gate",
+    "smart_money_score",
+    "smart_money_bias",
+    "smart_money_label",
+    "smart_money_signals",
+    "news_risk",
+    "news_score",
+    "news_summary",
+    "positive_catalyst",
+    "negative_catalyst",
+    "sector_context",
+    "sector_score",
+    "volume_pattern",
+    "close_to_high_pct",
+    "close_quality_3d",
+    "atr_trend",
+    "overnight_gap_risk",
+    "stop_atr_multiple",
+    "entry_strategy",
     "daily_trend_score",
     "intraday_structure_score",
     "relative_strength_score",
@@ -118,15 +195,54 @@ class SwingCandidate:
     latest_date_et: str
     price: float
     avg_volume_20d: float
+    avg_dollar_volume_20d: float
     atr_pct: float
     atr_tier: str
     rsi_14: float
     sma20: float
     sma50: float
     sma200: float
+    ema9: float
+    ema20: float
+    ema21: float
+    macd_line: float
+    macd_signal: float
+    macd_hist: float
+    macd_state: str
+    macd_hist_slope: float
     above_sma20: bool
     above_sma50: bool
     above_sma200: bool
+    above_ema20: bool
+    above_ema21: bool
+    trend_sma_ema_score: float
+    setup_quality_score: float
+    macd_momentum_score: float
+    smart_money_confirmation_score: float
+    news_catalyst_score: float
+    volume_accumulation_score: float
+    sector_market_score: float
+    risk_stop_score: float
+    institutional_grade: str
+    setup_rr_gate: float
+    smart_money_score: float
+    smart_money_bias: str
+    smart_money_label: str
+    smart_money_signals: str
+    news_risk: str
+    news_score: float
+    news_summary: str
+    positive_catalyst: bool
+    negative_catalyst: bool
+    sector_context: str
+    sector_score: float
+    volume_pattern: str
+    close_to_high_pct: float
+    close_quality_3d: float
+    atr_trend: str
+    overnight_gap_risk: str
+    stop_atr_multiple: float
+    entry_strategy: str
     daily_trend_score: float
     intraday_structure_score: float
     relative_strength_score: float
@@ -174,7 +290,7 @@ def pct(a: float, b: float) -> float:
 
 def normalize_symbol_from_file(path: Path) -> str:
     name = path.stem
-    for suffix in ["_1Min", "_1min", "_1MIN", "_minute", "_Minute"]:
+    for suffix in ["_Daily", "_DAILY", "_daily", "_1H", "_1h", "_Hour", "_hour", "_1Min", "_1min", "_1MIN", "_minute", "_Minute"]:
         if name.endswith(suffix):
             return name[: -len(suffix)].upper()
     return name.upper()
@@ -205,10 +321,215 @@ def parse_symbols_arg(symbols: Optional[str]) -> List[str]:
     return sorted(set(s.strip().upper() for s in symbols.split(",") if s.strip()))
 
 
+# ==============================================================
+# AUTO SWING UNIVERSE DISCOVERY
+# ==============================================================
+#
+# Manual symbol files are optional seeds only.  The live Swing Desk must be able
+# to discover its own candidates, similar to the day-trade scanner.  We build a
+# dynamic long-only swing universe from broad Yahoo predefined screeners, prior
+# local scanner outputs, and a small liquid core fallback.  Alpaca remains the
+# OHLCV source used to validate each candidate.
+#
+# No production signals, alerts, or broker routes are modified here.
+
+SWING_DYNAMIC_SCREENERS = [
+    "day_gainers",
+    "most_actives",
+    "growth_technology_stocks",
+    "small_cap_gainers",
+    "undervalued_growth_stocks",
+    "undervalued_large_caps",
+]
+
+SWING_OPTIONAL_SEED_FILES = [
+    "static_swing_universe.csv",
+    "swing_universe.csv",
+    "static_liquid_universe.csv",
+    "liquid_universe.csv",
+    "regular_market_universe.csv",
+    "potential_movers.csv",
+    "active_momentum.csv",
+    "elite_watchlist_raw.csv",
+    "premarket_movers.csv",
+    os.path.join("swing_results", "swing_candidates_latest.csv"),
+]
+
+SWING_CORE_SYMBOLS = [
+    # Liquid market leaders / sector representatives used only as a fallback
+    # seed.  Actual inclusion still requires the scanner's trend, liquidity,
+    # ATR, support, target-room, and earnings-risk filters.
+    "AAPL", "MSFT", "NVDA", "AMD", "AVGO", "TSM", "ASML", "ARM", "MU", "QCOM",
+    "AMZN", "META", "GOOGL", "NFLX", "UBER", "SHOP", "CRM", "NOW", "SNOW", "DDOG",
+    "TSLA", "RIVN", "GM", "F", "NIO", "LI", "XPEV", "PLTR", "AI", "SOUN",
+    "JPM", "BAC", "WFC", "GS", "MS", "C", "V", "MA", "AXP", "PYPL",
+    "LLY", "NVO", "UNH", "ABBV", "MRK", "PFE", "TMO", "ISRG", "VRTX", "REGN",
+    "XOM", "CVX", "OXY", "SLB", "HAL", "COP", "LNG", "ENPH", "FSLR", "SEDG",
+    "CAT", "DE", "GE", "BA", "LMT", "RTX", "NOC", "HON", "ETN", "URI",
+    "WMT", "COST", "HD", "LOW", "TGT", "MCD", "SBUX", "NKE", "LULU", "CMG",
+    "SPY", "QQQ", "IWM", "SMH", "XLK", "XLF", "XLE", "XLI", "XLV", "XLY",
+]
+
+
+def normalize_symbol_for_swing(symbol: Any) -> str:
+    sym = str(symbol or "").strip().upper()
+    if not sym:
+        return ""
+    if any(c in sym for c in ["^", "=", "/"]):
+        return ""
+    if "." in sym:
+        return ""
+    return sym
+
+
+def read_optional_symbol_seed_file(path: str) -> List[str]:
+    try:
+        p = Path(path)
+        if not p.exists() or not p.is_file():
+            return []
+        if p.suffix.lower() == ".json":
+            data = json.loads(p.read_text(encoding="utf-8", errors="ignore"))
+            if isinstance(data, list):
+                raw = [x.get("symbol") if isinstance(x, dict) else x for x in data]
+                return [normalize_symbol_for_swing(x) for x in raw if normalize_symbol_for_swing(x)]
+            return []
+        df = pd.read_csv(p)
+        if df.empty:
+            return []
+        for col in ["symbol", "Symbol", "ticker", "Ticker"]:
+            if col in df.columns:
+                return [normalize_symbol_for_swing(x) for x in df[col].dropna().tolist() if normalize_symbol_for_swing(x)]
+        return [normalize_symbol_for_swing(x) for x in df.iloc[:, 0].dropna().tolist() if normalize_symbol_for_swing(x)]
+    except Exception:
+        return []
+
+
+def fetch_yahoo_screener_symbols(args: argparse.Namespace) -> Tuple[List[str], Dict[str, int], Dict[str, str]]:
+    found: List[str] = []
+    counts: Dict[str, int] = {}
+    errors: Dict[str, str] = {}
+
+    for screener in SWING_DYNAMIC_SCREENERS:
+        try:
+            url = (
+                "https://query1.finance.yahoo.com/v1/finance/screener/predefined/saved?"
+                + urllib.parse.urlencode({"count": "100", "scrIds": screener})
+            )
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=12) as resp:
+                data = json.loads(resp.read().decode("utf-8", errors="ignore"))
+
+            quotes = data.get("finance", {}).get("result", [{}])[0].get("quotes", [])
+            local_count = 0
+            for q in quotes:
+                if not isinstance(q, dict):
+                    continue
+                sym = normalize_symbol_for_swing(q.get("symbol"))
+                if not sym:
+                    continue
+
+                price = safe_float(
+                    q.get("regularMarketPrice")
+                    or q.get("postMarketPrice")
+                    or q.get("preMarketPrice"),
+                    0.0,
+                )
+                avg_vol = safe_float(
+                    q.get("averageDailyVolume3Month")
+                    or q.get("averageDailyVolume10Day")
+                    or q.get("regularMarketVolume"),
+                    0.0,
+                )
+
+                if price and (price < args.min_price or price > args.max_price):
+                    continue
+                if avg_vol and avg_vol < args.min_avg_volume:
+                    continue
+
+                found.append(sym)
+                local_count += 1
+
+            counts[screener] = local_count
+        except Exception as exc:
+            errors[screener] = repr(exc)
+
+    return found, counts, errors
+
+
+def build_auto_swing_universe(
+    args: argparse.Namespace,
+    explicit_symbols: Sequence[str],
+) -> Tuple[List[str], Dict[str, Any]]:
+    ordered: List[str] = []
+    seen = set()
+    source_counts: Dict[str, int] = {}
+    source_errors: Dict[str, str] = {}
+
+    def add_many(symbols: Iterable[Any], source_label: str) -> None:
+        added = 0
+        for raw in symbols or []:
+            sym = normalize_symbol_for_swing(raw)
+            if not sym or sym in seen:
+                continue
+            seen.add(sym)
+            ordered.append(sym)
+            added += 1
+        if added:
+            source_counts[source_label] = source_counts.get(source_label, 0) + added
+
+    # Explicit symbols are honored first if supplied, but they are no longer
+    # required. They act as a seed/override, not as the only live universe.
+    add_many(explicit_symbols, "explicit_symbols")
+
+    yahoo_symbols, yahoo_counts, yahoo_errors = fetch_yahoo_screener_symbols(args)
+    add_many(yahoo_symbols, "yahoo_dynamic_screeners")
+    for k, v in yahoo_counts.items():
+        source_counts[f"yahoo:{k}"] = v
+    source_errors.update({f"yahoo:{k}": v for k, v in yahoo_errors.items()})
+
+    for fname in SWING_OPTIONAL_SEED_FILES:
+        add_many(read_optional_symbol_seed_file(fname), fname)
+
+    add_many(SWING_CORE_SYMBOLS, "liquid_core_fallback")
+
+    cap = int(getattr(args, "max_universe_symbols", 650) or 650)
+    symbols = ordered[: max(25, cap)]
+
+    meta = {
+        "mode": "auto_universe",
+        "symbols": len(symbols),
+        "max_universe_symbols": cap,
+        "source_counts": source_counts,
+        "source_errors": dict(list(source_errors.items())[:20]),
+        "note": "Auto-discovered swing universe. Optional symbol files are seeds only, not required.",
+    }
+    return symbols, meta
+
+
+def write_universe_cache(symbols: Sequence[str], meta: Dict[str, Any], path: Optional[str]) -> None:
+    if not path:
+        return
+    try:
+        p = Path(path)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        pd.DataFrame({"symbol": list(symbols)}).to_csv(p, index=False)
+        meta_path = p.with_suffix(".json")
+        meta_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
+    except Exception:
+        pass
+
+
 def infer_datetime_columns(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
 
-    if "timestamp_utc" in out.columns:
+    if "timestamp_et" in out.columns:
+        out["dt_et"] = pd.to_datetime(out["timestamp_et"], errors="coerce")
+        try:
+            if getattr(out["dt_et"].dt, "tz", None) is None:
+                out["dt_et"] = out["dt_et"].dt.tz_localize("America/New_York", nonexistent="shift_forward", ambiguous="NaT")
+        except Exception:
+            pass
+    elif "timestamp_utc" in out.columns:
         out["timestamp_utc"] = pd.to_datetime(out["timestamp_utc"], utc=True, errors="coerce")
         out["dt_et"] = out["timestamp_utc"].dt.tz_convert("America/New_York")
     elif "timestamp" in out.columns:
@@ -301,9 +622,20 @@ def add_daily_indicators(daily: pd.DataFrame) -> pd.DataFrame:
     d = daily.copy().sort_values("date_et").reset_index(drop=True)
     for col in ["open", "high", "low", "close", "volume"]:
         d[col] = pd.to_numeric(d[col], errors="coerce")
+
     d["sma20"] = d["close"].rolling(20, min_periods=20).mean()
     d["sma50"] = d["close"].rolling(50, min_periods=50).mean()
     d["sma200"] = d["close"].rolling(200, min_periods=200).mean()
+    d["ema9"] = d["close"].ewm(span=9, adjust=False, min_periods=9).mean()
+    d["ema20"] = d["close"].ewm(span=20, adjust=False, min_periods=20).mean()
+    d["ema21"] = d["close"].ewm(span=21, adjust=False, min_periods=21).mean()
+
+    ema12 = d["close"].ewm(span=12, adjust=False, min_periods=12).mean()
+    ema26 = d["close"].ewm(span=26, adjust=False, min_periods=26).mean()
+    d["macd_line"] = ema12 - ema26
+    d["macd_signal"] = d["macd_line"].ewm(span=9, adjust=False, min_periods=9).mean()
+    d["macd_hist"] = d["macd_line"] - d["macd_signal"]
+    d["macd_hist_slope"] = d["macd_hist"] - d["macd_hist"].shift(2)
 
     prev_close = d["close"].shift(1)
     tr = pd.concat([
@@ -313,6 +645,8 @@ def add_daily_indicators(daily: pd.DataFrame) -> pd.DataFrame:
     ], axis=1).max(axis=1)
     d["atr14"] = tr.rolling(14, min_periods=14).mean()
     d["atr_pct"] = d["atr14"] / d["close"] * 100.0
+    d["atr_pct_5d_avg"] = d["atr_pct"].rolling(5, min_periods=3).mean()
+    d["atr_expanding"] = d["atr_pct"] > d["atr_pct_5d_avg"]
 
     delta = d["close"].diff()
     gain = delta.clip(lower=0).rolling(14, min_periods=14).mean()
@@ -320,14 +654,28 @@ def add_daily_indicators(daily: pd.DataFrame) -> pd.DataFrame:
     rs = gain / loss.replace(0, pd.NA)
     d["rsi_14"] = 100 - (100 / (1 + rs))
     d["avg_volume_20d"] = d["volume"].rolling(20, min_periods=10).mean()
+    d["avg_dollar_volume_20d"] = d["avg_volume_20d"] * d["close"]
+    d["avg_volume_10d"] = d["volume"].rolling(10, min_periods=5).mean()
+    d["avg_volume_3d"] = d["volume"].rolling(3, min_periods=2).mean()
     d["rel_volume"] = d["volume"] / d["avg_volume_20d"].replace(0, pd.NA)
+    d["volume_3d_vs_10d"] = d["avg_volume_3d"] / d["avg_volume_10d"].replace(0, pd.NA)
 
+    d["ret_1d_pct"] = (d["close"] / d["close"].shift(1) - 1) * 100
     d["ret_5d_pct"] = (d["close"] / d["close"].shift(5) - 1) * 100
     d["ret_20d_pct"] = (d["close"] / d["close"].shift(20) - 1) * 100
     d["gap_pct"] = (d["open"] / d["close"].shift(1) - 1) * 100
 
     day_range = (d["high"] - d["low"]).replace(0, pd.NA)
     d["close_location_pct"] = (d["close"] - d["low"]) / day_range * 100.0
+    d["close_to_high_pct"] = (d["close"] / d["high"].replace(0, pd.NA) - 1) * 100.0
+    d["close_quality_3d"] = d["close_location_pct"].rolling(3, min_periods=2).mean()
+
+    up_day = d["close"] > d["close"].shift(1)
+    down_day = d["close"] < d["close"].shift(1)
+    up_vol = d["volume"].where(up_day, 0).rolling(5, min_periods=3).sum()
+    down_vol = d["volume"].where(down_day, 0).rolling(5, min_periods=3).sum()
+    d["up_volume_ratio_5d"] = up_vol / (up_vol + down_vol).replace(0, pd.NA)
+    d["overnight_gap_abs_20d"] = d["gap_pct"].abs().rolling(20, min_periods=10).median()
 
     return d
 
@@ -341,9 +689,12 @@ def calc_intraday_metrics(day: pd.DataFrame) -> Dict[str, float]:
             "intraday_structure_score": 0.0,
             "panic_selling": False,
             "close_time_et": "",
+            "close_location_pct": 50.0,
+            "close_to_high_pct": 0.0,
         }
     day = standardize_ohlcv_columns(infer_datetime_columns(day)).sort_values("dt_et")
     close = safe_float(day["close"].iloc[-1])
+    open_ = safe_float(day["open"].iloc[0])
     high = safe_float(day["high"].max())
     low = safe_float(day["low"].min())
     vol = pd.to_numeric(day["volume"], errors="coerce").fillna(0)
@@ -351,29 +702,41 @@ def calc_intraday_metrics(day: pd.DataFrame) -> Dict[str, float]:
     typical = (day["high"] + day["low"] + day["close"]) / 3.0
     v = vol.sum()
     vwap = safe_float((typical * vol).sum() / v) if v > 0 else close
-    late_fade_pct = pct(close, high) if high > 0 else 0.0  # negative from HOD
+    late_fade_pct = pct(close, high) if high > 0 else 0.0
+    day_change_pct = pct(close, open_) if open_ > 0 else 0.0
 
-    # Simple structure score based on last third vs first third.
     n = len(day)
     if n >= 30:
         first = safe_float(day["close"].iloc[max(0, n // 3 - 1)])
-        last = close
         mid = safe_float(day["close"].iloc[max(0, (2 * n) // 3 - 1)])
-        if last > mid > first:
+        if close > mid > first and close >= vwap:
             structure = 15.0
-        elif last > vwap:
-            structure = 11.0
-        elif last > first:
+        elif close > vwap and late_fade_pct > -1.5:
+            structure = 12.0
+        elif close > first:
             structure = 8.0
         else:
             structure = 3.0
     else:
         structure = 8.0 if close >= vwap else 3.0
 
-    # Panic selling = high late fade + below vwap + weak close location + late volume pressure.
     rng = high - low
     close_loc = (close - low) / rng * 100.0 if rng > 0 else 50.0
-    panic = bool(close < vwap and late_fade_pct <= -2.0 and close_loc < 35.0)
+    close_to_high_pct = pct(close, high) if high > 0 else 0.0
+
+    last_third = day.iloc[max(0, (2 * n) // 3):] if n else day
+    first_two = day.iloc[:max(1, (2 * n) // 3)] if n else day
+    late_vol = pd.to_numeric(last_third.get("volume", pd.Series(dtype=float)), errors="coerce").fillna(0).sum()
+    early_vol = pd.to_numeric(first_two.get("volume", pd.Series(dtype=float)), errors="coerce").fillna(0).sum()
+    late_pressure = late_vol > early_vol * 0.45 if early_vol > 0 else False
+
+    panic = bool(
+        close < vwap
+        and day_change_pct <= -1.5
+        and late_fade_pct <= -2.0
+        and close_loc < 35.0
+        and late_pressure
+    )
 
     close_time = ""
     try:
@@ -388,6 +751,8 @@ def calc_intraday_metrics(day: pd.DataFrame) -> Dict[str, float]:
         "intraday_structure_score": round4(structure),
         "panic_selling": panic,
         "close_time_et": close_time,
+        "close_location_pct": round4(close_loc),
+        "close_to_high_pct": round4(close_to_high_pct),
     }
 
 
@@ -451,6 +816,403 @@ def load_earnings_csv(path: Optional[str]) -> Dict[str, str]:
     return out
 
 
+def load_json_file(path: Optional[str], default: Any = None) -> Any:
+    if not path:
+        return default
+    p = Path(path)
+    if not p.exists():
+        return default
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return default
+
+
+def _payload_symbols_map(payload: Any) -> Dict[str, Dict[str, Any]]:
+    if not isinstance(payload, dict):
+        return {}
+    raw = payload.get("symbols", payload)
+    if not isinstance(raw, dict):
+        return {}
+    out: Dict[str, Dict[str, Any]] = {}
+    for sym, rec in raw.items():
+        ns = normalize_symbol_for_swing(sym)
+        if ns and isinstance(rec, dict):
+            out[ns] = rec
+    return out
+
+
+def load_smart_money_map(path: Optional[str]) -> Dict[str, Dict[str, Any]]:
+    payload = load_json_file(path, {})
+    return _payload_symbols_map(payload)
+
+
+def load_news_risk_map(path: Optional[str]) -> Dict[str, Dict[str, Any]]:
+    payload = load_json_file(path, {})
+    return _payload_symbols_map(payload)
+
+
+def load_market_context(path: Optional[str]) -> Dict[str, Any]:
+    payload = load_json_file(path, {})
+    return payload if isinstance(payload, dict) else {}
+
+
+def smart_money_context(symbol: str, smart_money_map: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
+    rec = smart_money_map.get(normalize_symbol_for_swing(symbol), {}) if smart_money_map else {}
+    raw_score = safe_float(rec.get("raw_score", rec.get("score", 0.0)), 0.0) if rec else 0.0
+    adj = safe_float(rec.get("score_adjustment", rec.get("adjustment", 0.0)), 0.0) if rec else 0.0
+    label = str(rec.get("label", "")) if rec else ""
+    bias = str(rec.get("bias", "")).upper() if rec else "UNKNOWN"
+    if not bias:
+        if raw_score >= 70 or adj >= 2:
+            bias = "BULLISH"
+        elif raw_score <= 35 or adj <= -2:
+            bias = "BEARISH"
+        elif rec:
+            bias = "NEUTRAL"
+        else:
+            bias = "UNKNOWN"
+    signals = rec.get("signals", "") if rec else ""
+    signals_text = " | ".join(str(x) for x in signals if str(x)) if isinstance(signals, list) else str(signals or "")
+    bearish = bias in {"BEARISH", "DISTRIBUTION", "NEGATIVE"}
+    bullish = bias in {"BULLISH", "ACCUMULATION", "POSITIVE"}
+    score = 9.0
+    if bullish:
+        score = 15.0 + min(5.0, max(0.0, raw_score - 70.0) / 6.0) + min(2.0, max(0.0, adj))
+    elif bearish:
+        score = max(0.0, 5.0 + min(0.0, adj))
+    elif bias == "NEUTRAL":
+        score = 10.0
+    return {
+        "score": round4(max(0.0, min(20.0, score))),
+        "bias": bias,
+        "label": label,
+        "signals": signals_text,
+        "raw_score": round4(raw_score),
+        "adjustment": round4(adj),
+        "bearish": bearish,
+        "bullish": bullish,
+        "missing": not bool(rec),
+    }
+
+
+def news_context(symbol: str, news_map: Dict[str, Dict[str, Any]], earnings_risk: str) -> Dict[str, Any]:
+    rec = news_map.get(normalize_symbol_for_swing(symbol), {}) if news_map else {}
+    risk = str(rec.get("risk", rec.get("news_risk", ""))).upper() if rec else "UNKNOWN"
+    summary = str(rec.get("summary", rec.get("headline", ""))) if rec else ""
+    positive = bool(rec.get("positive_catalyst", False)) if rec else False
+    negative = bool(rec.get("negative_catalyst", False)) if rec else False
+    severe_terms = ("OFFERING", "DILUTION", "BANKRUPTCY", "SEC", "FRAUD", "LAWSUIT", "FDA_REJECTION", "GUIDANCE_CUT", "REVERSE_SPLIT", "DELIST")
+    text_blob = " ".join(str(rec.get(k, "")) for k in rec.keys()).upper() if rec else ""
+    severe = risk in {"SEVERE", "SEVERE_NEGATIVE", "BLOCK", "BLOCKED"} or any(t in text_blob for t in severe_terms)
+    if earnings_risk == "BLOCKED_UPCOMING_EARNINGS":
+        severe = True
+        risk = "EARNINGS_BLOCK"
+    if positive and not severe:
+        score = 15.0
+        risk = risk if risk and risk != "UNKNOWN" else "POSITIVE"
+    elif severe:
+        score = 0.0
+    elif negative or risk in {"NEGATIVE", "HIGH"}:
+        score = 4.0
+    elif risk in {"NEUTRAL", "LOW"}:
+        score = 11.0
+    else:
+        # Unknown news is a manual-check warning and Ready limiter, not an
+        # automatic technical rejection.
+        score = 9.0
+        risk = "UNKNOWN"
+    return {
+        "score": round4(score),
+        "risk": risk,
+        "summary": summary or ("News/catalyst unknown; manual check required." if risk == "UNKNOWN" else ""),
+        "positive": positive,
+        "negative": negative or severe,
+        "severe": severe,
+        "missing": not bool(rec),
+    }
+
+
+def sector_market_context(symbol: str, market_context: Dict[str, Any], latest: pd.Series) -> Dict[str, Any]:
+    risk = str(market_context.get("risk", market_context.get("market_risk", "UNKNOWN"))).upper() if market_context else "UNKNOWN"
+    vix = safe_float(market_context.get("vix", 0.0), 0.0) if market_context else 0.0
+    macro_risk = bool(market_context.get("major_event_48h", False)) if market_context else False
+    if vix >= 25 or risk in {"HIGH", "BEARISH", "RISK_OFF"} or macro_risk:
+        return {"score": 3.0, "label": "HIGH_RISK", "risk": risk, "vix": round4(vix), "macro_risk": macro_risk}
+    if risk in {"SUPPORTIVE", "BULLISH", "RISK_ON"}:
+        return {"score": 10.0, "label": "SUPPORTIVE", "risk": risk, "vix": round4(vix), "macro_risk": macro_risk}
+    if risk in {"NEUTRAL", "LOW"}:
+        return {"score": 7.0, "label": "NEUTRAL", "risk": risk, "vix": round4(vix), "macro_risk": macro_risk}
+    return {"score": 7.0, "label": "UNKNOWN", "risk": risk, "vix": round4(vix), "macro_risk": macro_risk}
+
+
+def apply_ohlcv_proxy_context(
+    smart_ctx: Dict[str, Any],
+    news_ctx: Dict[str, Any],
+    sector_ctx: Dict[str, Any],
+    latest: pd.Series,
+    intraday: Dict[str, Any],
+) -> Tuple[Dict[str, Any], Dict[str, Any], Dict[str, Any], List[str]]:
+    """
+    v1.1.6: Historical parquet/live scans often lack point-in-time news and
+    market context files. Missing files must block top-tier Ready, but they
+    should not make all Watch candidates disappear. This proxy uses only
+    OHLCV-derived evidence so the historical scanner can still build a
+    monitored shortlist:
+      - accumulation proxy: VWAP hold, close strength, up-volume ratio,
+        multi-day volume trend, MACD improvement, low fade
+      - catalyst proxy: gap + volume + strong close, without severe news
+      - market/sector proxy: stock relative strength from 5d/20d returns
+    """
+    warnings: List[str] = []
+
+    close_loc = safe_float(latest.get("close_location_pct"), 50.0)
+    close_to_high = safe_float(latest.get("close_to_high_pct"), -99.0)
+    relv = safe_float(latest.get("rel_volume"), 0.0)
+    vol3v10 = safe_float(latest.get("volume_3d_vs_10d"), 0.0)
+    up_ratio = safe_float(latest.get("up_volume_ratio_5d"), 0.5)
+    close_q3 = safe_float(latest.get("close_quality_3d"), 50.0)
+    ret5 = safe_float(latest.get("ret_5d_pct"), 0.0)
+    ret20 = safe_float(latest.get("ret_20d_pct"), 0.0)
+    gap = safe_float(latest.get("gap_pct"), 0.0)
+    mstate = macd_state(latest)
+    close_above_vwap = bool(intraday.get("close_above_vwap"))
+    late_fade = safe_float(intraday.get("late_fade_pct"), 0.0)
+
+    accumulation_points = 0.0
+    if close_above_vwap:
+        accumulation_points += 2.0
+    if close_loc >= 55:
+        accumulation_points += 2.0
+    if close_to_high >= -2.0:
+        accumulation_points += 1.0
+    if relv >= 1.0:
+        accumulation_points += 1.5
+    if vol3v10 >= 1.0:
+        accumulation_points += 1.5
+    if up_ratio >= 0.55:
+        accumulation_points += 1.5
+    if close_q3 >= 52:
+        accumulation_points += 1.0
+    if mstate in {"BULLISH_EXPANDING", "BULLISH", "CURLING_UP"}:
+        accumulation_points += 1.5
+    if late_fade <= -2.5:
+        accumulation_points -= 2.0
+
+    if smart_ctx.get("missing"):
+        proxy_score = 8.5 + min(6.5, max(0.0, accumulation_points) * 0.75)
+        bias = "PROXY_BULLISH" if accumulation_points >= 7.0 else "PROXY_NEUTRAL" if accumulation_points >= 4.0 else "UNKNOWN"
+        smart_ctx = dict(smart_ctx)
+        smart_ctx["score"] = round4(max(safe_float(smart_ctx.get("score")), min(15.0, proxy_score)))
+        smart_ctx["bias"] = bias
+        smart_ctx["label"] = "OHLCV accumulation proxy"
+        smart_ctx["signals"] = (
+            f"proxy_points={accumulation_points:.1f}; vwap={close_above_vwap}; "
+            f"close_loc={close_loc:.1f}; relv={relv:.2f}; up_vol_ratio={up_ratio:.2f}; macd={mstate}"
+        )
+        smart_ctx["proxy"] = True
+        smart_ctx["bearish"] = False
+        smart_ctx["bullish"] = bias == "PROXY_BULLISH"
+        warnings.append("PROXY_SMART_MONEY: using OHLCV accumulation proxy because smart-money file is missing.")
+
+    if news_ctx.get("missing"):
+        proxy_catalyst = (
+            (2.0 <= gap <= 8.0 and relv >= 1.15 and close_loc >= 55 and late_fade > -2.5)
+            or (relv >= 1.5 and close_loc >= 60 and close_above_vwap)
+        )
+        news_ctx = dict(news_ctx)
+        if proxy_catalyst:
+            news_ctx["score"] = max(safe_float(news_ctx.get("score")), 11.5)
+            news_ctx["risk"] = "PROXY_CATALYST"
+            news_ctx["summary"] = "OHLCV catalyst proxy: gap/volume/close strength; manual news check still required."
+            news_ctx["positive"] = True
+        else:
+            news_ctx["score"] = max(safe_float(news_ctx.get("score")), 10.0)
+            news_ctx["summary"] = "News/catalyst unknown; no severe news file risk found. Manual check required."
+        news_ctx["proxy"] = True
+        warnings.append("PROXY_NEWS: using OHLCV catalyst proxy because news-risk file is missing.")
+
+    if sector_ctx.get("label") == "UNKNOWN":
+        sector_ctx = dict(sector_ctx)
+        if ret5 > 2 and ret20 > 4:
+            proxy_score = 8.5
+            label = "PROXY_STOCK_RS_STRONG"
+        elif ret5 > 0 and ret20 > 0:
+            proxy_score = 7.5
+            label = "PROXY_STOCK_RS_NEUTRAL_POSITIVE"
+        elif ret5 > 0:
+            proxy_score = 6.5
+            label = "PROXY_STOCK_RS_SHORT_TERM"
+        else:
+            proxy_score = 5.5
+            label = "PROXY_MARKET_UNKNOWN"
+        sector_ctx["score"] = max(safe_float(sector_ctx.get("score")), proxy_score)
+        sector_ctx["label"] = label
+        sector_ctx["proxy"] = True
+        warnings.append("PROXY_MARKET_CONTEXT: using stock relative-strength proxy because market-context file is missing.")
+
+    return smart_ctx, news_ctx, sector_ctx, warnings
+
+
+def macd_state(latest: pd.Series) -> str:
+    line = safe_float(latest.get("macd_line"))
+    signal = safe_float(latest.get("macd_signal"))
+    hist = safe_float(latest.get("macd_hist"))
+    slope = safe_float(latest.get("macd_hist_slope"))
+    if line > signal and hist > 0 and slope >= 0:
+        return "BULLISH_EXPANDING"
+    if line > signal and hist >= 0:
+        return "BULLISH"
+    if hist < 0 and slope < 0:
+        return "BEARISH_DETERIORATING"
+    if line < signal and hist < 0:
+        return "BEARISH"
+    if slope > 0:
+        return "CURLING_UP"
+    return "NEUTRAL"
+
+
+def macd_momentum_score(latest: pd.Series, setup_type: str) -> Tuple[float, str, bool]:
+    state = macd_state(latest)
+    line = safe_float(latest.get("macd_line"))
+    hist = safe_float(latest.get("macd_hist"))
+    slope = safe_float(latest.get("macd_hist_slope"))
+    score = 5.0
+    bearish_block = False
+    if state == "BULLISH_EXPANDING":
+        score = 10.0
+    elif state == "BULLISH":
+        score = 8.0
+    elif state == "CURLING_UP":
+        score = 7.0 if setup_type in {"SWING_PULLBACK_SUPPORT_HOLD", "GAP_HOLD_SWING"} else 6.0
+    elif state == "BEARISH":
+        score = 3.0
+        bearish_block = setup_type == "DAILY_BREAKOUT_CONTINUATION"
+    elif state == "BEARISH_DETERIORATING":
+        score = 1.0
+        bearish_block = True
+    if setup_type == "SWING_PULLBACK_SUPPORT_HOLD" and line > 0 and slope >= 0:
+        score = min(10.0, score + 1.0)
+    if setup_type == "GAP_HOLD_SWING" and hist > 0:
+        score = min(10.0, score + 1.0)
+    return round4(max(0.0, min(10.0, score))), state, bearish_block
+
+
+def trend_sma_ema_score(latest: pd.Series) -> float:
+    close = safe_float(latest.get("close"))
+    sma50 = safe_float(latest.get("sma50"))
+    sma200 = safe_float(latest.get("sma200"))
+    ema9 = safe_float(latest.get("ema9"))
+    ema20 = safe_float(latest.get("ema20"))
+    ema21 = safe_float(latest.get("ema21"))
+    score = 0.0
+    if close > sma200 > 0:
+        score += 4.0
+    if close > sma50 > 0:
+        score += 4.0
+    if sma50 > sma200 > 0:
+        score += 2.0
+    if close > ema20 > 0 or close > ema21 > 0:
+        score += 3.0
+    if ema9 > ema20 > 0:
+        score += 1.0
+    if ema20 >= ema21 > 0:
+        score += 1.0
+    return round4(min(15.0, score))
+
+
+def volume_accumulation_score(latest: pd.Series, setup_type: str) -> Tuple[float, str]:
+    relv = safe_float(latest.get("rel_volume"))
+    vol3v10 = safe_float(latest.get("volume_3d_vs_10d"))
+    up_ratio = safe_float(latest.get("up_volume_ratio_5d"), 0.5)
+    close_q3 = safe_float(latest.get("close_quality_3d"), 50.0)
+    score = 0.0
+    if relv >= 1.0:
+        score += 2.0
+    if relv >= 1.3:
+        score += 2.0
+    if relv >= 1.6:
+        score += 1.0
+    if vol3v10 >= 1.05:
+        score += 2.0
+    if up_ratio >= 0.58:
+        score += 2.0
+    if close_q3 >= 55:
+        score += 1.0
+    pattern = "ACCUMULATION" if score >= 7 else "NEUTRAL" if score >= 4 else "WEAK_VOLUME"
+    return round4(min(10.0, score)), pattern
+
+
+def risk_stop_score(entry: float, stop: float, atr: float, latest: pd.Series) -> Tuple[float, str, float, str]:
+    if entry <= stop or atr <= 0:
+        return 0.0, "BAD_STOP", 0.0, "UNKNOWN"
+    stop_atr = (entry - stop) / atr
+    gap_med = safe_float(latest.get("overnight_gap_abs_20d"), 0.0)
+    stop_pct = (entry - stop) / entry * 100.0 if entry > 0 else 0.0
+    gap_ratio = gap_med / stop_pct if stop_pct > 0 else 99.0
+    if 0.7 <= stop_atr <= 1.35:
+        score = 5.0
+    elif 0.5 <= stop_atr < 0.7 or 1.35 < stop_atr <= 1.7:
+        score = 3.5
+    else:
+        score = 1.5
+    if gap_ratio > 1.5:
+        score = min(score, 2.0)
+        gap_label = "ELEVATED_GAP_RISK"
+    elif gap_ratio > 1.0:
+        gap_label = "MODERATE_GAP_RISK"
+    else:
+        gap_label = "NORMAL_GAP_RISK"
+    atr_trend = "EXPANDING" if bool(latest.get("atr_expanding")) else "CONTRACTING_OR_STABLE"
+    if atr_trend == "EXPANDING":
+        score = max(0.0, score - 0.75)
+    return round4(max(0.0, min(5.0, score))), gap_label, round4(stop_atr), atr_trend
+
+
+def setup_quality_score(setup_type: str, latest: pd.Series, intraday: Dict[str, Any], rr: float, rr_gate: float, macd_bearish_block: bool) -> float:
+    close_loc = safe_float(latest.get("close_location_pct"), 50.0)
+    close_to_high = safe_float(latest.get("close_to_high_pct"), 0.0)
+    relv = safe_float(latest.get("rel_volume"))
+    late_fade = safe_float(intraday.get("late_fade_pct"))
+    score = 0.0
+    if rr >= rr_gate:
+        score += 4.0
+    if close_loc >= 60:
+        score += 3.0
+    if close_to_high >= -1.5:
+        score += 2.0
+    if relv >= 1.3:
+        score += 2.0
+    if late_fade > -2.0:
+        score += 2.0
+    if bool(intraday.get("close_above_vwap")):
+        score += 2.0
+    if macd_bearish_block:
+        score = min(score, 6.0)
+    return round4(min(15.0, score))
+
+
+def institutional_grade(total: float, ready_allowed: bool, watch_allowed: bool, pool_candidate: bool = False) -> str:
+    if ready_allowed and total >= SWING_READY_SCORE:
+        return "A_READY"
+    if watch_allowed and total >= SWING_WATCH_SCORE:
+        return "B_WATCH"
+    if pool_candidate and watch_allowed and total >= SWING_POOL_DISPLAY_SCORE:
+        return "C_POOL_WATCH"
+    if total >= 60:
+        return "C_REJECT_REVIEW"
+    return "D_REJECT"
+
+
+def entry_strategy_for(setup_type: str) -> str:
+    return {
+        "DAILY_BREAKOUT_CONTINUATION": "Next regular session only: enter on clean second break above trigger after volume confirmation.",
+        "SWING_PULLBACK_SUPPORT_HOLD": "Next regular session only: enter on EMA20/21 or VWAP hold/reclaim, not after-hours.",
+        "GAP_HOLD_SWING": "Next regular session only: enter only if gap support/VWAP remains intact and no dilution/news trap appears.",
+        "DAY_TO_SWING_PROMOTION": "EOD validation only; next session entry requires support/VWAP to remain intact.",
+    }.get(setup_type, "Next regular session only after trigger confirmation.")
+
+
 def recent_resistance_targets(d: pd.DataFrame, entry: float, risk: float) -> Tuple[float, float, str]:
     hist = d.iloc[:-1].tail(80).copy()
     levels: List[float] = []
@@ -478,27 +1240,13 @@ def recent_resistance_targets(d: pd.DataFrame, entry: float, risk: float) -> Tup
 
 def score_common(latest: pd.Series, intraday: Dict[str, Any]) -> Dict[str, float]:
     close = safe_float(latest["close"])
-    sma20 = safe_float(latest.get("sma20"))
-    sma50 = safe_float(latest.get("sma50"))
-    sma200 = safe_float(latest.get("sma200"))
     rsi = safe_float(latest.get("rsi_14"))
     relv = safe_float(latest.get("rel_volume"), 0.0)
     ret5 = safe_float(latest.get("ret_5d_pct"), 0.0)
     ret20 = safe_float(latest.get("ret_20d_pct"), 0.0)
     close_loc = safe_float(latest.get("close_location_pct"), 50.0)
 
-    trend = 0.0
-    if close > sma200 > 0:
-        trend += 10
-    if close > sma50 > 0:
-        trend += 8
-    if close > sma20 > 0:
-        trend += 6
-    if sma20 > sma50 > 0:
-        trend += 4
-    if 45 <= rsi <= 70:
-        trend += 2
-    trend = min(30.0, trend)
+    trend = min(30.0, trend_sma_ema_score(latest) * 2.0)
 
     rs = 0.0
     if ret5 > 0:
@@ -511,26 +1259,18 @@ def score_common(latest: pd.Series, intraday: Dict[str, Any]) -> Dict[str, float
         rs += 2
     rs = min(15.0, rs)
 
-    vol = 0.0
-    if relv >= 1.0:
-        vol += 6
-    if relv >= 1.2:
-        vol += 3
-    if relv >= 1.5:
-        vol += 4
-    if relv >= 2.0:
-        vol += 2
-    vol = min(15.0, vol)
+    vol_acc, _ = volume_accumulation_score(latest, "GENERIC")
+    vol = min(15.0, vol_acc * 1.5)
 
     close_quality = 0.0
     if close_loc >= 50:
-        close_quality += 4
+        close_quality += 3
     if close_loc >= 65:
         close_quality += 3
     if bool(intraday.get("close_above_vwap")):
         close_quality += 2
     if safe_float(intraday.get("late_fade_pct")) > -1.5:
-        close_quality += 1
+        close_quality += 2
     close_quality = min(10.0, close_quality)
 
     return {
@@ -558,26 +1298,72 @@ def build_candidate(
     target2: float,
     target_source: str,
     warnings: List[str],
+    institutional: Dict[str, Any],
 ) -> Optional[SwingCandidate]:
     risk = entry - stop
     if entry <= 0 or stop <= 0 or risk <= 0:
         return None
     rr = (target1 - entry) / risk if target1 > entry else 0.0
-
+    rr_gate = safe_float(institutional.get("setup_rr_gate"), SETUP_RR_GATES.get(setup_type, 1.6))
     total = (
-        scores["daily_trend_score"]
-        + scores["intraday_structure_score"]
-        + scores["relative_strength_score"]
-        + scores["volume_score"]
-        + support_stop_score
-        + target_room_score
-        + scores["close_quality_score"]
+        safe_float(institutional.get("trend_sma_ema_score"))
+        + safe_float(institutional.get("setup_quality_score"))
+        + safe_float(institutional.get("macd_momentum_score"))
+        + safe_float(institutional.get("smart_money_confirmation_score"))
+        + safe_float(institutional.get("news_catalyst_score"))
+        + safe_float(institutional.get("volume_accumulation_score"))
+        + safe_float(institutional.get("sector_market_score"))
+        + safe_float(institutional.get("risk_stop_score"))
     )
     total = max(0.0, min(100.0, total))
 
-    if total >= 80 and rr >= 1.2:
+    hard_reject = bool(institutional.get("hard_reject"))
+    ready_allowed = bool(institutional.get("ready_allowed")) and rr >= rr_gate and not hard_reject
+    watch_allowed = bool(institutional.get("watch_allowed")) and not hard_reject
+
+    # v1.1.6 candidate-pool/proxy behavior:
+    # Ready remains strict at 86. Watch can be created from two safe sources:
+    #   1) named setup families at the normal Watch gate
+    #   2) OHLCV-proxy/candidate-pool setups at a monitored Watch floor
+    #      when no true hard reject exists. This fixes the zero-candidate
+    #      problem caused by missing point-in-time news/market files while
+    #      still blocking D_REJECT garbage.
+    pool_candidate = setup_type == "INSTITUTIONAL_SWING_CANDIDATE_POOL" or bool(institutional.get("candidate_pool"))
+    proxy_watch = bool(institutional.get("proxy_watch"))
+    watch_floor = SWING_POOL_WATCH_SCORE if pool_candidate else SWING_PROXY_WATCH_SCORE if proxy_watch else SWING_WATCH_SCORE
+
+    if pool_candidate or proxy_watch:
+        mstate_for_pool = str(institutional.get("macd_state", "UNKNOWN")).upper()
+        smart_bias_for_pool = str(institutional.get("smart_money_bias", "UNKNOWN")).upper()
+
+        # v1.2.4 display-quality floor:
+        # The Swing Desk is a shortlist, not a landfill. Broad pool/proxy rows
+        # may support Watch, but only if they are dashboard-clean. Missing real
+        # news/market data can keep a name as Watch, but weak R/R, bearish MACD,
+        # or non-bullish accumulation cannot be used to fill slots.
+        if total < SWING_WATCH_SCORE:
+            return None
+
+        if pool_candidate:
+            if rr < 1.20:
+                return None
+            if "BULLISH" not in mstate_for_pool:
+                return None
+            if smart_bias_for_pool not in {"BULLISH", "PROXY_BULLISH", "ACCUMULATION", "POSITIVE"}:
+                return None
+        else:
+            watch_rr_gate = safe_float(institutional.get("watch_rr_gate"), SETUP_WATCH_RR_GATES.get(setup_type, 1.2))
+            if rr < watch_rr_gate:
+                return None
+            if mstate_for_pool == "BEARISH_DETERIORATING":
+                return None
+
+        if smart_bias_for_pool in {"BEARISH", "DISTRIBUTION", "NEGATIVE"}:
+            return None
+
+    if ready_allowed and total >= SWING_READY_SCORE:
         status = "SWING_READY"
-    elif total >= 65:
+    elif watch_allowed and total >= watch_floor:
         status = "SWING_WATCH"
     else:
         return None
@@ -585,28 +1371,35 @@ def build_candidate(
     atrp = safe_float(latest.get("atr_pct"))
     suggested_risk = 1.0
     if atrp > 10:
-        suggested_risk = 0.35
-    elif atrp > 6:
         suggested_risk = 0.5
+    elif atrp > 6:
+        suggested_risk = 0.7
 
+    grade = institutional_grade(total, ready_allowed, watch_allowed, pool_candidate=pool_candidate)
     reason = (
-        f"{setup_type}: score={total:.1f}; "
-        f"trend={scores['daily_trend_score']:.1f}, "
-        f"30m/1h={scores['intraday_structure_score']:.1f}, "
-        f"RS={scores['relative_strength_score']:.1f}, "
-        f"vol={scores['volume_score']:.1f}, "
-        f"support={support_stop_score:.1f}, "
-        f"target={target_room_score:.1f}, "
-        f"close={scores['close_quality_score']:.1f}; "
-        f"target_source={target_source}"
+        f"{setup_type}: institutional_score={total:.1f}; "
+        f"trend={safe_float(institutional.get('trend_sma_ema_score')):.1f}/15, "
+        f"setup={safe_float(institutional.get('setup_quality_score')):.1f}/15, "
+        f"macd={safe_float(institutional.get('macd_momentum_score')):.1f}/10 ({institutional.get('macd_state','')}), "
+        f"smart_money={safe_float(institutional.get('smart_money_confirmation_score')):.1f}/20 ({institutional.get('smart_money_bias','')}), "
+        f"news={safe_float(institutional.get('news_catalyst_score')):.1f}/15 ({institutional.get('news_risk','')}), "
+        f"volume={safe_float(institutional.get('volume_accumulation_score')):.1f}/10 ({institutional.get('volume_pattern','')}), "
+        f"sector={safe_float(institutional.get('sector_market_score')):.1f}/10, "
+        f"risk={safe_float(institutional.get('risk_stop_score')):.1f}/5; "
+        f"rr={rr:.2f} gate={rr_gate:.2f}; target_source={target_source}"
     )
-
     invalid = {
-        "SWING_PULLBACK_SUPPORT_HOLD": "Invalid if pullback low / EMA20 / VWAP support breaks.",
-        "DAILY_BREAKOUT_CONTINUATION": "Invalid if breakout level fails and price closes back inside prior range.",
-        "GAP_HOLD_SWING": "Invalid if gap-day low / opening range support fails.",
-        "DAY_TO_SWING_PROMOTION": "Invalid if EOD support, VWAP, or prior day low fails.",
-    }.get(setup_type, "Invalid if support breaks.")
+        "SWING_PULLBACK_SUPPORT_HOLD": "Invalid if EMA20/21, VWAP, or pullback support fails into close.",
+        "DAILY_BREAKOUT_CONTINUATION": "Invalid if breakout level fails, MACD rolls over, or price closes back inside prior range.",
+        "GAP_HOLD_SWING": "Invalid if gap-day low / VWAP support fails or negative catalyst appears.",
+        "DAY_TO_SWING_PROMOTION": "Invalid if EOD support, VWAP, sector context, or overnight news risk fails.",
+        "INSTITUTIONAL_SWING_CANDIDATE_POOL": "Invalid if EMA/VWAP support fails, MACD deteriorates, or negative news/smart-money risk appears.",
+    }.get(setup_type, "Invalid if support or institutional confirmation breaks.")
+
+    warnings2 = list(warnings or [])
+    for w in institutional.get("warnings", []) or []:
+        if w and w not in warnings2:
+            warnings2.append(str(w))
 
     return SwingCandidate(
         symbol=symbol,
@@ -626,15 +1419,54 @@ def build_candidate(
         latest_date_et=str(latest["date_et"]),
         price=round4(latest["close"]),
         avg_volume_20d=round4(latest.get("avg_volume_20d")),
+        avg_dollar_volume_20d=round4(latest.get("avg_dollar_volume_20d")),
         atr_pct=round4(atrp),
         atr_tier=atr_tier(atrp),
         rsi_14=round4(latest.get("rsi_14")),
         sma20=round4(latest.get("sma20")),
         sma50=round4(latest.get("sma50")),
         sma200=round4(latest.get("sma200")),
+        ema9=round4(latest.get("ema9")),
+        ema20=round4(latest.get("ema20")),
+        ema21=round4(latest.get("ema21")),
+        macd_line=round4(latest.get("macd_line")),
+        macd_signal=round4(latest.get("macd_signal")),
+        macd_hist=round4(latest.get("macd_hist")),
+        macd_state=str(institutional.get("macd_state", "")),
+        macd_hist_slope=round4(latest.get("macd_hist_slope")),
         above_sma20=bool(latest["close"] > safe_float(latest.get("sma20"))),
         above_sma50=bool(latest["close"] > safe_float(latest.get("sma50"))),
         above_sma200=bool(latest["close"] > safe_float(latest.get("sma200"))),
+        above_ema20=bool(latest["close"] > safe_float(latest.get("ema20"))),
+        above_ema21=bool(latest["close"] > safe_float(latest.get("ema21"))),
+        trend_sma_ema_score=round4(institutional.get("trend_sma_ema_score")),
+        setup_quality_score=round4(institutional.get("setup_quality_score")),
+        macd_momentum_score=round4(institutional.get("macd_momentum_score")),
+        smart_money_confirmation_score=round4(institutional.get("smart_money_confirmation_score")),
+        news_catalyst_score=round4(institutional.get("news_catalyst_score")),
+        volume_accumulation_score=round4(institutional.get("volume_accumulation_score")),
+        sector_market_score=round4(institutional.get("sector_market_score")),
+        risk_stop_score=round4(institutional.get("risk_stop_score")),
+        institutional_grade=grade,
+        setup_rr_gate=round4(rr_gate),
+        smart_money_score=round4(institutional.get("smart_money_raw_score")),
+        smart_money_bias=str(institutional.get("smart_money_bias", "")),
+        smart_money_label=str(institutional.get("smart_money_label", "")),
+        smart_money_signals=str(institutional.get("smart_money_signals", "")),
+        news_risk=str(institutional.get("news_risk", "")),
+        news_score=round4(institutional.get("news_catalyst_score")),
+        news_summary=str(institutional.get("news_summary", "")),
+        positive_catalyst=bool(institutional.get("positive_catalyst")),
+        negative_catalyst=bool(institutional.get("negative_catalyst")),
+        sector_context=str(institutional.get("sector_context", "")),
+        sector_score=round4(institutional.get("sector_market_score")),
+        volume_pattern=str(institutional.get("volume_pattern", "")),
+        close_to_high_pct=round4(latest.get("close_to_high_pct")),
+        close_quality_3d=round4(latest.get("close_quality_3d")),
+        atr_trend=str(institutional.get("atr_trend", "")),
+        overnight_gap_risk=str(institutional.get("overnight_gap_risk", "")),
+        stop_atr_multiple=round4(institutional.get("stop_atr_multiple")),
+        entry_strategy=entry_strategy_for(setup_type),
         daily_trend_score=round4(scores["daily_trend_score"]),
         intraday_structure_score=round4(scores["intraday_structure_score"]),
         relative_strength_score=round4(scores["relative_strength_score"]),
@@ -646,15 +1478,15 @@ def build_candidate(
         close_location_pct=round4(latest.get("close_location_pct")),
         gap_pct=round4(latest.get("gap_pct")),
         gap_risk=gap_risk(safe_float(latest.get("gap_pct"))),
-        earnings_risk="",  # filled later
+        earnings_risk=str(institutional.get("earnings_risk", "")),
         vwap=round4(intraday.get("vwap")),
         close_above_vwap=bool(intraday.get("close_above_vwap")),
         late_fade_pct=round4(intraday.get("late_fade_pct")),
         panic_selling=bool(intraday.get("panic_selling")),
         reason=reason,
         invalid_if=invalid,
-        blockers="",
-        warnings="; ".join(warnings),
+        blockers="; ".join(institutional.get("blockers", []) or []),
+        warnings="; ".join(warnings2),
     )
 
 
@@ -664,14 +1496,28 @@ def scan_symbol(
     latest_intraday: pd.DataFrame,
     args: argparse.Namespace,
     earnings_map: Dict[str, str],
+    smart_money_map: Optional[Dict[str, Dict[str, Any]]] = None,
+    news_map: Optional[Dict[str, Dict[str, Any]]] = None,
+    market_context: Optional[Dict[str, Any]] = None,
 ) -> Tuple[List[SwingCandidate], List[str]]:
-    blockers: List[str] = []
-    warnings: List[str] = []
+    """
+    Institutional tiered swing scan.
+
+    v1.1.6 correction:
+    - True severe risks remain hard rejects.
+    - Soft/incomplete institutional data downgrades to Watch instead of causing
+      an empty dashboard.
+    - Ready and Watch use separate R/R/setup gates.
+    """
+    hard_blockers: List[str] = []
+    soft_warnings: List[str] = []
+    diagnostics: List[str] = []
     candidates: List[SwingCandidate] = []
 
     daily = add_daily_indicators(daily_raw)
-    if daily.empty or len(daily) < 220:
-        return [], ["Not enough daily history for SMA200/warmup."]
+    min_history = int(getattr(args, "min_warmup_days", 220) or 220)
+    if daily.empty or len(daily) < min_history:
+        return [], [f"HARD_REJECT: Not enough daily history for SMA200/warmup ({len(daily)} < {min_history})."]
 
     latest = daily.iloc[-1]
     close = safe_float(latest["close"])
@@ -679,154 +1525,557 @@ def scan_symbol(
     atrp = safe_float(latest.get("atr_pct"))
     sma50 = safe_float(latest.get("sma50"))
     sma200 = safe_float(latest.get("sma200"))
+    ema20 = safe_float(latest.get("ema20"))
+    ema21 = safe_float(latest.get("ema21"))
     rsi = safe_float(latest.get("rsi_14"))
     relv = safe_float(latest.get("rel_volume"))
 
-    # Universal hard blockers. These do not depend on dataset name.
-    if close < args.min_price or close > args.max_price:
-        blockers.append(f"Price outside range {args.min_price}-{args.max_price}.")
-    if avg_vol < args.min_avg_volume:
-        blockers.append(f"Avg volume below {args.min_avg_volume}.")
+    min_price = safe_float(getattr(args, "min_price", 5.0), 5.0)
+    max_price = safe_float(getattr(args, "max_price", 200.0), 200.0)
+    min_avg_volume = safe_float(getattr(args, "min_avg_volume", 500_000.0), 500_000.0)
+    min_avg_dollar_volume = safe_float(getattr(args, "min_avg_dollar_volume", 20_000_000.0), 20_000_000.0)
+    avg_dollar_volume = safe_float(latest.get("avg_dollar_volume_20d"), close * avg_vol)
+    max_atr = safe_float(getattr(args, "max_atr_pct", 15.0), 15.0)
+
+    # True hard rejects: universe/eligibility and severe overnight risk only.
+    # v1.2.1 user discipline:
+    # - Tradeable price range is mandatory: $5-$200.
+    # - Liquidity uses share volume plus dollar-volume, so liquid higher-priced
+    #   names inside the user's price range are not rejected only because share
+    #   count is below 1M.
+    if close < min_price or close > max_price:
+        hard_blockers.append(f"HARD_REJECT: Price outside range {min_price}-{max_price}.")
+    if avg_vol < min_avg_volume and avg_dollar_volume < min_avg_dollar_volume:
+        hard_blockers.append(
+            f"HARD_REJECT: Liquidity below floor: avg_volume {avg_vol:.0f} < {min_avg_volume:.0f} "
+            f"and avg_dollar_volume ${avg_dollar_volume:,.0f} < ${min_avg_dollar_volume:,.0f}."
+        )
     if close < sma50 and close < sma200:
-        blockers.append("Below BOTH SMA50 and SMA200.")
-    if atrp > args.max_atr_pct:
-        blockers.append(f"ATR% {atrp:.2f} above max {args.max_atr_pct}.")
+        hard_blockers.append("HARD_REJECT: Below BOTH SMA50 and SMA200.")
+    if atrp > max_atr:
+        hard_blockers.append(f"HARD_REJECT: ATR% {atrp:.2f} above max {max_atr}.")
     if pd.isna(latest.get("sma200")) or sma200 <= 0:
-        blockers.append("SMA200 unavailable.")
+        hard_blockers.append("HARD_REJECT: SMA200 unavailable.")
 
     erisk, ewarn = earnings_risk_for(symbol, str(latest["date_et"]), earnings_map)
     if erisk == "BLOCKED_UPCOMING_EARNINGS":
-        blockers.append(ewarn or "Upcoming earnings inside hold window.")
+        hard_blockers.append("HARD_REJECT: " + (ewarn or "Upcoming earnings inside hold window."))
     elif ewarn:
-        warnings.append(ewarn)
+        soft_warnings.append(ewarn)
 
     intraday = calc_intraday_metrics(latest_intraday)
-    if bool(intraday.get("panic_selling")):
-        blockers.append("Panic selling / heavy late-day bearish close.")
 
-    if blockers:
-        return [], blockers + warnings
-
-    scores = score_common(latest, intraday)
-    atr = safe_float(latest.get("atr14"))
-    if atr <= 0:
-        return [], ["ATR unavailable."]
-
+    # v1.1.6 retained bug fix:
+    # close_loc and late_fade are needed by the panic/distribution hard gate.
+    # They must be initialized before that gate runs. v1.1.4 initialized them
+    # later, which caused UnboundLocalError for valid non-hard-rejected symbols.
     high = safe_float(latest["high"])
     low = safe_float(latest["low"])
     open_ = safe_float(latest["open"])
     gap = safe_float(latest.get("gap_pct"))
-    close_loc = safe_float(latest.get("close_location_pct"))
+    close_loc = safe_float(latest.get("close_location_pct"), 50.0)
+    late_fade = safe_float(intraday.get("late_fade_pct"), 0.0)
+    atr = safe_float(latest.get("atr14"))
 
-    # Common support stop.
-    support_candidates = [low, safe_float(latest.get("sma20")), safe_float(intraday.get("vwap"))]
+    smart_ctx = smart_money_context(symbol, smart_money_map or {})
+    news_ctx = news_context(symbol, news_map or {}, erisk)
+    sector_ctx = sector_market_context(symbol, market_context or {}, latest)
+    smart_ctx, news_ctx, sector_ctx, proxy_warnings = apply_ohlcv_proxy_context(
+        smart_ctx,
+        news_ctx,
+        sector_ctx,
+        latest,
+        intraday,
+    )
+    soft_warnings.extend(proxy_warnings)
+
+    if news_ctx.get("severe"):
+        hard_blockers.append(f"HARD_REJECT: Severe news/catalyst risk: {news_ctx.get('risk')}.")
+
+    # Panic close is a hard reject only when it is confirmed by additional
+    # technical/institutional weakness. Otherwise it is a downgrade warning.
+    # v1.1.6: panic/distribution must be a confirmed cluster before it
+    # becomes a hard reject. A mild late fade is a downgrade, not a kill switch.
+    confirmed_panic = bool(intraday.get("panic_selling")) and (
+        close_loc < 35
+        and late_fade <= -2.5
+        and close < ema20
+        and close < ema21
+        and not bool(intraday.get("close_above_vwap"))
+        and (bool(smart_ctx.get("bearish")) or str(macd_state(latest)).startswith("BEARISH") or close < sma50)
+    )
+    if confirmed_panic:
+        hard_blockers.append("HARD_REJECT: Confirmed panic/distribution close.")
+    elif bool(intraday.get("panic_selling")) or safe_float(intraday.get("late_fade_pct")) <= -2.25:
+        soft_warnings.append("SOFT_DOWNGRADE: Heavy late-day bearish close; Watch only unless reclaimed.")
+
+    if smart_ctx.get("bearish") and close < ema20 and close < ema21 and not bool(intraday.get("close_above_vwap")):
+        hard_blockers.append("HARD_REJECT: Bearish smart money while below EMA20/21 and VWAP.")
+
+    if hard_blockers:
+        return [], hard_blockers + soft_warnings
+
+    scores = score_common(latest, intraday)
+    if atr <= 0:
+        return [], ["HARD_REJECT: ATR unavailable."]
+
+    support_candidates = [low, ema20, ema21, safe_float(latest.get("sma20")), safe_float(intraday.get("vwap"))]
     support_candidates = [x for x in support_candidates if x and x > 0 and x < close]
     support = max(support_candidates) if support_candidates else low
     stop = max(0.01, support - 0.55 * atr)
 
-    # Entry is next-day trigger above high or small confirmation above close.
     entry = max(high + 0.05 * atr, close * 1.003)
     target1, target2, target_source = recent_resistance_targets(daily, entry, entry - stop)
     rr = (target1 - entry) / (entry - stop) if entry > stop else 0
 
-    support_stop_score = 15.0 if 0 < ((entry - stop) / close * 100) <= max(1.2 * atrp, 2.0) else 9.0
+    risk_score, gap_risk_label, stop_atr, atr_trend_label = risk_stop_score(entry, stop, atr, latest)
+    support_stop_score = 15.0 if 0.7 <= stop_atr <= 1.35 else 9.0 if 0.5 <= stop_atr <= 1.7 else 5.0
     target_room_score = 10.0 if rr >= 2 else 8.0 if rr >= 1.5 else 6.0 if rr >= 1.2 else 2.0
+    vol_score, volume_pattern = volume_accumulation_score(latest, "GENERIC")
+    trend_score = trend_sma_ema_score(latest)
 
     prev20_high = safe_float(daily["high"].iloc[-21:-1].max()) if len(daily) >= 21 else 0.0
+    close_above_vwap = bool(intraday.get("close_above_vwap"))
+    near_ema20 = abs(close - ema20) / close * 100 <= max(atrp * 0.75, 1.25) if close > 0 and ema20 > 0 else False
+    near_ema21 = abs(close - ema21) / close * 100 <= max(atrp * 0.75, 1.25) if close > 0 and ema21 > 0 else False
+    holds_tactical_support = close_above_vwap or close > ema20 or close > ema21 or near_ema20 or near_ema21
+    above_major_trend = close > sma50 and close > sma200
+    not_broken_major_trend = close > sma50 or close > sma200
 
-    # Setup 1: Daily breakout continuation
-    breakout = (
-        close > prev20_high * 1.001
-        and close > safe_float(latest.get("sma50"))
-        and close > safe_float(latest.get("sma200"))
-        and relv >= 1.15
+    def institutional_for_setup(setup_type: str, setup_seen: bool, ready_shape: bool) -> Dict[str, Any]:
+        rr_gate = SETUP_RR_GATES.get(setup_type, 1.6)
+        watch_rr_gate = SETUP_WATCH_RR_GATES.get(setup_type, 1.2)
+        macd_score, mstate, macd_block = macd_momentum_score(latest, setup_type)
+        setup_score = setup_quality_score(setup_type, latest, intraday, rr, rr_gate, macd_block)
+
+        candidate_pool = setup_type == "INSTITUTIONAL_SWING_CANDIDATE_POOL"
+
+        # Give forming Watch setups credit for valid structure even if the
+        # stricter Ready shape is not complete yet.
+        if setup_seen and not ready_shape:
+            setup_score = max(setup_score, 9.0)
+            if rr >= watch_rr_gate:
+                setup_score = max(setup_score, 10.5)
+            if holds_tactical_support and close_loc >= 50:
+                setup_score = max(setup_score, 11.0)
+            if candidate_pool:
+                # v1.2.3 true candidate pool:
+                # This is a monitored shortlist lane, not a trade signal. It
+                # should surface survivors with acceptable trend/support/target
+                # structure even when they are not yet clean breakout/pullback/gap
+                # setups. Institutional layers still decide Ready vs Watch.
+                setup_score = max(setup_score, 13.0 if rr >= watch_rr_gate and close_loc >= 42 else 11.5)
+
+        hard_reject = bool(news_ctx.get("severe")) or (
+            smart_ctx.get("bearish")
+            and setup_score < 10
+            and (not holds_tactical_support or str(mstate).startswith("BEARISH"))
+        )
+
+        total_preview = (
+            trend_score
+            + setup_score
+            + macd_score
+            + safe_float(smart_ctx.get("score"))
+            + safe_float(news_ctx.get("score"))
+            + vol_score
+            + safe_float(sector_ctx.get("score"))
+            + risk_score
+        )
+
+        ready_allowed = True
+        watch_allowed = True
+
+        # Ready is strict. Watch is tiered.
+        if rr < rr_gate:
+            ready_allowed = False
+        if rr < watch_rr_gate:
+            watch_allowed = False
+        if not ready_shape:
+            ready_allowed = False
+        if not setup_seen:
+            watch_allowed = False
+            ready_allowed = False
+        if smart_ctx.get("bearish"):
+            ready_allowed = False
+        if news_ctx.get("negative") or news_ctx.get("risk") in {"NEGATIVE", "HIGH"}:
+            ready_allowed = False
+        if sector_ctx.get("label") == "HIGH_RISK":
+            ready_allowed = False
+        if macd_block:
+            ready_allowed = False
+        if late_fade <= -2.25:
+            ready_allowed = False
+        if close_loc < 55:
+            ready_allowed = False
+        if not holds_tactical_support:
+            ready_allowed = False
+        if not above_major_trend:
+            ready_allowed = False
+
+        # Missing institutional context prevents top-tier Ready, but not Watch.
+        if smart_ctx.get("missing") or news_ctx.get("missing") or sector_ctx.get("label") == "UNKNOWN":
+            ready_allowed = False
+
+        inst_warnings: List[str] = []
+        if not ready_shape and setup_seen:
+            inst_warnings.append("SOFT_DOWNGRADE: Setup forming; Ready trigger/confirmation not fully complete.")
+        if rr < rr_gate and rr >= watch_rr_gate:
+            inst_warnings.append(f"SOFT_DOWNGRADE: R/R {rr:.2f} below Ready gate {rr_gate:.2f}, acceptable only as Watch.")
+        if smart_ctx.get("missing"):
+            inst_warnings.append("SOFT_DOWNGRADE: Smart-money data missing/neutral; manual confirmation required.")
+        elif smart_ctx.get("bearish"):
+            inst_warnings.append("SOFT_DOWNGRADE: Smart-money bias bearish; Ready blocked.")
+        if news_ctx.get("missing"):
+            inst_warnings.append("SOFT_DOWNGRADE: News/catalyst unknown; manual check required.")
+        if sector_ctx.get("label") == "UNKNOWN":
+            inst_warnings.append("SOFT_DOWNGRADE: Market/sector context unknown; manual check required.")
+        if gap_risk_label != "NORMAL_GAP_RISK":
+            inst_warnings.append(f"SOFT_DOWNGRADE: {gap_risk_label}; overnight gap risk may exceed planned stop.")
+        if atr_trend_label == "EXPANDING":
+            inst_warnings.append("SOFT_DOWNGRADE: ATR expanding; reduce size or require stronger confirmation.")
+        if str(mstate).startswith("BEARISH"):
+            inst_warnings.append(f"SOFT_DOWNGRADE: MACD state {mstate}; momentum not ideal.")
+        # OHLCV proxies can support Watch when real smart/news/market files
+        # are missing, but v1.2.4 no longer allows sub-72 or weak-R/R proxy
+        # rows to appear on the final dashboard.
+        proxy_watch = (
+            setup_seen
+            and not hard_reject
+            and rr >= max(SWING_POOL_DISPLAY_RR_MIN if candidate_pool else watch_rr_gate, watch_rr_gate)
+            and total_preview >= SWING_WATCH_SCORE
+            and (
+                smart_ctx.get("proxy")
+                or news_ctx.get("proxy")
+                or sector_ctx.get("proxy")
+                or candidate_pool
+            )
+            and not str(mstate).startswith("BEARISH")
+        )
+
+        score_floor = SWING_POOL_WATCH_SCORE if candidate_pool else SWING_PROXY_WATCH_SCORE if proxy_watch else SWING_WATCH_SCORE
+        if total_preview < score_floor:
+            inst_warnings.append(f"SCORE_REJECT: Institutional score {total_preview:.1f} below Watch gate {score_floor:.1f}.")
+        if candidate_pool:
+            inst_warnings.append("POOL_WATCH: Broad candidate-pool name; requires manual confirmation before any swing entry.")
+        elif proxy_watch:
+            inst_warnings.append("PROXY_WATCH: OHLCV proxy-supported Watch; manual smart/news/sector confirmation required.")
+
+        return {
+            "trend_sma_ema_score": trend_score,
+            "setup_quality_score": setup_score,
+            "macd_momentum_score": macd_score,
+            "smart_money_confirmation_score": safe_float(smart_ctx.get("score")),
+            "news_catalyst_score": safe_float(news_ctx.get("score")),
+            "volume_accumulation_score": vol_score,
+            "sector_market_score": safe_float(sector_ctx.get("score")),
+            "risk_stop_score": risk_score,
+            "setup_rr_gate": rr_gate,
+            "watch_rr_gate": watch_rr_gate,
+            "macd_state": mstate,
+            "smart_money_raw_score": smart_ctx.get("raw_score", 0.0),
+            "smart_money_bias": smart_ctx.get("bias", "UNKNOWN"),
+            "smart_money_label": smart_ctx.get("label", ""),
+            "smart_money_signals": smart_ctx.get("signals", ""),
+            "news_risk": news_ctx.get("risk", "UNKNOWN"),
+            "news_summary": news_ctx.get("summary", ""),
+            "positive_catalyst": bool(news_ctx.get("positive")),
+            "negative_catalyst": bool(news_ctx.get("negative")),
+            "sector_context": sector_ctx.get("label", "UNKNOWN"),
+            "volume_pattern": volume_pattern,
+            "overnight_gap_risk": gap_risk_label,
+            "stop_atr_multiple": stop_atr,
+            "atr_trend": atr_trend_label,
+            "earnings_risk": erisk,
+            "hard_reject": hard_reject,
+            "ready_allowed": ready_allowed,
+            "watch_allowed": watch_allowed,
+            "candidate_pool": candidate_pool,
+            "proxy_watch": proxy_watch,
+            "warnings": inst_warnings,
+            "blockers": hard_blockers,
+            "total_preview": round4(total_preview),
+        }
+
+    def add_setup(setup_type: str, setup_seen: bool, ready_shape: bool, custom_stop: Optional[float] = None) -> None:
+        if not setup_seen:
+            diagnostics.append(f"NO_SETUP: {setup_type} watch conditions not met.")
+            return
+        inst = institutional_for_setup(setup_type, setup_seen, ready_shape)
+        diagnostics.append(f"SETUP_SEEN: {setup_type}.")
+        if inst.get("hard_reject"):
+            diagnostics.append(f"HARD_REJECT: {setup_type} failed institutional hard gate.")
+            return
+        cand = build_candidate(
+            symbol,
+            setup_type,
+            "SWING_READY" if ready_shape else "SWING_WATCH",
+            latest,
+            daily,
+            intraday,
+            scores,
+            support_stop_score,
+            target_room_score,
+            entry,
+            custom_stop if custom_stop is not None else stop,
+            target1,
+            target2,
+            target_source,
+            soft_warnings,
+            inst,
+        )
+        if cand:
+            candidates.append(cand)
+        else:
+            diagnostics.extend(inst.get("warnings", []) or [])
+
+    breakout_ready = (
+        prev20_high > 0
+        and close > prev20_high * 1.001
+        and above_major_trend
+        and relv >= 1.30
         and close_loc >= 60
-        and rr >= 1.2
+        and rr >= SETUP_RR_GATES["DAILY_BREAKOUT_CONTINUATION"]
     )
-    if breakout:
-        cand = build_candidate(
-            symbol, "DAILY_BREAKOUT_CONTINUATION", "SWING_READY", latest, daily, intraday,
-            scores, support_stop_score, target_room_score, entry, stop, target1, target2,
-            target_source, warnings
-        )
-        if cand:
-            cand.earnings_risk = erisk
-            candidates.append(cand)
-
-    # Setup 2: Swing pullback support hold
-    near_sma20 = abs(close - safe_float(latest.get("sma20"))) / close * 100 <= max(atrp * 0.8, 1.5) if close > 0 else False
-    pullback = (
-        close > sma50
-        and close > sma200
-        and 45 <= rsi <= 68
-        and close_loc >= 50
-        and (near_sma20 or bool(intraday.get("close_above_vwap")))
-        and rr >= 1.2
+    breakout_seen = (
+        prev20_high > 0
+        and close >= prev20_high * 0.985
+        and not_broken_major_trend
+        and relv >= 0.85
+        and close_loc >= 45
+        and rr >= SETUP_WATCH_RR_GATES["DAILY_BREAKOUT_CONTINUATION"] * 0.75
+        and late_fade > -4.0
     )
-    if pullback:
-        cand = build_candidate(
-            symbol, "SWING_PULLBACK_SUPPORT_HOLD", "SWING_READY", latest, daily, intraday,
-            scores, support_stop_score, target_room_score, entry, stop, target1, target2,
-            target_source, warnings
-        )
-        if cand:
-            cand.earnings_risk = erisk
-            candidates.append(cand)
+    add_setup("DAILY_BREAKOUT_CONTINUATION", breakout_seen, breakout_ready)
 
-    # Setup 3: Gap hold swing
-    gap_hold = (
-        2.0 <= gap <= 8.0
+    pullback_ready = (
+        above_major_trend
+        and 45 <= rsi <= 65
         and close_loc >= 55
-        and bool(intraday.get("close_above_vwap"))
-        and safe_float(intraday.get("late_fade_pct")) > -2.5
-        and rr >= 1.2
+        and holds_tactical_support
+        and rr >= SETUP_RR_GATES["SWING_PULLBACK_SUPPORT_HOLD"]
     )
-    if gap_hold:
-        gap_stop = max(0.01, min(open_, low) - 0.35 * atr)
-        cand = build_candidate(
-            symbol, "GAP_HOLD_SWING", "SWING_READY", latest, daily, intraday,
-            scores, support_stop_score, target_room_score, entry, gap_stop, target1, target2,
-            target_source, warnings
-        )
-        if cand:
-            cand.earnings_risk = erisk
-            candidates.append(cand)
+    pullback_seen = (
+        not_broken_major_trend
+        and 38 <= rsi <= 72
+        and close_loc >= 40
+        and (holds_tactical_support or abs(close - sma50) / close * 100 <= max(atrp, 1.75))
+        and rr >= SETUP_WATCH_RR_GATES["SWING_PULLBACK_SUPPORT_HOLD"] * 0.75
+        and late_fade > -4.0
+    )
+    add_setup("SWING_PULLBACK_SUPPORT_HOLD", pullback_seen, pullback_ready)
 
-    return candidates, warnings
+    gap_ready = (
+        2.0 <= gap <= 8.0
+        and close_loc >= 60
+        and close_above_vwap
+        and late_fade > -2.0
+        and rr >= SETUP_RR_GATES["GAP_HOLD_SWING"]
+    )
+    gap_seen = (
+        1.0 <= gap <= 12.0
+        and close_loc >= 45
+        and (close_above_vwap or close > ema20 or close > ema21 or holds_tactical_support)
+        and late_fade > -4.0
+        and rr >= SETUP_WATCH_RR_GATES["GAP_HOLD_SWING"] * 0.75
+    )
+    gap_stop = max(0.01, min(open_, low, support) - 0.45 * atr)
+    add_setup("GAP_HOLD_SWING", gap_seen, gap_ready, custom_stop=gap_stop)
+
+    # v1.2.3 true candidate-pool layer:
+    # After hard rejects, build a real monitored Watch pool from eligible
+    # survivors. This fixes the "perfect setup or zero candidates" problem.
+    # It is not a trade signal; it is the broad shortlist that institutional
+    # scoring ranks/downgrades before the dashboard shows top names.
+    pool_quality = 0
+    pool_reasons: List[str] = []
+    if not_broken_major_trend:
+        pool_quality += 1
+    else:
+        pool_reasons.append("not above SMA50 or SMA200")
+    if holds_tactical_support:
+        pool_quality += 1
+    else:
+        pool_reasons.append("not holding EMA/VWAP tactical support")
+    if close_loc >= 35:
+        pool_quality += 1
+    else:
+        pool_reasons.append(f"close_location {close_loc:.1f} < 35")
+    if late_fade > -5.0:
+        pool_quality += 1
+    else:
+        pool_reasons.append(f"late_fade {late_fade:.1f} <= -5")
+    if rr >= SETUP_WATCH_RR_GATES["INSTITUTIONAL_SWING_CANDIDATE_POOL"]:
+        pool_quality += 1
+    else:
+        pool_reasons.append(f"rr {rr:.2f} < pool gate {SETUP_WATCH_RR_GATES['INSTITUTIONAL_SWING_CANDIDATE_POOL']:.2f}")
+    if trend_score >= 6.0:
+        pool_quality += 1
+    if vol_score >= 3.0 or relv >= 0.75:
+        pool_quality += 1
+    if not str(macd_state(latest)).startswith("BEARISH_DETERIORATING"):
+        pool_quality += 1
+    if safe_float(latest.get("ret_5d_pct")) > -2.0:
+        pool_quality += 1
+
+    pool_seen = (
+        rr >= SETUP_WATCH_RR_GATES["INSTITUTIONAL_SWING_CANDIDATE_POOL"]
+        and close_loc >= 35
+        and late_fade > -5.0
+        and pool_quality >= 4
+        and (
+            not_broken_major_trend
+            or holds_tactical_support
+            or trend_score >= 6.0
+        )
+    )
+    if pool_seen and not candidates:
+        diagnostics.append(f"POOL_SEEN: INSTITUTIONAL_SWING_CANDIDATE_POOL quality={pool_quality}.")
+        add_setup("INSTITUTIONAL_SWING_CANDIDATE_POOL", True, False)
+    elif not candidates:
+        diagnostics.append("POOL_REJECT: " + ("; ".join(pool_reasons[:4]) if pool_reasons else f"quality {pool_quality} below pool threshold"))
+
+    if candidates:
+        notes = soft_warnings[:]
+        if pool_seen:
+            notes.append("POOL_SEEN: INSTITUTIONAL_SWING_CANDIDATE_POOL.")
+        return candidates, notes
+
+    # Return diagnostic reasons so summary can show whether the engine saw
+    # near-setups, failed score gates, or had no structure at all.
+    notes = diagnostics + soft_warnings
+    if not notes:
+        notes = ["NO_SETUP: No tiered swing setup passed Watch conditions."]
+    return [], notes
+
+
+
+def candidate_rank(c: SwingCandidate) -> Tuple[float, float, float, float, float, float, float]:
+    """
+    Ranking tuple for choosing one dashboard row per ticker.
+
+    Priority:
+    1. Ready/Active before Watch.
+    2. Institutional score.
+    3. Setup priority. A confirmed breakout/pullback/gap setup is preferred
+       over the broad pool if quality is otherwise similar.
+    4. Reward/risk.
+    5. MACD/structure and fewer warnings/blockers.
+    """
+    return (
+        float(STATUS_RANK.get(c.swing_status, 0)),
+        safe_float(c.score),
+        float(SETUP_PRIORITY.get(c.setup_type, 0)),
+        safe_float(c.reward_risk),
+        safe_float(c.macd_momentum_score),
+        -float(len(c.blockers or "")),
+        -float(len(c.warnings or "")),
+    )
+
+
+def _append_note(existing: str, note: str) -> str:
+    existing = (existing or "").strip()
+    note = (note or "").strip()
+    if not note:
+        return existing
+    if not existing:
+        return note
+    if note in existing:
+        return existing
+    return existing + "; " + note
+
+
+
+def display_quality_allowed(c: SwingCandidate) -> bool:
+    """
+    Final dashboard quality floor.
+
+    v1.2.3 correctly produced unique tickers, but still allowed C/D grade
+    filler rows and broad-pool names with weak R/R. v1.2.4 enforces that the
+    visible Swing Desk contains only B_WATCH or A_READY quality rows. Fewer
+    than 10 names is acceptable when the market does not provide 10 clean
+    candidates.
+    """
+    grade = str(c.institutional_grade or "").upper()
+    if grade not in {"A_READY", "B_WATCH"}:
+        return False
+
+    score = safe_float(c.score)
+    rr = safe_float(c.reward_risk)
+    setup = str(c.setup_type or "")
+    macd = str(c.macd_state or "").upper()
+    smart_bias = str(c.smart_money_bias or "").upper()
+
+    if c.swing_status == "SWING_READY":
+        return score >= SWING_READY_SCORE
+
+    if c.swing_status != "SWING_WATCH":
+        return False
+
+    if score < SWING_WATCH_SCORE:
+        return False
+
+    if setup == "INSTITUTIONAL_SWING_CANDIDATE_POOL":
+        if rr < 1.20:
+            return False
+        if "BULLISH" not in macd:
+            return False
+        if smart_bias not in {"BULLISH", "PROXY_BULLISH", "ACCUMULATION", "POSITIVE"}:
+            return False
+        return True
+
+    watch_rr_gate = SETUP_WATCH_RR_GATES.get(setup, 1.20)
+    if rr < watch_rr_gate:
+        return False
+    if macd == "BEARISH_DETERIORATING":
+        return False
+    if smart_bias in {"BEARISH", "DISTRIBUTION", "NEGATIVE"}:
+        return False
+    return True
 
 
 def dedupe_candidates(candidates: Sequence[SwingCandidate]) -> List[SwingCandidate]:
-    best: Dict[Tuple[str, str, str], SwingCandidate] = {}
+    """
+    Build the final dashboard shortlist as one row per ticker per latest date.
+
+    Earlier versions deduped by (symbol, setup_type, date), so one ticker could
+    consume multiple Swing Desk slots when it qualified for multiple setup
+    families. v1.2.3 keeps only the best setup per symbol/date and records the
+    alternate setup names in the selected row's warnings/reason.
+    """
+    grouped: Dict[Tuple[str, str], List[SwingCandidate]] = {}
     for c in candidates:
-        key = (c.symbol, c.setup_type, c.latest_date_et)
-        old = best.get(key)
-        if old is None:
-            best[key] = c
-            continue
-        old_rank = (
-            STATUS_RANK.get(old.swing_status, 0),
-            safe_float(old.score),
-            safe_float(old.reward_risk),
-            -len(old.blockers or ""),
-            -len(old.warnings or ""),
-        )
-        new_rank = (
-            STATUS_RANK.get(c.swing_status, 0),
-            safe_float(c.score),
-            safe_float(c.reward_risk),
-            -len(c.blockers or ""),
-            -len(c.warnings or ""),
-        )
-        if new_rank > old_rank:
-            best[key] = c
-    out = list(best.values())
-    out.sort(key=lambda x: (
+        key = (str(c.symbol).upper(), str(c.latest_date_et))
+        grouped.setdefault(key, []).append(c)
+
+    winners: List[SwingCandidate] = []
+    for (_symbol, _date), rows in grouped.items():
+        rows_sorted = sorted(rows, key=candidate_rank, reverse=True)
+        winner = rows_sorted[0]
+
+        alternates = [r for r in rows_sorted[1:] if r.setup_type != winner.setup_type]
+        if alternates:
+            alt_labels = []
+            seen_alt = set()
+            for alt in alternates:
+                label = f"{alt.setup_type} score={safe_float(alt.score):.1f} rr={safe_float(alt.reward_risk):.2f}"
+                if label not in seen_alt:
+                    seen_alt.add(label)
+                    alt_labels.append(label)
+            alt_note = "Alternate setups also detected: " + " | ".join(alt_labels[:4])
+            winner.warnings = _append_note(winner.warnings, alt_note)
+            winner.reason = _append_note(winner.reason, alt_note)
+
+        winners.append(winner)
+
+    winners.sort(key=lambda x: (
         STATUS_RANK.get(x.swing_status, 0),
         safe_float(x.score),
-        safe_float(x.reward_risk),
         SETUP_PRIORITY.get(x.setup_type, 0),
+        safe_float(x.reward_risk),
+        safe_float(x.macd_momentum_score),
     ), reverse=True)
-    return out
+    return winners
 
 
 def parquet_sources(data_root: Path, symbols: Sequence[str], limit: Optional[int]) -> List[Tuple[str, Path]]:
@@ -851,6 +2100,69 @@ def read_parquet_symbol(path: Path) -> Tuple[pd.DataFrame, pd.DataFrame]:
     del df
     gc.collect()
     return daily, latest_day
+
+
+def read_daily_hourly_symbol(daily_path: Path, hourly_path: Optional[Path]) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    Read pre-aggregated swing inputs.
+
+    Daily parquet drives the swing setup engine. 1H parquet provides the latest
+    regular-session confirmation slice. Raw 1-minute data should not be read by
+    the swing scanner in this mode.
+    """
+    daily = pd.read_parquet(daily_path)
+    daily = standardize_ohlcv_columns(infer_datetime_columns(daily))
+    if "date_et" not in daily.columns:
+        daily["date_et"] = pd.to_datetime(daily.get("dt_et", daily.index), errors="coerce").dt.strftime("%Y-%m-%d")
+    daily["date_et"] = daily["date_et"].astype(str)
+    daily = daily.dropna(subset=["date_et", "open", "high", "low", "close"]).sort_values("date_et").reset_index(drop=True)
+
+    latest_day = pd.DataFrame()
+    if hourly_path is not None and hourly_path.exists():
+        hourly = pd.read_parquet(hourly_path)
+        hourly = standardize_ohlcv_columns(infer_datetime_columns(hourly))
+        if "date_et" not in hourly.columns:
+            hourly["date_et"] = pd.to_datetime(hourly.get("dt_et", hourly.index), errors="coerce").dt.strftime("%Y-%m-%d")
+        hourly["date_et"] = hourly["date_et"].astype(str)
+        latest_date = str(daily["date_et"].dropna().max()) if not daily.empty else str(hourly["date_et"].dropna().max())
+        latest_day = hourly[hourly["date_et"].astype(str) == latest_date].copy()
+        if latest_day.empty and "date_et" in hourly.columns:
+            latest_hourly_date = str(hourly["date_et"].dropna().max())
+            latest_day = hourly[hourly["date_et"].astype(str) == latest_hourly_date].copy()
+        del hourly
+    if latest_day.empty:
+        # Safe fallback: create a one-row pseudo-intraday day from the latest
+        # daily candle. This preserves scanner stability if 1H file is missing,
+        # but the summary will still report the missing 1H file.
+        latest = daily.iloc[-1].to_dict() if not daily.empty else {}
+        latest_day = pd.DataFrame([latest]) if latest else pd.DataFrame()
+
+    gc.collect()
+    return daily, latest_day
+
+
+def daily_hourly_sources(
+    daily_root: Path,
+    hourly_root: Optional[Path],
+    symbols: Sequence[str],
+    limit: Optional[int],
+) -> List[Tuple[str, Path, Optional[Path]]]:
+    daily_files = sorted(daily_root.rglob("*.parquet"))
+    sym_filter = {s.upper() for s in symbols} if symbols else set()
+    hourly_map: Dict[str, Path] = {}
+    if hourly_root is not None and hourly_root.exists():
+        for hf in hourly_root.rglob("*.parquet"):
+            hourly_map[normalize_symbol_from_file(hf)] = hf
+
+    out: List[Tuple[str, Path, Optional[Path]]] = []
+    for df in daily_files:
+        sym = normalize_symbol_from_file(df)
+        if sym_filter and sym not in sym_filter:
+            continue
+        out.append((sym, df, hourly_map.get(sym)))
+    if limit:
+        out = out[:limit]
+    return out
 
 
 def alpaca_headers() -> Dict[str, str]:
@@ -915,6 +2227,9 @@ def read_alpaca_symbol(symbol: str, feed: str) -> Tuple[pd.DataFrame, pd.DataFra
 
 def run_scan(args: argparse.Namespace) -> Tuple[List[SwingCandidate], Dict[str, Any]]:
     earnings_map = load_earnings_csv(args.earnings_csv)
+    smart_money_map = load_smart_money_map(getattr(args, "smart_money_file", None))
+    news_map = load_news_risk_map(getattr(args, "news_risk_file", None))
+    market_context = load_market_context(getattr(args, "market_context_file", None))
     explicit_symbols = sorted(set(parse_symbols_arg(args.symbols) + load_symbols_from_file(args.symbols_file)))
 
     candidates: List[SwingCandidate] = []
@@ -922,7 +2237,28 @@ def run_scan(args: argparse.Namespace) -> Tuple[List[SwingCandidate], Dict[str, 
     warnings_count: Dict[str, int] = {}
     file_errors: Dict[str, str] = {}
 
-    if args.source == "parquet":
+    universe_meta: Dict[str, Any] = {"mode": "parquet_files"}
+
+    if args.source == "daily-hourly" or args.daily_root:
+        if not args.daily_root:
+            raise SystemExit("--daily-root is required when --source daily-hourly")
+        daily_root = Path(args.daily_root)
+        hourly_root = Path(args.hourly_root) if args.hourly_root else None
+        if not daily_root.exists():
+            raise FileNotFoundError(f"daily root not found: {daily_root}")
+        if hourly_root is not None and not hourly_root.exists():
+            raise FileNotFoundError(f"hourly root not found: {hourly_root}")
+        sources = daily_hourly_sources(daily_root, hourly_root, explicit_symbols, args.limit_files)
+        total = len(sources)
+        universe_meta = {
+            "mode": "daily_hourly_files",
+            "daily_root": str(daily_root),
+            "hourly_root": str(hourly_root or ""),
+            "note": "Swing scanner uses pre-aggregated Daily + 1H bars. Raw 1m is preprocessing source only.",
+        }
+        print(f"Daily+1H files: {total}", flush=True)
+        iterator = sources
+    elif args.source == "parquet":
         if not args.data_root:
             raise SystemExit("--data-root is required when --source parquet")
         root = Path(args.data_root)
@@ -933,29 +2269,55 @@ def run_scan(args: argparse.Namespace) -> Tuple[List[SwingCandidate], Dict[str, 
         print(f"Parquet files: {total}", flush=True)
         iterator = sources
     else:
-        if not explicit_symbols:
-            raise SystemExit("--symbols or --symbols-file is required when --source alpaca")
-        syms = explicit_symbols[: args.limit_symbols] if args.limit_symbols else explicit_symbols
+        if getattr(args, "auto_universe", True):
+            syms, universe_meta = build_auto_swing_universe(args, explicit_symbols)
+        else:
+            if not explicit_symbols:
+                raise SystemExit("--symbols or --symbols-file is required when --source alpaca and --no-auto-universe is used")
+            syms = sorted(set(normalize_symbol_for_swing(s) for s in explicit_symbols if normalize_symbol_for_swing(s)))
+            universe_meta = {
+                "mode": "manual_symbols",
+                "symbols": len(syms),
+                "note": "Manual Alpaca symbol universe. Auto discovery disabled.",
+            }
+
+        if args.limit_symbols:
+            syms = syms[: args.limit_symbols]
+
+        if not syms:
+            raise SystemExit("No symbols available for Alpaca swing scan")
+
+        write_universe_cache(syms, universe_meta, args.universe_cache)
         total = len(syms)
-        print(f"Alpaca symbols: {total}", flush=True)
+        print(f"Alpaca symbols: {total} ({universe_meta.get('mode', 'auto')})", flush=True)
         iterator = [(sym, None) for sym in syms]  # type: ignore[list-item]
 
-    for idx, (symbol, obj) in enumerate(iterator, start=1):
+    for idx, item in enumerate(iterator, start=1):
+        if args.source == "daily-hourly" or args.daily_root:
+            symbol, daily_path, hourly_path = item  # type: ignore[misc]
+            obj = daily_path
+        else:
+            symbol, obj = item  # type: ignore[misc]
+            hourly_path = None
         if idx == 1 or idx % 50 == 0 or idx == total:
             label = str(obj.name if isinstance(obj, Path) else symbol)
             print(f"[{idx}/{total}] {label}", flush=True)
         try:
-            if args.source == "parquet":
+            if args.source == "daily-hourly" or args.daily_root:
+                daily, latest_day = read_daily_hourly_symbol(obj, hourly_path)  # type: ignore[arg-type]
+            elif args.source == "parquet":
                 daily, latest_day = read_parquet_symbol(obj)  # type: ignore[arg-type]
             else:
                 daily, latest_day = read_alpaca_symbol(symbol, args.alpaca_feed)
 
-            cs, notes = scan_symbol(symbol, daily, latest_day, args, earnings_map)
+            cs, notes = scan_symbol(symbol, daily, latest_day, args, earnings_map, smart_money_map, news_map, market_context)
             for n in notes:
-                if "Earnings risk unknown" in n or "manual" in n:
-                    warnings_count[n] = warnings_count.get(n, 0) + 1
-                else:
+                if n.startswith("HARD_REJECT:"):
                     rejected[n] = rejected.get(n, 0) + 1
+                elif n.startswith("NO_SETUP:") or n.startswith("SCORE_REJECT:") or n.startswith("SETUP_SEEN:") or n.startswith("POOL_SEEN:"):
+                    rejected[n] = rejected.get(n, 0) + 1
+                else:
+                    warnings_count[n] = warnings_count.get(n, 0) + 1
             candidates.extend(cs)
 
             del daily, latest_day, cs
@@ -966,26 +2328,60 @@ def run_scan(args: argparse.Namespace) -> Tuple[List[SwingCandidate], Dict[str, 
             continue
 
     before = len(candidates)
+    display_rejected = len([c for c in candidates if not display_quality_allowed(c)])
+    candidates = [c for c in candidates if display_quality_allowed(c)]
+    before_display = len(candidates)
     candidates = dedupe_candidates(candidates)
     after = len(candidates)
+    max_out = int(getattr(args, "max_output_candidates", 10) or 10)
+    if max_out > 0:
+        candidates = candidates[:max_out]
 
     summary: Dict[str, Any] = {
         "version": SCANNER_VERSION,
         "run_time": datetime.now().isoformat(timespec="seconds"),
         "source": args.source,
         "data_root": args.data_root or "",
+        "daily_root": args.daily_root or "",
+        "hourly_root": args.hourly_root or "",
         "symbols_file": args.symbols_file or "",
         "mode": args.mode,
         "total_inputs": total,
-        "total_candidates_before_dedupe": before,
-        "total_candidates": after,
-        "dedupe_removed": before - after,
+        "total_candidates_before_dedupe": before_display,
+        "total_candidates_before_display_quality": before,
+        "display_quality_rejected": display_rejected,
+        "total_candidates": len(candidates),
+        "total_candidates_before_limit": after,
+        "dedupe_removed": before_display - after,
         "status_counts": {},
         "setup_counts": {},
         "top_blockers": dict(sorted(rejected.items(), key=lambda kv: kv[1], reverse=True)[:20]),
         "top_warnings": dict(sorted(warnings_count.items(), key=lambda kv: kv[1], reverse=True)[:20]),
+        "diagnostic_counts": {
+            "hard_rejected": sum(v for k, v in rejected.items() if k.startswith("HARD_REJECT:")),
+            "setup_candidates_seen": sum(v for k, v in rejected.items() if k.startswith("SETUP_SEEN:")),
+            "no_setup": sum(v for k, v in rejected.items() if k.startswith("NO_SETUP:")),
+            "score_rejected": sum(v for k, v in rejected.items() if k.startswith("SCORE_REJECT:")),
+            "candidate_pool_seen": sum(v for k, v in rejected.items() if k.startswith("POOL_SEEN:")),
+            "watch_pool_built": sum(1 for c in candidates if c.swing_status == "SWING_WATCH"),
+            "ready_promoted": sum(1 for c in candidates if c.swing_status == "SWING_READY"),
+            "soft_downgraded": sum(v for k, v in warnings_count.items() if k.startswith("SOFT_DOWNGRADE:")),
+        },
         "file_errors": dict(list(file_errors.items())[:20]),
-        "note": "Universal Swing Scanner. Dataset is selected only by CLI args. Research/visualization output only.",
+        "universe": universe_meta,
+        "smart_money_records": len(smart_money_map),
+        "news_risk_records": len(news_map),
+        "market_context_loaded": bool(market_context),
+        "institutional_model": {
+            "version": "v1.2.3_unique_ticker_shortlist",
+            "score_weights": INSTITUTIONAL_SCORE_WEIGHTS,
+            "ready_score": SWING_READY_SCORE,
+            "watch_score": SWING_WATCH_SCORE,
+            "setup_rr_gates": SETUP_RR_GATES,
+            "watch_rr_gates": SETUP_WATCH_RR_GATES,
+            "max_output_candidates": int(getattr(args, "max_output_candidates", 10) or 10),
+        },
+        "note": "Universal institutional Swing Scanner using Daily + 1H swing inputs with $5-$200 price discipline and dollar-volume liquidity. Raw 1m remains preprocessing source only. Unique-ticker shortlist and display-quality floor are enabled; Ready remains strict. No broker execution.",
     }
 
     for c in candidates:
@@ -1028,27 +2424,53 @@ def write_outputs(candidates: Sequence[SwingCandidate], summary: Dict[str, Any],
 
 def build_arg_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="Universal 1-3 Day Swing Scanner")
-    p.add_argument("--source", choices=["parquet", "alpaca"], default="parquet",
-                   help="Data source. parquet=folder of parquet files. alpaca=Alpaca live API.")
+    p.add_argument("--source", choices=["daily-hourly", "parquet", "alpaca"], default="daily-hourly",
+                   help="Data source. daily-hourly=pre-aggregated Daily + 1H swing bars; parquet=legacy raw intraday folder; alpaca=Alpaca live API.")
+    p.add_argument("--daily-root", default=None,
+                   help="Daily parquet folder for --source daily-hourly. Example: /opt/strategy-discovery/data/sp500_swing_daily")
+    p.add_argument("--hourly-root", default=None,
+                   help="1H parquet folder for --source daily-hourly. Example: /opt/strategy-discovery/data/sp500_swing_1h")
     p.add_argument("--data-root", default=None,
-                   help="Parquet folder. Required for --source parquet. No dataset is hardcoded.")
+                   help="Legacy raw intraday parquet folder. Required only for --source parquet. Not recommended for swing scans.")
     p.add_argument("--symbols", default=None,
-                   help="Comma-separated symbol list. Optional for parquet, required for alpaca unless --symbols-file is given.")
+                   help="Optional comma-separated symbol seed/filter. Not required for Alpaca auto-universe mode.")
     p.add_argument("--symbols-file", default=None,
-                   help="Plain text/CSV universe file. First column must be symbol.")
+                   help="Optional text/CSV symbol seed/filter. First column must be symbol.")
+    p.add_argument("--auto-universe", dest="auto_universe", action="store_true", default=True,
+                   help="Alpaca mode: auto-discover swing universe from market screeners + local seed files. Default.")
+    p.add_argument("--no-auto-universe", dest="auto_universe", action="store_false",
+                   help="Alpaca mode: disable auto discovery and require --symbols or --symbols-file.")
+    p.add_argument("--max-universe-symbols", type=int, default=int(os.getenv("SWING_MAX_UNIVERSE_SYMBOLS", "650")),
+                   help="Maximum live Alpaca swing universe size after auto discovery.")
+    p.add_argument("--universe-cache", default=os.getenv("SWING_UNIVERSE_CACHE", "swing_results/swing_universe_latest.csv"),
+                   help="Where to write the latest auto-discovered swing universe.")
     p.add_argument("--limit-files", type=int, default=None,
                    help="Testing only: limit parquet files.")
     p.add_argument("--limit-symbols", type=int, default=None,
-                   help="Testing only: limit Alpaca symbols.")
+                   help="Testing only: limit Alpaca symbols after universe discovery.")
     p.add_argument("--mode", choices=["independent", "day-to-swing", "both"], default="independent",
                    help="Currently independent scanner is primary. day-to-swing reserved for EOD integration.")
     p.add_argument("--output-dir", default="/opt/elite-scanner/swing_results")
     p.add_argument("--earnings-csv", default=None)
     p.add_argument("--alpaca-feed", default=os.getenv("ALPACA_FEED", "sip"), choices=["sip", "iex", "otc"])
-    p.add_argument("--min-price", type=float, default=10.0)
-    p.add_argument("--max-price", type=float, default=200.0)
-    p.add_argument("--min-avg-volume", type=float, default=1_000_000.0)
+    p.add_argument("--min-price", type=float, default=5.0,
+                   help="Hard minimum price. User swing discipline default is $5.")
+    p.add_argument("--max-price", type=float, default=200.0,
+                   help="Hard maximum price. User swing discipline default is $200.")
+    p.add_argument("--min-avg-volume", type=float, default=500_000.0,
+                   help="Share-volume liquidity floor used together with --min-avg-dollar-volume.")
+    p.add_argument("--min-avg-dollar-volume", type=float, default=20_000_000.0,
+                   help="20-day average dollar-volume floor. Hard reject only when share volume AND dollar volume are both below floor.")
     p.add_argument("--max-atr-pct", type=float, default=15.0)
+    p.add_argument("--min-warmup-days", type=int, default=220)
+    p.add_argument("--max-output-candidates", type=int, default=10,
+                   help="Dashboard shortlist cap. Default 10; use 0 to disable cap.")
+    p.add_argument("--smart-money-file", default=os.getenv("SMART_MONEY_OUTPUT_FILE", "smart_money_scores.json"),
+                   help="Optional smart_money_scores.json from smart_money_bars_proxy.py.")
+    p.add_argument("--news-risk-file", default=os.getenv("SWING_NEWS_RISK_FILE", "swing_news_risk.json"),
+                   help="Optional swing news/catalyst risk JSON.")
+    p.add_argument("--market-context-file", default=os.getenv("SWING_MARKET_CONTEXT_FILE", "swing_market_context.json"),
+                   help="Optional market/sector context JSON.")
     p.add_argument("--dry-run", action="store_true")
     return p
 
@@ -1060,6 +2482,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     print(f"Version: {SCANNER_VERSION}")
     print(f"Source: {args.source}")
     print(f"Data root: {args.data_root or ''}")
+    print(f"Daily root: {args.daily_root or ''}")
+    print(f"Hourly root: {args.hourly_root or ''}")
     print(f"Mode: {args.mode}")
     print("No production files modified.")
 
