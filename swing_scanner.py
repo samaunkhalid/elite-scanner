@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
 Universal 1-3 Day Swing Scanner
-top-level version = v1.2.4_display_quality_floor
-institutional_model.version = v1.2.3_unique_ticker_shortlist
+top-level version = v1.3.3_setup_tracking
+institutional_model.version = v1.3.3_setup_tracking
 
 Purpose:
 - Universal scanner. Not tied to the 300-ticker dataset.
@@ -37,7 +37,7 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 import pandas as pd
 
 
-SCANNER_VERSION = "swing_scanner_v1.2.4_display_quality_floor"
+SCANNER_VERSION = "swing_scanner_v1.3.3_setup_tracking"
 
 STATUS_RANK = {
     "SWING_ACTIVE": 3,
@@ -104,6 +104,10 @@ OUT_COLUMNS = [
     "close_time_et",
     "latest_date_et",
     "price",
+    "setup_generated_at_et",
+    "setup_price",
+    "setup_data_time_et",
+    "move_since_setup_pct",
     "avg_volume_20d",
     "avg_dollar_volume_20d",
     "atr_pct",
@@ -290,7 +294,7 @@ def pct(a: float, b: float) -> float:
 
 def normalize_symbol_from_file(path: Path) -> str:
     name = path.stem
-    for suffix in ["_Daily", "_DAILY", "_daily", "_1H", "_1h", "_Hour", "_hour", "_1Min", "_1min", "_1MIN", "_minute", "_Minute"]:
+    for suffix in ["_Daily", "_DAILY", "_daily", "_1H", "_1h", "_Hour", "_hour", "_1Min", "_1min", "_1MIN", "_minute", "_Minute", "_15m", "_15M", "_15Min", "_15min", "_5m", "_5M", "_5Min", "_5min"]:
         if name.endswith(suffix):
             return name[: -len(suffix)].upper()
     return name.upper()
@@ -519,16 +523,66 @@ def write_universe_cache(symbols: Sequence[str], meta: Dict[str, Any], path: Opt
         pass
 
 
+def _as_indexed_series(values: Any, index: pd.Index) -> pd.Series:
+    if isinstance(values, pd.Series):
+        return values
+    return pd.Series(values, index=index)
+
+
+def _series_has_timezone_marker(values: pd.Series) -> bool:
+    try:
+        s = values.dropna().astype(str)
+        if s.empty:
+            return False
+        return bool(s.str.contains(r"(?:Z|[+-]\d{2}:?\d{2})$", regex=True).any())
+    except Exception:
+        return False
+
+
+def _parse_et_datetime(values: Any, index: pd.Index) -> pd.Series:
+    """
+    Normalize timestamps to one consistent ET-aware dtype.
+
+    Alpaca live-cache parquet stores timestamp_et with explicit offsets.
+    Across DST boundaries that column legitimately contains mixed offsets
+    (-0400 and -0500). Pandas 2.x raises "Mixed timezones detected" unless
+    those strings are parsed with utc=True first.
+    """
+    raw = _as_indexed_series(values, index)
+
+    if _series_has_timezone_marker(raw):
+        parsed_utc = pd.to_datetime(raw, utc=True, errors="coerce")
+        return parsed_utc.dt.tz_convert("America/New_York")
+
+    parsed = pd.to_datetime(raw, errors="coerce")
+    try:
+        if getattr(parsed.dt, "tz", None) is None:
+            return parsed.dt.tz_localize("America/New_York", nonexistent="shift_forward", ambiguous="NaT")
+        return parsed.dt.tz_convert("America/New_York")
+    except Exception:
+        return parsed
+
+
+def _date_et_from_dt(values: Any, index: pd.Index) -> pd.Series:
+    raw = _as_indexed_series(values, index)
+    try:
+        if hasattr(raw, "dt"):
+            return raw.dt.strftime("%Y-%m-%d")
+    except Exception:
+        pass
+    try:
+        parsed = pd.to_datetime(raw, utc=True, errors="coerce")
+        return parsed.dt.tz_convert("America/New_York").dt.strftime("%Y-%m-%d")
+    except Exception:
+        parsed = pd.to_datetime(raw, errors="coerce")
+        return parsed.dt.strftime("%Y-%m-%d")
+
+
 def infer_datetime_columns(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
 
     if "timestamp_et" in out.columns:
-        out["dt_et"] = pd.to_datetime(out["timestamp_et"], errors="coerce")
-        try:
-            if getattr(out["dt_et"].dt, "tz", None) is None:
-                out["dt_et"] = out["dt_et"].dt.tz_localize("America/New_York", nonexistent="shift_forward", ambiguous="NaT")
-        except Exception:
-            pass
+        out["dt_et"] = _parse_et_datetime(out["timestamp_et"], out.index)
     elif "timestamp_utc" in out.columns:
         out["timestamp_utc"] = pd.to_datetime(out["timestamp_utc"], utc=True, errors="coerce")
         out["dt_et"] = out["timestamp_utc"].dt.tz_convert("America/New_York")
@@ -542,10 +596,13 @@ def infer_datetime_columns(df: pd.DataFrame) -> pd.DataFrame:
         out["dt_et"] = pd.to_datetime(out["date"], errors="coerce")
     else:
         # Last fallback: use index if datelike.
-        out["dt_et"] = pd.to_datetime(out.index, errors="coerce")
+        out["dt_et"] = _parse_et_datetime(out.index, out.index)
 
     if "date_et" not in out.columns:
-        out["date_et"] = pd.to_datetime(out["dt_et"], errors="coerce").dt.strftime("%Y-%m-%d")
+        if "date" in out.columns:
+            out["date_et"] = pd.to_datetime(out["date"], errors="coerce").dt.strftime("%Y-%m-%d")
+        else:
+            out["date_et"] = _date_et_from_dt(out["dt_et"], out.index)
     else:
         out["date_et"] = out["date_et"].astype(str)
 
@@ -902,15 +959,18 @@ def news_context(symbol: str, news_map: Dict[str, Dict[str, Any]], earnings_risk
     summary = str(rec.get("summary", rec.get("headline", ""))) if rec else ""
     positive = bool(rec.get("positive_catalyst", False)) if rec else False
     negative = bool(rec.get("negative_catalyst", False)) if rec else False
+    data_status = str(rec.get("data_status", "")).lower() if rec else ""
     severe_terms = ("OFFERING", "DILUTION", "BANKRUPTCY", "SEC", "FRAUD", "LAWSUIT", "FDA_REJECTION", "GUIDANCE_CUT", "REVERSE_SPLIT", "DELIST")
     text_blob = " ".join(str(rec.get(k, "")) for k in rec.keys()).upper() if rec else ""
     severe = risk in {"SEVERE", "SEVERE_NEGATIVE", "BLOCK", "BLOCKED"} or any(t in text_blob for t in severe_terms)
+    unavailable = (not bool(rec)) or data_status in {"unavailable", "missing", "error"} or risk in {"", "UNKNOWN", "UNAVAILABLE"}
     if earnings_risk == "BLOCKED_UPCOMING_EARNINGS":
         severe = True
         risk = "EARNINGS_BLOCK"
+        unavailable = False
     if positive and not severe:
         score = 15.0
-        risk = risk if risk and risk != "UNKNOWN" else "POSITIVE"
+        risk = risk if risk and risk not in {"UNKNOWN", "UNAVAILABLE"} else "POSITIVE"
     elif severe:
         score = 0.0
     elif negative or risk in {"NEGATIVE", "HIGH"}:
@@ -918,30 +978,53 @@ def news_context(symbol: str, news_map: Dict[str, Dict[str, Any]], earnings_risk
     elif risk in {"NEUTRAL", "LOW"}:
         score = 11.0
     else:
-        # Unknown news is a manual-check warning and Ready limiter, not an
-        # automatic technical rejection.
+        # Unknown/unavailable real news blocks Ready but can still allow Watch
+        # if all technical, liquidity, and smart-money structure is clean.
         score = 9.0
         risk = "UNKNOWN"
+        unavailable = True
     return {
         "score": round4(score),
         "risk": risk,
-        "summary": summary or ("News/catalyst unknown; manual check required." if risk == "UNKNOWN" else ""),
+        "summary": summary or ("News unavailable" if unavailable else ""),
         "positive": positive,
         "negative": negative or severe,
         "severe": severe,
-        "missing": not bool(rec),
+        "missing": unavailable,
     }
 
 
 def sector_market_context(symbol: str, market_context: Dict[str, Any], latest: pd.Series) -> Dict[str, Any]:
-    risk = str(market_context.get("risk", market_context.get("market_risk", "UNKNOWN"))).upper() if market_context else "UNKNOWN"
-    vix = safe_float(market_context.get("vix", 0.0), 0.0) if market_context else 0.0
-    macro_risk = bool(market_context.get("major_event_48h", False)) if market_context else False
+    risk = str(market_context.get("risk", market_context.get("market_risk", ""))).upper() if market_context else ""
+    regime = str(market_context.get("regime", "")).upper() if market_context else ""
+    bias = str(market_context.get("bias", "")).upper() if market_context else ""
+    label = str(market_context.get("label", "")).upper() if market_context else ""
+    vix = safe_float(market_context.get("vix", market_context.get("vix_level", 0.0)), 0.0) if market_context else 0.0
+    macro_risk = bool(market_context.get("major_event_48h", market_context.get("major_event_within_48h", False))) if market_context else False
+
+    # Accept the existing day-scanner market_regime.json shape.
+    if not risk or risk == "UNKNOWN":
+        if bias in {"BULLISH", "RISK_ON"} or regime in {"BULLISH", "STRONG"}:
+            risk = "SUPPORTIVE"
+        elif bias in {"BEARISH", "RISK_OFF"} or regime in {"BEARISH", "WEAK"}:
+            risk = "BEARISH"
+        elif regime in {"NORMAL", "MIXED"} or bias in {"NEUTRAL", "MIXED"}:
+            risk = "NEUTRAL"
+        elif label:
+            if "BULL" in label or "RISK ON" in label:
+                risk = "SUPPORTIVE"
+            elif "BEAR" in label or "RISK OFF" in label:
+                risk = "BEARISH"
+            else:
+                risk = "NEUTRAL"
+        else:
+            risk = "UNKNOWN"
+
     if vix >= 25 or risk in {"HIGH", "BEARISH", "RISK_OFF"} or macro_risk:
         return {"score": 3.0, "label": "HIGH_RISK", "risk": risk, "vix": round4(vix), "macro_risk": macro_risk}
     if risk in {"SUPPORTIVE", "BULLISH", "RISK_ON"}:
         return {"score": 10.0, "label": "SUPPORTIVE", "risk": risk, "vix": round4(vix), "macro_risk": macro_risk}
-    if risk in {"NEUTRAL", "LOW"}:
+    if risk in {"NEUTRAL", "LOW", "NORMAL", "MIXED"}:
         return {"score": 7.0, "label": "NEUTRAL", "risk": risk, "vix": round4(vix), "macro_risk": macro_risk}
     return {"score": 7.0, "label": "UNKNOWN", "risk": risk, "vix": round4(vix), "macro_risk": macro_risk}
 
@@ -2102,38 +2185,63 @@ def read_parquet_symbol(path: Path) -> Tuple[pd.DataFrame, pd.DataFrame]:
     return daily, latest_day
 
 
-def read_daily_hourly_symbol(daily_path: Path, hourly_path: Optional[Path]) -> Tuple[pd.DataFrame, pd.DataFrame]:
+def read_daily_hourly_symbol(
+    daily_path: Path,
+    hourly_path: Optional[Path],
+    m15_path: Optional[Path] = None,
+    m5_path: Optional[Path] = None,
+) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """
-    Read pre-aggregated swing inputs.
+    Read pre-aggregated live swing inputs.
 
-    Daily parquet drives the swing setup engine. 1H parquet provides the latest
-    regular-session confirmation slice. Raw 1-minute data should not be read by
-    the swing scanner in this mode.
+    Daily parquet drives the swing setup engine.
+    1H confirms structure/continuation.
+    15m confirms entry structure.
+    5m provides exact latest regular-session trigger/price and avoids chasing.
+    The scanner uses the most granular available regular-session file for
+    latest_day metrics, falling back to 15m, then 1H, then daily.
     """
     daily = pd.read_parquet(daily_path)
     daily = standardize_ohlcv_columns(infer_datetime_columns(daily))
     if "date_et" not in daily.columns:
-        daily["date_et"] = pd.to_datetime(daily.get("dt_et", daily.index), errors="coerce").dt.strftime("%Y-%m-%d")
+        daily["date_et"] = _date_et_from_dt(daily.get("dt_et", daily.index), daily.index)
     daily["date_et"] = daily["date_et"].astype(str)
     daily = daily.dropna(subset=["date_et", "open", "high", "low", "close"]).sort_values("date_et").reset_index(drop=True)
 
     latest_day = pd.DataFrame()
-    if hourly_path is not None and hourly_path.exists():
-        hourly = pd.read_parquet(hourly_path)
-        hourly = standardize_ohlcv_columns(infer_datetime_columns(hourly))
-        if "date_et" not in hourly.columns:
-            hourly["date_et"] = pd.to_datetime(hourly.get("dt_et", hourly.index), errors="coerce").dt.strftime("%Y-%m-%d")
-        hourly["date_et"] = hourly["date_et"].astype(str)
-        latest_date = str(daily["date_et"].dropna().max()) if not daily.empty else str(hourly["date_et"].dropna().max())
-        latest_day = hourly[hourly["date_et"].astype(str) == latest_date].copy()
-        if latest_day.empty and "date_et" in hourly.columns:
-            latest_hourly_date = str(hourly["date_et"].dropna().max())
-            latest_day = hourly[hourly["date_et"].astype(str) == latest_hourly_date].copy()
-        del hourly
+
+    def read_intraday(path: Optional[Path]) -> pd.DataFrame:
+        if path is None or not path.exists():
+            return pd.DataFrame()
+        frame = pd.read_parquet(path)
+        frame = standardize_ohlcv_columns(infer_datetime_columns(frame))
+        if "date_et" not in frame.columns:
+            frame["date_et"] = _date_et_from_dt(frame.get("dt_et", frame.index), frame.index)
+        frame["date_et"] = frame["date_et"].astype(str)
+        if "is_regular_session" in frame.columns:
+            regular = frame[frame["is_regular_session"] == True].copy()
+            if not regular.empty:
+                frame = regular
+        return frame.sort_values("dt_et" if "dt_et" in frame.columns else "date_et").reset_index(drop=True)
+
+    latest_daily_date = str(daily["date_et"].dropna().max()) if not daily.empty else ""
+
+    for candidate_path in [m5_path, m15_path, hourly_path]:
+        frame = read_intraday(candidate_path)
+        if frame.empty:
+            continue
+        if latest_daily_date:
+            latest_day = frame[frame["date_et"].astype(str) == latest_daily_date].copy()
+        if latest_day.empty:
+            latest_intraday_date = str(frame["date_et"].dropna().max())
+            latest_day = frame[frame["date_et"].astype(str) == latest_intraday_date].copy()
+        if not latest_day.empty:
+            break
+
     if latest_day.empty:
         # Safe fallback: create a one-row pseudo-intraday day from the latest
-        # daily candle. This preserves scanner stability if 1H file is missing,
-        # but the summary will still report the missing 1H file.
+        # daily candle. This preserves scanner stability if intraday files are
+        # missing, but Ready should still require external confirmation layers.
         latest = daily.iloc[-1].to_dict() if not daily.empty else {}
         latest_day = pd.DataFrame([latest]) if latest else pd.DataFrame()
 
@@ -2146,20 +2254,29 @@ def daily_hourly_sources(
     hourly_root: Optional[Path],
     symbols: Sequence[str],
     limit: Optional[int],
-) -> List[Tuple[str, Path, Optional[Path]]]:
+    m15_root: Optional[Path] = None,
+    m5_root: Optional[Path] = None,
+) -> List[Tuple[str, Path, Optional[Path], Optional[Path], Optional[Path]]]:
     daily_files = sorted(daily_root.rglob("*.parquet"))
     sym_filter = {s.upper() for s in symbols} if symbols else set()
-    hourly_map: Dict[str, Path] = {}
-    if hourly_root is not None and hourly_root.exists():
-        for hf in hourly_root.rglob("*.parquet"):
-            hourly_map[normalize_symbol_from_file(hf)] = hf
 
-    out: List[Tuple[str, Path, Optional[Path]]] = []
+    def build_map(root: Optional[Path]) -> Dict[str, Path]:
+        out: Dict[str, Path] = {}
+        if root is not None and root.exists():
+            for p in root.rglob("*.parquet"):
+                out[normalize_symbol_from_file(p)] = p
+        return out
+
+    hourly_map = build_map(hourly_root)
+    m15_map = build_map(m15_root)
+    m5_map = build_map(m5_root)
+
+    out: List[Tuple[str, Path, Optional[Path], Optional[Path], Optional[Path]]] = []
     for df in daily_files:
         sym = normalize_symbol_from_file(df)
         if sym_filter and sym not in sym_filter:
             continue
-        out.append((sym, df, hourly_map.get(sym)))
+        out.append((sym, df, hourly_map.get(sym), m15_map.get(sym), m5_map.get(sym)))
     if limit:
         out = out[:limit]
     return out
@@ -2244,19 +2361,27 @@ def run_scan(args: argparse.Namespace) -> Tuple[List[SwingCandidate], Dict[str, 
             raise SystemExit("--daily-root is required when --source daily-hourly")
         daily_root = Path(args.daily_root)
         hourly_root = Path(args.hourly_root) if args.hourly_root else None
+        m15_root = Path(args.m15_root) if getattr(args, "m15_root", None) else None
+        m5_root = Path(args.m5_root) if getattr(args, "m5_root", None) else None
         if not daily_root.exists():
             raise FileNotFoundError(f"daily root not found: {daily_root}")
         if hourly_root is not None and not hourly_root.exists():
             raise FileNotFoundError(f"hourly root not found: {hourly_root}")
-        sources = daily_hourly_sources(daily_root, hourly_root, explicit_symbols, args.limit_files)
+        if m15_root is not None and not m15_root.exists():
+            raise FileNotFoundError(f"15m root not found: {m15_root}")
+        if m5_root is not None and not m5_root.exists():
+            raise FileNotFoundError(f"5m root not found: {m5_root}")
+        sources = daily_hourly_sources(daily_root, hourly_root, explicit_symbols, args.limit_files, m15_root=m15_root, m5_root=m5_root)
         total = len(sources)
         universe_meta = {
-            "mode": "daily_hourly_files",
+            "mode": "daily_hourly_mtf_files",
             "daily_root": str(daily_root),
             "hourly_root": str(hourly_root or ""),
-            "note": "Swing scanner uses pre-aggregated Daily + 1H bars. Raw 1m is preprocessing source only.",
+            "m15_root": str(m15_root or ""),
+            "m5_root": str(m5_root or ""),
+            "note": "Live Swing scanner uses pre-aggregated Daily + 1H + 15m + 5m bars. Raw 1m is preprocessing source only.",
         }
-        print(f"Daily+1H files: {total}", flush=True)
+        print(f"Daily+1H+15m+5m files: {total}", flush=True)
         iterator = sources
     elif args.source == "parquet":
         if not args.data_root:
@@ -2294,17 +2419,19 @@ def run_scan(args: argparse.Namespace) -> Tuple[List[SwingCandidate], Dict[str, 
 
     for idx, item in enumerate(iterator, start=1):
         if args.source == "daily-hourly" or args.daily_root:
-            symbol, daily_path, hourly_path = item  # type: ignore[misc]
+            symbol, daily_path, hourly_path, m15_path, m5_path = item  # type: ignore[misc]
             obj = daily_path
         else:
             symbol, obj = item  # type: ignore[misc]
             hourly_path = None
+            m15_path = None
+            m5_path = None
         if idx == 1 or idx % 50 == 0 or idx == total:
             label = str(obj.name if isinstance(obj, Path) else symbol)
             print(f"[{idx}/{total}] {label}", flush=True)
         try:
             if args.source == "daily-hourly" or args.daily_root:
-                daily, latest_day = read_daily_hourly_symbol(obj, hourly_path)  # type: ignore[arg-type]
+                daily, latest_day = read_daily_hourly_symbol(obj, hourly_path, m15_path, m5_path)  # type: ignore[arg-type]
             elif args.source == "parquet":
                 daily, latest_day = read_parquet_symbol(obj)  # type: ignore[arg-type]
             else:
@@ -2344,6 +2471,8 @@ def run_scan(args: argparse.Namespace) -> Tuple[List[SwingCandidate], Dict[str, 
         "data_root": args.data_root or "",
         "daily_root": args.daily_root or "",
         "hourly_root": args.hourly_root or "",
+        "m15_root": getattr(args, "m15_root", None) or "",
+        "m5_root": getattr(args, "m5_root", None) or "",
         "symbols_file": args.symbols_file or "",
         "mode": args.mode,
         "total_inputs": total,
@@ -2373,7 +2502,7 @@ def run_scan(args: argparse.Namespace) -> Tuple[List[SwingCandidate], Dict[str, 
         "news_risk_records": len(news_map),
         "market_context_loaded": bool(market_context),
         "institutional_model": {
-            "version": "v1.2.3_unique_ticker_shortlist",
+            "version": "v1.3.3_setup_tracking",
             "score_weights": INSTITUTIONAL_SCORE_WEIGHTS,
             "ready_score": SWING_READY_SCORE,
             "watch_score": SWING_WATCH_SCORE,
@@ -2381,7 +2510,7 @@ def run_scan(args: argparse.Namespace) -> Tuple[List[SwingCandidate], Dict[str, 
             "watch_rr_gates": SETUP_WATCH_RR_GATES,
             "max_output_candidates": int(getattr(args, "max_output_candidates", 10) or 10),
         },
-        "note": "Universal institutional Swing Scanner using Daily + 1H swing inputs with $5-$200 price discipline and dollar-volume liquidity. Raw 1m remains preprocessing source only. Unique-ticker shortlist and display-quality floor are enabled; Ready remains strict. No broker execution.",
+        "note": "Universal institutional Swing Scanner using Daily + 1H swing inputs with $5-$200 price discipline, dollar-volume liquidity, live 1H/15m/5m confirmation, and full-universe support. Raw 1m remains preprocessing source only. Unique-ticker shortlist and display-quality floor are enabled; Ready remains strict. No broker execution. Scanner-owned setup_generated_at_et/setup_price tracking enabled.",
     }
 
     for c in candidates:
@@ -2391,6 +2520,111 @@ def run_scan(args: argparse.Namespace) -> Tuple[List[SwingCandidate], Dict[str, 
     return candidates, summary
 
 
+
+def current_et_iso() -> str:
+    """Return current America/New_York timestamp for setup first-seen tracking."""
+    try:
+        from zoneinfo import ZoneInfo  # Python 3.9+
+        return datetime.now(ZoneInfo("America/New_York")).isoformat(timespec="seconds")
+    except Exception:
+        return datetime.now().isoformat(timespec="seconds")
+
+
+def setup_tracking_key(row: Dict[str, Any]) -> str:
+    symbol = str(row.get("symbol", "")).upper().strip()
+    setup_type = str(row.get("setup_type", "")).upper().strip()
+    return f"{symbol}|{setup_type}" if symbol else ""
+
+
+def load_previous_setup_tracking(csv_path: Path) -> Tuple[Dict[str, Dict[str, Any]], Dict[str, Dict[str, Any]]]:
+    """
+    Preserve true first-seen setup timestamp/price across scanner reruns.
+
+    Key rule:
+    - Same symbol + same setup_type keeps original setup_generated_at_et/setup_price.
+    - Symbol-only fallback is used only when a previous setup_type is missing.
+    """
+    by_key: Dict[str, Dict[str, Any]] = {}
+    by_symbol: Dict[str, Dict[str, Any]] = {}
+    if not csv_path.exists():
+        return by_key, by_symbol
+
+    try:
+        prev = pd.read_csv(csv_path).fillna("")
+    except Exception:
+        return by_key, by_symbol
+
+    keep_fields = [
+        "setup_generated_at_et",
+        "setup_price",
+        "setup_data_time_et",
+    ]
+
+    for _, r in prev.iterrows():
+        row = r.to_dict()
+        symbol = str(row.get("symbol", "")).upper().strip()
+        key = setup_tracking_key(row)
+        if not symbol:
+            continue
+        if not any(str(row.get(f, "")).strip() for f in keep_fields):
+            continue
+        packed = {f: row.get(f, "") for f in keep_fields}
+        if key:
+            by_key[key] = packed
+        if symbol not in by_symbol:
+            by_symbol[symbol] = packed
+
+    return by_key, by_symbol
+
+
+def apply_setup_tracking(rows: List[Dict[str, Any]], csv_path: Path, summary: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """
+    Add stable Swing setup timestamp fields before CSV/JSON write.
+
+    This is intentionally scanner-owned. The dashboard must not guess setup time
+    from dashboard build time or file modified time.
+    """
+    now_et = current_et_iso()
+    prev_by_key, prev_by_symbol = load_previous_setup_tracking(csv_path)
+
+    first_seen_new = 0
+    first_seen_preserved = 0
+
+    for row in rows:
+        symbol = str(row.get("symbol", "")).upper().strip()
+        key = setup_tracking_key(row)
+
+        previous = prev_by_key.get(key) or prev_by_symbol.get(symbol) or {}
+
+        prev_generated = str(previous.get("setup_generated_at_et", "")).strip()
+        prev_price = safe_float(previous.get("setup_price"), 0)
+        prev_data_time = str(previous.get("setup_data_time_et", "")).strip()
+
+        if prev_generated:
+            row["setup_generated_at_et"] = prev_generated
+            row["setup_price"] = round4(prev_price) if prev_price > 0 else round4(row.get("close_price") or row.get("price") or row.get("entry_trigger"))
+            row["setup_data_time_et"] = prev_data_time or str(row.get("close_time_et") or row.get("latest_date_et") or "")
+            first_seen_preserved += 1
+        else:
+            row["setup_generated_at_et"] = now_et
+            row["setup_price"] = round4(row.get("close_price") or row.get("price") or row.get("entry_trigger"))
+            row["setup_data_time_et"] = str(row.get("close_time_et") or row.get("latest_date_et") or "")
+            first_seen_new += 1
+
+        setup_price = safe_float(row.get("setup_price"), 0)
+        current_price = safe_float(row.get("price") or row.get("close_price"), 0)
+        row["move_since_setup_pct"] = round4(pct(current_price, setup_price)) if setup_price > 0 and current_price > 0 else 0.0
+
+    summary["setup_tracking"] = {
+        "tracked_rows": len(rows),
+        "new_first_seen": first_seen_new,
+        "preserved_first_seen": first_seen_preserved,
+        "generated_at_et_for_new_rows": now_et,
+        "note": "setup_generated_at_et/setup_price are scanner-owned first-seen fields. Dashboard should not infer setup time from file modified time.",
+    }
+    summary["setup_generated_at_et"] = now_et
+    return rows
+
 def write_outputs(candidates: Sequence[SwingCandidate], summary: Dict[str, Any], out_dir: Path) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     csv_path = out_dir / "swing_candidates_latest.csv"
@@ -2398,6 +2632,7 @@ def write_outputs(candidates: Sequence[SwingCandidate], summary: Dict[str, Any],
     summary_path = out_dir / "swing_scanner_summary.json"
 
     rows = [asdict(c) for c in candidates]
+    rows = apply_setup_tracking(rows, csv_path, summary)
     # Ensure stable columns.
     df = pd.DataFrame(rows)
     if df.empty:
@@ -2417,6 +2652,15 @@ def write_outputs(candidates: Sequence[SwingCandidate], summary: Dict[str, Any],
     }
     summary_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
 
+    tracking = summary.get("setup_tracking", {}) or {}
+    if tracking:
+        print(
+            "Setup tracking: "
+            f"{tracking.get('tracked_rows', 0)} rows "
+            f"({tracking.get('new_first_seen', 0)} new, "
+            f"{tracking.get('preserved_first_seen', 0)} preserved)",
+            flush=True,
+        )
     print(f"Saved: {csv_path}")
     print(f"Saved: {json_path}")
     print(f"Saved: {summary_path}")
@@ -2429,7 +2673,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--daily-root", default=None,
                    help="Daily parquet folder for --source daily-hourly. Example: /opt/strategy-discovery/data/sp500_swing_daily")
     p.add_argument("--hourly-root", default=None,
-                   help="1H parquet folder for --source daily-hourly. Example: /opt/strategy-discovery/data/sp500_swing_1h")
+                   help="1H parquet folder for --source daily-hourly. Example: /opt/strategy-discovery/data/live_swing_1h")
+    p.add_argument("--m15-root", default=None,
+                   help="15m parquet folder for --source daily-hourly. Example: /opt/strategy-discovery/data/live_swing_15m")
+    p.add_argument("--m5-root", default=None,
+                   help="5m parquet folder for --source daily-hourly. Example: /opt/strategy-discovery/data/live_swing_5m")
     p.add_argument("--data-root", default=None,
                    help="Legacy raw intraday parquet folder. Required only for --source parquet. Not recommended for swing scans.")
     p.add_argument("--symbols", default=None,
@@ -2484,6 +2732,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     print(f"Data root: {args.data_root or ''}")
     print(f"Daily root: {args.daily_root or ''}")
     print(f"Hourly root: {args.hourly_root or ''}")
+    print(f"15m root: {getattr(args, 'm15_root', None) or ''}")
+    print(f"5m root: {getattr(args, 'm5_root', None) or ''}")
     print(f"Mode: {args.mode}")
     print("No production files modified.")
 
