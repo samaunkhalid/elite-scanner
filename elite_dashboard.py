@@ -37,10 +37,13 @@ import re
 import html
 from datetime import datetime, timezone
 from string import Template
+from urllib.parse import urlencode
+from urllib.request import Request, urlopen
+from urllib.error import HTTPError, URLError
 
 import pandas as pd
 
-DASHBOARD_VERSION = "v2.8.7_day_trade_swing_trade_sections"
+DASHBOARD_VERSION = "v2.9.6_swing_setup_generated_time"
 
 try:
     from zoneinfo import ZoneInfo
@@ -2766,11 +2769,6 @@ def build_market_inactive_signal_panel(status):
                 <strong>Signal Desk</strong>
                 <span>Intraday execution status</span>
             </div>
-            <div class="signal-desk-counts">
-                <span><b>0</b> Active</span>
-                <span><b>0</b> Ready</span>
-                <span><b>0</b> Watch</span>
-            </div>
         </div>
         <div class="signal-desk-empty">
             <strong>Market is {esc(status)}.</strong>
@@ -2829,11 +2827,6 @@ def build_waiting_first_scanner_panel(status, scanner_time_label):
             <div>
                 <strong>Signal Desk</strong>
                 <span>Intraday execution status</span>
-            </div>
-            <div class="signal-desk-counts">
-                <span><b>0</b> Active</span>
-                <span><b>0</b> Ready</span>
-                <span><b>0</b> Watch</span>
             </div>
         </div>
         <div class="signal-desk-empty">
@@ -3208,11 +3201,6 @@ def build_monitor_only_signal_panel(status, title, subtitle):
                 <strong>Signal Desk Disabled</strong>
                 <span>{esc(title)}</span>
             </div>
-            <div class="signal-desk-counts">
-                <span><b>0</b> Active</span>
-                <span><b>0</b> Ready</span>
-                <span><b>0</b> Watch</span>
-            </div>
         </div>
         <div class="signal-desk-empty">
             <strong>Market is {esc(status)}.</strong>
@@ -3335,6 +3323,41 @@ def format_signal_price(value):
     if val > 0:
         return f"${val:.2f}"
     return "—"
+
+
+def calculate_t1_r_multiple(entry_value, stop_value, target_1_value):
+    """
+    Display-only day-trade T1 R multiple.
+
+    T1 is the tested scalp/partial target. Plan reward_risk remains the full
+    T2 plan R/R. This does not change signal logic, trigger logic, stops,
+    targets, or swing-trade code.
+    """
+    entry = safe_float(entry_value, 0)
+    stop = safe_float(stop_value, 0)
+    target_1 = safe_float(target_1_value, 0)
+
+    risk = entry - stop
+    reward = target_1 - entry
+
+    if entry <= 0 or stop <= 0 or target_1 <= 0 or risk <= 0 or reward <= 0:
+        return 0.0
+
+    return reward / risk
+
+
+def format_t1_r_text(entry_value, stop_value, target_1_value):
+    t1_r = calculate_t1_r_multiple(entry_value, stop_value, target_1_value)
+    if t1_r <= 0:
+        return "—"
+    return f"{t1_r:.2f}R"
+
+
+def format_plan_rr_text(reward_risk):
+    rr = safe_float(reward_risk, 0)
+    if rr <= 0:
+        return "—"
+    return f"{rr:.1f}:1"
 
 
 def signal_is_actionable(signal):
@@ -3521,12 +3544,15 @@ def build_signal_desk_item(signal, compact=False):
         </div>
         """
 
-    entry = format_signal_price(signal.get("entry_trigger") or signal.get("entry"))
-    stop = format_signal_price(signal.get("stop_loss") or signal.get("stop"))
-    target_1 = format_signal_price(signal.get("target_1") or signal.get("target1"))
-    rr = safe_float(signal.get("reward_risk"), 0)
+    entry_raw = signal.get("entry_trigger") or signal.get("entry")
+    stop_raw = signal.get("stop_loss") or signal.get("stop")
+    target_1_raw = signal.get("target_1") or signal.get("target1")
 
-    rr_text = f"{rr:.1f}:1" if rr > 0 else "—"
+    entry = format_signal_price(entry_raw)
+    stop = format_signal_price(stop_raw)
+    target_1 = format_signal_price(target_1_raw)
+    t1_r_text = format_t1_r_text(entry_raw, stop_raw, target_1_raw)
+    plan_rr_text = format_plan_rr_text(signal.get("reward_risk"))
 
     return f"""
         <div class="signal-desk-item">
@@ -3537,11 +3563,12 @@ def build_signal_desk_item(signal, compact=False):
             <div class="signal-desk-setup">{esc(setup_type)}</div>
             {time_html}
             {lunch_note_html}
-            <div class="signal-desk-plan">
+            <div class="signal-desk-plan signal-desk-plan-six">
                 <span>E <b>{entry}</b></span>
                 <span>S <b>{stop}</b></span>
                 <span>T1 <b>{target_1}</b></span>
-                <span>R/R <b>{rr_text}</b></span>
+                <span>T1R <b>{t1_r_text}</b></span>
+                <span>T2RR <b>{plan_rr_text}</b></span>
                 <span>Conf <b>{confidence_text}</b></span>
             </div>
         </div>
@@ -4419,11 +4446,6 @@ def build_signal_desk_panel(signals, rejected_candidates=None):
                     <strong>Signal Desk</strong>
                     <span>Intraday execution status</span>
                 </div>
-                <div class="signal-desk-counts">
-                    <span><b>{active_count}</b> Active</span>
-                    <span><b>{ready_count}</b> Ready</span>
-                    <span><b>{watch_count}</b> Watch</span>
-                </div>
             </div>
             <div class="signal-desk-empty">
                 <strong>No signal at this moment.</strong>
@@ -4464,11 +4486,6 @@ def build_signal_desk_panel(signals, rejected_candidates=None):
             <div>
                 <strong>Signal Desk</strong>
                 <span>Intraday execution status. Click a ticker to jump to its full card details.</span>
-            </div>
-            <div class="signal-desk-counts">
-                <span><b>{active_count}</b> Active</span>
-                <span><b>{ready_count}</b> Ready</span>
-                <span><b>{watch_count}</b> Watch</span>
             </div>
         </div>
         <div class="signal-desk-columns">
@@ -4553,104 +4570,541 @@ def status_family(value):
 
 
 def build_day_trade_summary_bar(signal_payload, potential_rows=None, reclaimer_rows=None, scanner_regular_ready=False):
-    """Compact Day Trade bar shown directly above Signal Desk.
+    """Day Trade Desk section banner.
 
-    Day Trade section is intraday only:
-      - Signal Desk / Morning Reclaim / Potential / Reclaimer
-      - T1 is the practical 0.75R scalp target
-      - T2 is real resistance / open-air target
+    Keep the full Signal Desk detail below, but surface the key Active / Ready /
+    Watch counts in the top banner so the Day Trade and Swing Trade sections
+    share the same visual structure.
     """
-    potential_rows = potential_rows or []
-    reclaimer_rows = reclaimer_rows or []
-    signals = signal_payload.get("signals", []) if isinstance(signal_payload, dict) else []
-    rejected = signal_payload.get("rejected_candidates", []) if isinstance(signal_payload, dict) else []
-
-    active_count = 0
-    ready_count = 0
-    watch_count = 0
-    invalidated_count = 0
-
-    for s in signals:
-        fam = status_family(
-            s.get("signal_status")
-            or s.get("latest_signal_status")
-            or s.get("readiness_grade")
-            or s.get("actionability")
-        )
-        if fam == "ACTIVE":
-            active_count += 1
-        elif fam == "READY":
-            ready_count += 1
-        elif fam == "WATCH":
-            watch_count += 1
-        elif fam == "INVALIDATED":
-            invalidated_count += 1
-
-    freshness = "Ready" if scanner_regular_ready else "Session-gated / waiting"
-    generated = header_time_label(signal_payload.get("generated_at_et")) if isinstance(signal_payload, dict) else "—"
+    signals = (signal_payload or {}).get("signals", []) or []
+    active_count = sum(1 for s in signals if signal_status_group(s) == "active")
+    ready_count = sum(1 for s in signals if signal_status_group(s) == "ready")
+    watch_count = sum(1 for s in signals if signal_status_group(s) == "watch")
 
     return f"""
-    <section class="trade-section-header day-trade-header" id="daytrade-summary">
-        <div class="trade-section-title">
-            <span class="trade-kicker">Day Trade</span>
-            <h2>Intraday Signal Desk</h2>
-            <p>Execution-focused intraday setups. T1 is the tested 0.75R scalp/partial target; T2 remains real resistance or open-air target.</p>
+    <div class="trade-block-heading day-trade-header" id="daytrade-summary">
+        <div>
+            <span class="trade-kicker day-kicker">Day Trade</span>
+            <h2>Day Trade Desk</h2>
+            <p>Regular-market intraday scanner and signal desk.</p>
         </div>
-        <div class="trade-summary-grid">
-            <div class="trade-summary-cell">
-                <span>Active</span>
-                <strong>{active_count}</strong>
-            </div>
-            <div class="trade-summary-cell">
-                <span>Ready / Touched</span>
-                <strong>{ready_count}</strong>
-            </div>
-            <div class="trade-summary-cell">
-                <span>Watch</span>
-                <strong>{watch_count}</strong>
-            </div>
-            <div class="trade-summary-cell">
-                <span>Potential</span>
-                <strong>{len(potential_rows)}</strong>
-            </div>
-            <div class="trade-summary-cell">
-                <span>Reclaimer</span>
-                <strong>{len(reclaimer_rows)}</strong>
-            </div>
-            <div class="trade-summary-cell">
-                <span>Rejected</span>
-                <strong>{len(rejected) + invalidated_count}</strong>
-            </div>
+        <div class="swing-counts day-counts">
+            <span>Active <strong>{active_count}</strong></span>
+            <span>Ready <strong>{ready_count}</strong></span>
+            <span>Watch <strong>{watch_count}</strong></span>
         </div>
-        <div class="trade-section-note">
-            <span>Signal Refresh: {esc(generated)}</span>
-            <span>Scanner Status: {esc(freshness)}</span>
-            <span>Risk rule: default 1% account risk max per trade.</span>
-        </div>
-    </section>
+    </div>
     """
 
+
+
+def load_swing_universe_map():
+    """Load live swing universe metadata for cleaner dashboard cards."""
+    paths = [
+        os.path.join("swing_results", "live_swing_universe.csv"),
+        "live_swing_universe.csv",
+    ]
+    for path in paths:
+        if os.path.exists(path):
+            rows = load_csv_records(path)
+            out = {}
+            for row in rows:
+                sym = safe_str(row.get("symbol"), "").upper()
+                if sym:
+                    out[sym] = row
+            return out
+    return {}
+
+
+def load_swing_day_context_map():
+    """Best-effort sector/price context from existing day-trade scanner files.
+
+    This does not change swing scoring. It only fills dashboard labels such as
+    sector, ETF, vs-sector, and rotation when the same symbol exists in regular
+    scanner outputs.
+    """
+    paths = [
+        "elite_watchlist_raw.csv",
+        "elite_watchlist.csv",
+        "potential_movers.csv",
+        "active_momentum.csv",
+        "regular_market_universe.csv",
+        "premarket_movers.csv",
+        "afterhours_movers.csv",
+    ]
+    wanted = {
+        "sector",
+        "sector_etf",
+        "sector_change_pct",
+        "sector_vs_spy_pct",
+        "sector_vs_qqq_pct",
+        "stock_vs_sector_pct",
+        "sector_status",
+        "rotation",
+        "price",
+        "current_price",
+        "last_price",
+        "change_pct",
+        "day_change_pct",
+        "company_name",
+        "name",
+        "exchange",
+    }
+    out = {}
+    for path in paths:
+        if not os.path.exists(path):
+            continue
+        for row in load_csv_records(path):
+            sym = safe_str(row.get("symbol") or row.get("ticker"), "").upper()
+            if not sym:
+                continue
+            current = out.setdefault(sym, {})
+            for key in wanted:
+                val = row.get(key)
+                if safe_str(val, "") and not safe_str(current.get(key), ""):
+                    current[key] = val
+    return out
+
+
+def alpaca_env_value(*names):
+    """Read Alpaca env values using every key name used across the VPS stack."""
+    for name in names:
+        val = os.getenv(name)
+        if safe_str(val, "").strip():
+            return safe_str(val, "").strip()
+    return ""
+
+
+def alpaca_data_feed():
+    feed = alpaca_env_value("ALPACA_DATA_FEED", "APCA_DATA_FEED", "DATA_FEED", "ALPACA_FEED").upper()
+    return feed if feed in {"SIP", "IEX", "DELAYED_SIP", "OTC"} else "SIP"
+
+
+def alpaca_data_base_url():
+    base = alpaca_env_value("ALPACA_DATA_BASE_URL", "APCA_DATA_BASE_URL")
+    if not base:
+        return "https://data.alpaca.markets/v2"
+    base = base.rstrip("/")
+    if not base.endswith("/v2"):
+        base += "/v2"
+    return base
+
+
+def alpaca_headers():
+    key = alpaca_env_value("APCA_API_KEY_ID", "ALPACA_API_KEY_ID", "ALPACA_KEY_ID", "ALPACA_API_KEY")
+    secret = alpaca_env_value("APCA_API_SECRET_KEY", "ALPACA_API_SECRET_KEY", "ALPACA_SECRET_KEY", "ALPACA_SECRET")
+    if not key or not secret:
+        return {}
+    return {
+        "APCA-API-KEY-ID": key,
+        "APCA-API-SECRET-KEY": secret,
+    }
+
+
+def alpaca_market_get_json(path, params=None, timeout=6):
+    """Small Swing-only Alpaca Market Data GET helper."""
+    headers = alpaca_headers()
+    if not headers:
+        return None, "missing Alpaca API env"
+
+    url = f"{alpaca_data_base_url()}/{path.lstrip('/')}"
+    if params:
+        url = f"{url}?{urlencode(params)}"
+
+    try:
+        req = Request(url, headers=headers, method="GET")
+        with urlopen(req, timeout=timeout) as resp:
+            return json.loads(resp.read().decode("utf-8")), ""
+    except HTTPError as exc:
+        body = ""
+        try:
+            body = exc.read().decode("utf-8")[:240]
+        except Exception:
+            pass
+        return None, f"HTTP {exc.code} {body}".strip()
+    except (URLError, TimeoutError, json.JSONDecodeError, OSError) as exc:
+        return None, str(exc)
+
+
+def parse_swing_snapshot_price(sym, snap):
+    """Extract price/time/prev close from one Alpaca snapshot payload."""
+    if not isinstance(snap, dict):
+        return None
+
+    latest_trade = snap.get("latestTrade") or snap.get("latest_trade") or {}
+    latest_quote = snap.get("latestQuote") or snap.get("latest_quote") or {}
+    minute_bar = snap.get("minuteBar") or snap.get("minute_bar") or {}
+    daily_bar = snap.get("dailyBar") or snap.get("daily_bar") or {}
+    prev_daily_bar = snap.get("prevDailyBar") or snap.get("prev_daily_bar") or {}
+
+    price = safe_float(latest_trade.get("p") or latest_trade.get("price"), 0)
+    price_time = safe_str(latest_trade.get("t") or latest_trade.get("timestamp"), "")
+
+    source_kind = "latest trade"
+
+    if price <= 0:
+        bid = safe_float(latest_quote.get("bp") or latest_quote.get("bid_price"), 0)
+        ask = safe_float(latest_quote.get("ap") or latest_quote.get("ask_price"), 0)
+        if bid > 0 and ask > 0:
+            price = (bid + ask) / 2
+            price_time = safe_str(latest_quote.get("t") or latest_quote.get("timestamp"), "")
+            source_kind = "latest quote"
+        elif safe_float(minute_bar.get("c") or minute_bar.get("close"), 0) > 0:
+            price = safe_float(minute_bar.get("c") or minute_bar.get("close"), 0)
+            price_time = safe_str(minute_bar.get("t") or minute_bar.get("timestamp"), "")
+            source_kind = "latest 1m bar"
+        elif safe_float(daily_bar.get("c") or daily_bar.get("close"), 0) > 0:
+            price = safe_float(daily_bar.get("c") or daily_bar.get("close"), 0)
+            price_time = safe_str(daily_bar.get("t") or daily_bar.get("timestamp"), "")
+            source_kind = "daily bar"
+
+    if price <= 0:
+        return None
+
+    item = {
+        "live_current_price": price,
+        "current_price": price,
+        "last_price": price,
+        "price": price,
+        "price_source": f"Alpaca {alpaca_data_feed()} {source_kind}",
+        "price_updated_at": price_time,
+        "swing_live_price_overlay": True,
+    }
+
+    bid = safe_float(latest_quote.get("bp") or latest_quote.get("bid_price"), 0)
+    ask = safe_float(latest_quote.get("ap") or latest_quote.get("ask_price"), 0)
+    if bid > 0:
+        item["bid"] = bid
+    if ask > 0:
+        item["ask"] = ask
+    if bid > 0 and ask > 0:
+        item["spread_pct"] = ((ask - bid) / price) * 100 if price > 0 else 0
+
+    prev_close = safe_float(prev_daily_bar.get("c") or prev_daily_bar.get("close"), 0)
+    if prev_close > 0:
+        item["previous_close"] = prev_close
+        item["regular_change_pct_live"] = ((price - prev_close) / prev_close) * 100
+
+    return item
+
+
+def parse_swing_latest_trade(sym, trade):
+    if not isinstance(trade, dict):
+        return None
+    price = safe_float(trade.get("p") or trade.get("price"), 0)
+    if price <= 0:
+        return None
+    return {
+        "live_current_price": price,
+        "current_price": price,
+        "last_price": price,
+        "price": price,
+        "price_source": f"Alpaca {alpaca_data_feed()} latest trade",
+        "price_updated_at": safe_str(trade.get("t") or trade.get("timestamp"), ""),
+        "swing_live_price_overlay": True,
+    }
+
+
+def parse_swing_latest_quote(sym, quote):
+    if not isinstance(quote, dict):
+        return None
+    bid = safe_float(quote.get("bp") or quote.get("bid_price"), 0)
+    ask = safe_float(quote.get("ap") or quote.get("ask_price"), 0)
+    if bid <= 0 or ask <= 0:
+        return None
+    price = (bid + ask) / 2
+    return {
+        "live_current_price": price,
+        "current_price": price,
+        "last_price": price,
+        "price": price,
+        "bid": bid,
+        "ask": ask,
+        "spread_pct": ((ask - bid) / price) * 100 if price > 0 else 0,
+        "price_source": f"Alpaca {alpaca_data_feed()} latest quote",
+        "price_updated_at": safe_str(quote.get("t") or quote.get("timestamp"), ""),
+        "swing_live_price_overlay": True,
+    }
+
+
+def fetch_swing_latest_snapshots(symbols, timeout=6):
+    """
+    Lightweight live overlay for Swing Trade Desk cards only.
+
+    It tries Alpaca snapshots first, then latest trades, then latest quotes.
+    It does not rerun swing_scanner.py and does not touch day-trade logic.
+    """
+    clean_symbols = []
+    seen = set()
+    for sym in symbols or []:
+        s = safe_str(sym, "").upper().strip()
+        if s and s not in seen:
+            clean_symbols.append(s)
+            seen.add(s)
+
+    if not clean_symbols:
+        return {}
+
+    headers = alpaca_headers()
+    if not headers:
+        print("  Swing live price overlay skipped: missing Alpaca API env")
+        return {}
+
+    feed = alpaca_data_feed().lower()
+    symbol_csv = ",".join(clean_symbols[:50])
+    out = {}
+
+    # 1) Snapshots: best source because it can include trade, quote, minute bar, and previous close.
+    data, err = alpaca_market_get_json(
+        "/stocks/snapshots",
+        {"symbols": symbol_csv, "feed": feed},
+        timeout=timeout,
+    )
+    if data:
+        snapshots = data.get("snapshots") if isinstance(data, dict) else {}
+        if not isinstance(snapshots, dict):
+            snapshots = {}
+
+        # Some response variants can be symbol-keyed directly.
+        if not snapshots and isinstance(data, dict):
+            direct = {
+                k: v for k, v in data.items()
+                if safe_str(k, "").upper() in clean_symbols and isinstance(v, dict)
+            }
+            snapshots = direct
+
+        for sym, snap in snapshots.items():
+            item = parse_swing_snapshot_price(sym, snap)
+            if item:
+                out[safe_str(sym, "").upper()] = item
+    elif err:
+        print(f"  Swing snapshot overlay skipped: {err}")
+
+    missing = [s for s in clean_symbols if s not in out]
+
+    # 2) Latest trades fallback: most direct live price if snapshots are empty/stale.
+    if missing:
+        data, err = alpaca_market_get_json(
+            "/stocks/trades/latest",
+            {"symbols": ",".join(missing[:50]), "feed": feed},
+            timeout=timeout,
+        )
+        if data:
+            trades = data.get("trades") if isinstance(data, dict) else {}
+            if isinstance(trades, dict):
+                for sym, trade in trades.items():
+                    item = parse_swing_latest_trade(sym, trade)
+                    if item:
+                        out[safe_str(sym, "").upper()] = item
+        elif err:
+            print(f"  Swing latest-trade overlay skipped: {err}")
+
+    missing = [s for s in clean_symbols if s not in out]
+
+    # 3) Latest quote fallback: midpoint is better than stale swing scan price.
+    if missing:
+        data, err = alpaca_market_get_json(
+            "/stocks/quotes/latest",
+            {"symbols": ",".join(missing[:50]), "feed": feed},
+            timeout=timeout,
+        )
+        if data:
+            quotes = data.get("quotes") if isinstance(data, dict) else {}
+            if isinstance(quotes, dict):
+                for sym, quote in quotes.items():
+                    item = parse_swing_latest_quote(sym, quote)
+                    if item:
+                        out[safe_str(sym, "").upper()] = item
+        elif err:
+            print(f"  Swing latest-quote overlay skipped: {err}")
+
+    return out
+
+
+def apply_swing_live_price_overlay(rows):
+    """
+    Apply lightweight Alpaca live price overlay to visible Swing rows only.
+    Scanner score/status/trade-plan values remain unchanged.
+    """
+    rows = [dict(r) for r in (rows or [])]
+    symbols = [safe_str(r.get("symbol"), "").upper() for r in rows]
+    live = fetch_swing_latest_snapshots(symbols)
+    if not live:
+        print("  Swing live price overlay: 0 symbols updated")
+        return rows
+
+    print(f"  Swing live price overlay: {len(live)} symbols updated")
+
+    updated = []
+    for row in rows:
+        sym = safe_str(row.get("symbol"), "").upper()
+        item = dict(row)
+        overlay = live.get(sym, {})
+        for key, value in overlay.items():
+            if value in [None, ""]:
+                continue
+            item[key] = value
+        updated.append(item)
+
+    return updated
+
+
+def swing_source_setup_time_label(source_path):
+    """
+    Best-effort Swing setup generation timestamp.
+
+    Priority:
+      1. swing_scanner_summary.json explicit generated/completed timestamps.
+      2. swing_candidates_latest.csv file modification time.
+
+    This is the Swing setup output time, not the live Alpaca latest trade time.
+    """
+    summary_paths = [
+        os.path.join("swing_results", "swing_scanner_summary.json"),
+        "swing_scanner_summary.json",
+    ]
+
+    summary_keys = [
+        "setup_generated_at_et",
+        "scanner_generated_at_et",
+        "generated_at_et",
+        "completed_at_et",
+        "run_completed_at_et",
+        "created_at_et",
+        "updated_at_et",
+        "generated_at",
+        "completed_at",
+        "created_at",
+        "updated_at",
+    ]
+
+    for summary_path in summary_paths:
+        summary = load_json_object(summary_path, {})
+        if not isinstance(summary, dict) or not summary:
+            continue
+        for key in summary_keys:
+            value = safe_str(summary.get(key), "")
+            if value:
+                return full_datetime_et_label(value, fallback=value)
+
+    dt = file_mtime_et(source_path) if source_path else None
+    if dt:
+        return dt.strftime("%d-%m-%Y at %H:%M ET")
+
+    return ""
+
+
+def swing_setup_generated_display(row):
+    """
+    Display label for the setup timestamp shown inside the Swing Setup panel.
+
+    Keep this separate from current/live price time. Live price can change every
+    dashboard refresh, while setup_generated_at_et should identify when the
+    watch/ready setup was produced by the swing scanner.
+    """
+    value = swing_first_value(
+        row,
+        [
+            "setup_generated_at_et",
+            "setup_generated_at",
+            "setup_time_et",
+            "setup_time",
+            "discovered_at_et",
+            "discovered_at",
+            "scanner_generated_at_et",
+            "generated_at_et",
+            "generated_at",
+            "created_at_et",
+            "created_at",
+        ],
+        "",
+    )
+
+    if not safe_str(value, ""):
+        return ""
+
+    label = full_datetime_et_label(value, fallback=safe_str(value))
+    return f"Setup generated: {label}"
+
+
+def swing_entry_status_display(row, current_price_val):
+    """
+    Swing setup-box execution status.
+
+    Keep this entry-based and separate from:
+      - top-right live price / 5-Day Move display
+      - scanner setup_generated_at_et timestamp
+      - setup_price first-seen tracking
+
+    If current price is below the planned entry trigger, entry has not touched.
+    If current price is at/above entry trigger, show move from planned entry.
+    """
+    entry_val = safe_float(row.get("entry_trigger") or row.get("entry"), None)
+    current_val = safe_float(current_price_val, None)
+
+    if entry_val is None or current_val is None or entry_val <= 0 or current_val <= 0:
+        return "", ""
+
+    status = safe_str(row.get("swing_status"), "").upper()
+
+    if current_val < entry_val:
+        # Distance still needed to reach trigger. Use current price denominator
+        # so the text reads naturally: "2.2% below trigger".
+        below_pct = ((entry_val - current_val) / current_val) * 100.0
+        if status in {"SWING_ACTIVE", "SWING_READY"}:
+            move_pct = ((current_val - entry_val) / entry_val) * 100.0
+            return f"Entry touched, now {move_pct:.2f}% below entry", "entry-status-negative"
+        return f"Entry not touched · {below_pct:.2f}% below trigger", "entry-status-waiting"
+
+    move_pct = ((current_val - entry_val) / entry_val) * 100.0
+    if move_pct >= 5.0:
+        return f"Move since entry: {move_pct:+.2f}% · Extended", "entry-status-extended"
+    if move_pct >= 3.0:
+        return f"Move since entry: {move_pct:+.2f}% · Caution", "entry-status-caution"
+    return f"Move since entry: {move_pct:+.2f}%", "entry-status-positive"
 
 def load_swing_candidates(limit=12):
-    """Load latest Swing Scanner output.
-
-    This is research / visualization only until swing forward backtesting and
-    swing outcomes are finalized. The scanner is universal and writes under
-    swing_results/.
-    """
+    """Load latest Swing Scanner output and enrich it with live universe + day context metadata."""
     paths = [
         os.path.join("swing_results", "swing_candidates_latest.csv"),
         "swing_candidates_latest.csv",
     ]
 
     rows = []
+    source_path = ""
     for path in paths:
         if os.path.exists(path):
             rows = load_csv_records(path)
+            source_path = path
             break
 
     if not rows:
         return []
+
+    setup_source_time = swing_source_setup_time_label(source_path)
+
+    universe_map = load_swing_universe_map()
+    day_context = load_swing_day_context_map()
+
+    enriched = []
+    for row in rows:
+        sym = safe_str(row.get("symbol"), "").upper()
+        meta = universe_map.get(sym, {})
+        context = day_context.get(sym, {})
+
+        merged = dict(meta)
+        # Context fills visual labels only; swing scanner values remain authoritative.
+        for key, value in context.items():
+            if safe_str(value, "") and not safe_str(merged.get(key), ""):
+                merged[key] = value
+        merged.update(row)
+
+        if meta:
+            merged.setdefault("company_name", meta.get("name", ""))
+            merged.setdefault("exchange", meta.get("exchange", ""))
+        if setup_source_time and not safe_str(merged.get("setup_generated_at_et"), ""):
+            merged["setup_generated_at_et"] = setup_source_time
+        enriched.append(merged)
 
     status_rank = {
         "SWING_ACTIVE": 0,
@@ -4666,9 +5120,12 @@ def load_swing_candidates(limit=12):
             safe_str(row.get("symbol")),
         )
 
-    rows = sorted(rows, key=key)
+    rows = sorted(enriched, key=key)
     if limit:
         rows = rows[:limit]
+
+    # Swing-only live price overlay. Does not alter day-trade code or scanner ranking.
+    rows = apply_swing_live_price_overlay(rows)
     return rows
 
 
@@ -4686,6 +5143,17 @@ def swing_setup_label(value):
     return text.replace("_", " ").title()
 
 
+def swing_setup_short(value):
+    text = swing_setup_label(value)
+    replacements = {
+        "Daily Breakout Continuation": "Breakout",
+        "Swing Pullback Support Hold": "Pullback",
+        "Gap Hold Swing": "Gap Hold",
+        "Day To Swing Promotion": "Day-to-Swing",
+    }
+    return replacements.get(text, text)
+
+
 def format_percent_dash(value):
     v = safe_float(value, None)
     if v is None:
@@ -4693,71 +5161,691 @@ def format_percent_dash(value):
     return f"{v:.1f}%"
 
 
+def format_signed_percent_dash(value):
+    v = safe_float(value, None)
+    if v is None:
+        return "—"
+    return f"{v:+.1f}%"
+
+
+def compact_chip_value(value, fallback="—"):
+    text = safe_str(value, fallback).strip()
+    if not text:
+        return fallback
+    text = text.replace("_", " ").title()
+    if len(text) > 42:
+        text = text[:39].rstrip() + "..."
+    return text
+
+
+def is_real_swing_headline(row):
+    headline = safe_str(row.get("headline") or row.get("news_summary"), "")
+    if not headline:
+        return False
+    bad = headline.lower()
+    if "proxy" in bad or "manual check" in bad or "unknown" in bad or "unavailable" in bad:
+        return False
+    return True
+
+
+def swing_clean_chip_label(value, fallback="Unknown"):
+    text = compact_chip_value(value, fallback)
+    low = text.lower()
+    if "proxy" in low or "manual check" in low or "unavailable" in low:
+        return fallback
+    return text
+
+
+def swing_bool(value):
+    text = safe_str(value, "").strip().lower()
+    return text in {"1", "true", "yes", "y", "above", "holding", "confirmed"}
+
+
+def swing_first_value(row, keys, default=""):
+    for key in keys:
+        val = row.get(key)
+        if safe_str(val, ""):
+            return val
+    return default
+
+
+SWING_EXCHANGE_VALUES = {
+    "NYSE", "NASDAQ", "AMEX", "ARCA", "BATS", "IEX", "OTC", "OTCQB", "OTCQX",
+}
+
+SWING_SYMBOL_SECTOR_OVERRIDES = {
+    # Current/recurring swing candidates and high-confidence broad mappings.
+    "AA": ("Materials", "XLB"),
+    "AAL": ("Industrials", "XLI"),
+    "ACN": ("Technology", "XLK"),
+    "ADBE": ("Technology", "XLK"),
+    "AFRM": ("Financials", "XLF"),
+    "AI": ("Technology", "XLK"),
+    "ALB": ("Materials", "XLB"),
+    "ALGN": ("Healthcare", "XLV"),
+    "AMAT": ("Semiconductors", "SMH"),
+    "AMD": ("Semiconductors", "SMH"),
+    "AMZN": ("Consumer Discretionary", "XLY"),
+    "APA": ("Energy", "XLE"),
+    "APP": ("Technology", "XLK"),
+    "ARR": ("Real Estate", "XLRE"),
+    "ATEN": ("Technology", "XLK"),
+    "BABA": ("Consumer Discretionary", "XLY"),
+    "BAC": ("Financials", "XLF"),
+    "BMO": ("Financials", "XLF"),
+    "BNS": ("Financials", "XLF"),
+    "CAVA": ("Consumer Discretionary", "XLY"),
+    "CCJ": ("Energy", "XLE"),
+    "CELH": ("Consumer Staples", "XLP"),
+    "COIN": ("Financials", "XLF"),
+    "CROX": ("Consumer Discretionary", "XLY"),
+    "CRWD": ("Technology", "XLK"),
+    "CVS": ("Healthcare", "XLV"),
+    "CVX": ("Energy", "XLE"),
+    "DAL": ("Industrials", "XLI"),
+    "DE": ("Industrials", "XLI"),
+    "DVN": ("Energy", "XLE"),
+    "ENLT": ("Solar", "TAN"),
+    "ETSY": ("Consumer Discretionary", "XLY"),
+    "FANG": ("Energy", "XLE"),
+    "GILD": ("Healthcare", "XLV"),
+    "GLW": ("Technology", "XLK"),
+    "HAL": ("Energy", "XLE"),
+    "HESM": ("Energy", "XLE"),
+    "HOOD": ("Financials", "XLF"),
+    "INTC": ("Semiconductors", "SMH"),
+    "JBLU": ("Industrials", "XLI"),
+    "KMI": ("Energy", "XLE"),
+    "LOGI": ("Technology", "XLK"),
+    "LUV": ("Industrials", "XLI"),
+    "MARA": ("Financials", "XLF"),
+    "MBLY": ("Technology", "XLK"),
+    "META": ("Communication Services", "XLC"),
+    "MNDY": ("Technology", "XLK"),
+    "MP": ("Materials", "XLB"),
+    "MPLX": ("Energy", "XLE"),
+    "MRNA": ("Healthcare", "XLV"),
+    "MU": ("Semiconductors", "SMH"),
+    "NEM": ("Materials", "XLB"),
+    "NKE": ("Consumer Discretionary", "XLY"),
+    "NVDA": ("Semiconductors", "SMH"),
+    "OXY": ("Energy", "XLE"),
+    "PAAS": ("Materials", "XLB"),
+    "PBR": ("Energy", "XLE"),
+    "PFE": ("Healthcare", "XLV"),
+    "PLTR": ("Technology", "XLK"),
+    "QCOM": ("Semiconductors", "SMH"),
+    "RIG": ("Energy", "XLE"),
+    "RIVN": ("Consumer Discretionary", "XLY"),
+    "SHOP": ("Technology", "XLK"),
+    "SLB": ("Energy", "XLE"),
+    "SMCI": ("Technology", "XLK"),
+    "SNAP": ("Communication Services", "XLC"),
+    "STLA": ("Consumer Discretionary", "XLY"),
+    "TGT": ("Consumer Staples", "XLP"),
+    "TFII": ("Industrials", "XLI"),
+    "TIGO": ("Communication Services", "XLC"),
+    "TJX": ("Consumer Discretionary", "XLY"),
+    "TKR": ("Industrials", "XLI"),
+    "TTAN": ("Technology", "XLK"),
+    "UAL": ("Industrials", "XLI"),
+    "UPS": ("Industrials", "XLI"),
+    "USB": ("Financials", "XLF"),
+    "VALE": ("Materials", "XLB"),
+    "VFC": ("Consumer Discretionary", "XLY"),
+    "VST": ("Utilities", "XLU"),
+    "WDAY": ("Technology", "XLK"),
+    "XENE": ("Healthcare", "XLV"),
+}
+
+SWING_ETF_SECTOR_LABELS = {
+    "XLK": "Technology",
+    "SMH": "Semiconductors",
+    "IGV": "Software",
+    "XLF": "Financials",
+    "XLE": "Energy",
+    "XLI": "Industrials",
+    "XLY": "Consumer Discretionary",
+    "XLP": "Consumer Staples",
+    "XLV": "Healthcare",
+    "XLC": "Communication Services",
+    "XLB": "Materials",
+    "XLRE": "Real Estate",
+    "XLU": "Utilities",
+    "TAN": "Solar",
+    "IBB": "Biotech",
+    "KRE": "Regional Banks",
+    "XRT": "Retail",
+}
+
+SWING_SECTOR_KEYWORD_RULES = [
+    ("Solar", "TAN", ("solar", "renewable", "photovoltaic", "clean energy")),
+    ("Semiconductors", "SMH", ("semiconductor", "chip", "micro devices", "microelectronics")),
+    ("Software", "IGV", ("software", "cloud", "cyber", "data", "analytics", "platform", "saas")),
+    ("Technology", "XLK", ("technology", "networks", "systems", "computer", "electronics", "quantum", "digital")),
+    ("Financials", "XLF", ("bank", "banc", "financial", "capital", "insurance", "asset management", "broker", "exchange")),
+    ("Energy", "XLE", ("oil", "gas", "energy", "petroleum", "drilling", "pipeline", "midstream", "lng", "resources")),
+    ("Healthcare", "XLV", ("health", "medical", "pharma", "biotech", "therapeutics", "laboratories", "diagnostics", "life sciences")),
+    ("Industrials", "XLI", ("industrial", "aerospace", "airlines", "trucking", "logistics", "freight", "machinery", "manufacturing", "transport", "rail")),
+    ("Consumer Discretionary", "XLY", ("retail", "apparel", "restaurant", "travel", "hotel", "resort", "auto", "automotive", "leisure", "ecommerce")),
+    ("Consumer Staples", "XLP", ("food", "beverage", "grocery", "consumer products", "household", "tobacco")),
+    ("Communication Services", "XLC", ("media", "entertainment", "telecom", "communications", "wireless", "broadcast", "advertising")),
+    ("Materials", "XLB", ("materials", "chemical", "chemicals", "steel", "aluminum", "gold", "silver", "mining", "copper", "lithium")),
+    ("Real Estate", "XLRE", ("reit", "real estate", "properties", "property", "realty", "mortgage")),
+    ("Utilities", "XLU", ("utility", "utilities", "electric", "water", "power", "generation")),
+]
+
+
+def swing_clean_sector_value(value):
+    text = safe_str(value, "").strip()
+    if not text:
+        return ""
+    low = text.lower()
+    up = text.upper()
+    if up in SWING_EXCHANGE_VALUES:
+        return ""
+    if low in {"unknown", "not mapped", "none", "n/a", "na", "null"}:
+        return ""
+    return text
+
+
+def swing_infer_sector(symbol, company_name):
+    sym = safe_str(symbol, "").upper()
+    if sym in SWING_SYMBOL_SECTOR_OVERRIDES:
+        sector, etf = SWING_SYMBOL_SECTOR_OVERRIDES[sym]
+        return {"sector": sector, "etf": etf, "source": "mapped"}
+
+    if sym in SWING_ETF_SECTOR_LABELS:
+        return {"sector": SWING_ETF_SECTOR_LABELS[sym], "etf": sym, "source": "mapped"}
+
+    text = f"{sym} {safe_str(company_name, '')}".lower()
+    for sector, etf, keywords in SWING_SECTOR_KEYWORD_RULES:
+        if any(term in text for term in keywords):
+            return {"sector": sector, "etf": etf, "source": "inferred"}
+
+    return {"sector": "", "etf": "", "source": ""}
+
+
+def swing_sector_display(row):
+    symbol = safe_str(row.get("symbol"), "").upper()
+    company = safe_str(row.get("company_name") or row.get("name"), "")
+
+    sector = swing_clean_sector_value(
+        swing_first_value(row, ["sector", "sector_name", "industry", "group"], "")
+    )
+    etf = safe_str(row.get("sector_etf"), "").upper()
+
+    inferred = swing_infer_sector(symbol, company)
+    if not sector:
+        sector = inferred.get("sector", "")
+    if not etf:
+        etf = safe_str(inferred.get("etf"), "").upper()
+
+    if not sector and etf:
+        sector = etf_sector_label(etf)
+    sector = swing_clean_sector_value(sector)
+
+    has_real_rotation_inputs = bool(
+        safe_str(row.get("sector_change_pct"), "")
+        or safe_str(row.get("stock_vs_sector_pct"), "")
+        or safe_str(row.get("sector_status"), "")
+        or safe_str(row.get("rotation"), "")
+    )
+
+    if has_real_rotation_inputs:
+        rotation_ctx = sector_rotation_context(row)
+        rotation_label = rotation_ctx.get("label", "Neutral")
+        rotation_class = rotation_ctx.get("class", "rotation-neutral")
+        sector_change = format_signed_percent_dash(row.get("sector_change_pct"))
+        vs_sector = format_signed_percent_dash(row.get("stock_vs_sector_pct"))
+        context_label = "Sector Rotation"
+    else:
+        sector_context = safe_str(row.get("sector_context"), "")
+        sector_score = safe_float(row.get("sector_market_score") or row.get("sector_score"), None)
+        low = sector_context.lower()
+        if "strong" in low or "support" in low or (sector_score is not None and sector_score >= 7.0):
+            rotation_label = "Supportive"
+            rotation_class = "rotation-supportive"
+        elif "weak" in low or (sector_score is not None and sector_score <= 3.0):
+            rotation_label = "Weak"
+            rotation_class = "rotation-weak"
+        else:
+            rotation_label = "Neutral"
+            rotation_class = "rotation-neutral"
+        sector_change = "—"
+        vs_sector = f"Swing Score {sector_score:.1f}/10" if sector_score is not None else "—"
+        context_label = "Market Context"
+
+    return {
+        "sector": sector,
+        "etf": etf or "—",
+        "sector_change": sector_change,
+        "vs_sector": vs_sector,
+        "rotation_label": rotation_label,
+        "rotation_class": rotation_class,
+        "has_real_rotation_inputs": has_real_rotation_inputs,
+        "context_label": context_label,
+        "sector_source": inferred.get("source", "") if sector else "",
+    }
+
+
+def swing_metric_class_positive(value, neutral_zero=True):
+    v = safe_float(value, None)
+    if v is None:
+        return ""
+    if v > 0:
+        return "positive"
+    if v < 0:
+        return "negative"
+    return "" if neutral_zero else "negative"
+
+
+def swing_liquidity_quality(avg_dollar):
+    """Return liquidity quality label and a liquidity-only CSS class.
+
+    Swing liquidity uses average dollar volume, not share volume:
+      < $5M        Thin
+      $5M-$15M     Acceptable
+      $15M-$50M    Good
+      $50M-$150M   Strong
+      > $150M      Excellent
+
+    The returned CSS classes intentionally do not reuse status-chip classes,
+    so the liquidity label has color only and no chip background/shadow.
+    """
+    v = safe_float(avg_dollar, 0)
+    if v >= 150_000_000:
+        return "Excellent", "liq-excellent"
+    if v >= 50_000_000:
+        return "Strong", "liq-strong"
+    if v >= 15_000_000:
+        return "Good", "liq-good"
+    if v >= 5_000_000:
+        return "Acceptable", "liq-acceptable"
+    return "Thin", "liq-thin"
+
+
+def swing_volume_quality(row):
+    """Return volume/accumulation quality without vague labels."""
+    score = safe_float(
+        row.get("volume_accumulation_score") or row.get("volume_score"),
+        None,
+    )
+    pattern = safe_str(row.get("volume_pattern"), "").upper()
+
+    if score is not None:
+        if score >= 8:
+            return "Strong Accumulation", "status-positive"
+        if score >= 6:
+            return "Healthy Accumulation", "status-positive"
+        if score >= 4:
+            return "Neutral Volume", "status-neutral"
+        return "Weak Volume", "status-risk"
+
+    if "ACCUMULATION" in pattern:
+        return "Healthy Accumulation", "status-positive"
+    if "WEAK" in pattern or "DISTRIBUTION" in pattern:
+        return "Weak Volume", "status-risk"
+    return "Neutral Volume", "status-neutral"
+
+
+def swing_setup_quality_label(score, rr):
+    score_v = safe_float(score, 0)
+    rr_v = safe_float(rr, 0)
+    if score_v >= 85 and rr_v >= 1.8:
+        return "Setup Quality: Excellent", "status-positive"
+    if score_v >= 80 and rr_v >= 1.5:
+        return "Setup Quality: Strong", "status-positive"
+    if score_v >= 75:
+        return "Setup Quality: Good", "status-neutral"
+    return "Setup Quality: Review", "status-risk"
+
+
+def swing_entry_trigger_label(status):
+    text = safe_str(status, "").upper()
+    if text in {"SWING_ACTIVE", "SWING_READY"}:
+        return "Entry Trigger: Active", "status-positive", (
+            "Regular-market swing setup. Confirm spread, support, volume, and risk before any manual decision."
+        )
+    if text in {"INVALID", "AVOID", "NO_TRADE"}:
+        return "Entry Trigger: No Entry", "status-risk", (
+            "No entry. Setup is broken or risk is too high."
+        )
+    return "Entry Trigger: Waiting", "status-neutral", (
+        "Regular-market swing watch. Confirm spread, support, volume, and risk before any manual decision."
+    )
+
+
+def swing_earnings_display(row):
+    raw = safe_str(
+        swing_first_value(row, ["earnings_risk", "earnings_status", "earnings_label"], ""),
+        "",
+    )
+    low = raw.lower()
+    days = safe_float(
+        swing_first_value(row, ["days_to_earnings", "earnings_days", "days_until_earnings"], None),
+        None,
+    )
+    earnings_date = safe_str(
+        swing_first_value(row, ["earnings_date", "next_earnings_date"], ""),
+        "",
+    )
+
+    if days is not None:
+        if days <= 5:
+            return f"Earnings Risk {int(days)}d", "status-risk"
+        if days <= 14:
+            return f"Earnings Watch {int(days)}d", "status-neutral"
+        return "No Near-Term Earnings", "status-positive"
+
+    if any(x in low for x in ["risk", "soon", "within", "upcoming", "before close", "after close"]):
+        return compact_chip_value(raw, "Earnings Risk"), "status-risk"
+    if any(x in low for x in ["clear", "none", "no near", "safe"]):
+        return "No Near-Term Earnings", "status-positive"
+    if earnings_date:
+        return f"Earnings {earnings_date}", "status-neutral"
+    return "No Near-Term Date Found", "status-neutral"
+
+
+def swing_news_display(row):
+    raw = safe_str(
+        swing_first_value(row, ["news_risk", "news_label", "news_status", "risk"], ""),
+        "",
+    )
+    low = raw.lower()
+    headline = safe_str(row.get("headline") or row.get("news_summary") or row.get("summary"), "")
+    data_status = safe_str(row.get("data_status"), "").lower()
+
+    if is_real_swing_headline(row) or (headline and data_status == "real_headline"):
+        if any(x in low for x in ["severe", "negative", "risk", "bearish", "downgrade", "lawsuit", "probe"]):
+            return "Risk Headline Found", "status-risk"
+        if any(x in low for x in ["positive", "bullish", "upgrade", "catalyst", "beat"]):
+            return "Positive Headline Found", "status-positive"
+        return "Recent Headline Found", "status-neutral"
+
+    # No real headline on file. Do not display unexplained "Positive Catalyst".
+    if any(x in low for x in ["negative", "risk", "bearish", "downgrade", "lawsuit", "probe"]):
+        return "News Risk Flagged", "status-risk"
+    return "No High-Risk Headline Found", "status-positive"
+
+
+def swing_news_explanation(row, news_display):
+    """Return a headline only when real headline text exists.
+
+    Avoid generic risk/catalyst warnings because they duplicate or conflict with
+    the compact News row in the Swing Risk Check box.
+    """
+    headline = safe_str(row.get("headline") or row.get("news_summary") or row.get("summary"), "")
+    source = safe_str(row.get("source") or row.get("news_source"), "")
+    if is_real_swing_headline(row) and headline:
+        text = headline
+        if source:
+            text = f"{source}: {text}"
+        return text
+    return ""
+
+
+def swing_smart_money_display(row):
+    raw = safe_str(
+        swing_first_value(row, ["smart_money_bias", "smart_money_label", "smart_money_status"], ""),
+        "",
+    )
+    low = raw.lower()
+    score = safe_float(row.get("smart_money_score") or row.get("smart_money_confirmation_score"), None)
+
+    if any(x in low for x in ["confirmed", "institutional", "strong", "bullish"]) and "proxy" not in low:
+        return compact_chip_value(raw, "Confirmed"), "status-positive"
+    if any(x in low for x in ["weak", "bearish", "distribution", "sell"]):
+        return compact_chip_value(raw, "Weak"), "status-risk"
+    if score is not None and score >= 14:
+        return "Confirmation Strong", "status-positive"
+    if score is not None and score >= 8:
+        return "Confirmation Mixed", "status-neutral"
+
+    # Off-market/manual fallback. Do not display "Unavailable" or fake "Proxy Bullish".
+    return "RTH Confirmation Pending", "status-neutral"
+
+
 def build_swing_candidate_card(row):
-    symbol = esc(safe_str(row.get("symbol"), "—").upper())
-    setup = esc(swing_setup_label(row.get("setup_type")))
+    symbol_raw = safe_str(row.get("symbol"), "—").upper()
+    symbol = esc(symbol_raw)
+    card_id = html_id_for_symbol(f"SWING-{symbol_raw}")
+
+    setup_raw = safe_str(row.get("setup_type"), "SWING_SETUP").upper()
+    setup = esc(swing_setup_label(setup_raw))
+    setup_short = esc(swing_setup_short(setup_raw))
     status = safe_str(row.get("swing_status"), "SWING_WATCH").upper()
     status_label = esc(status.replace("_", " "))
     status_cls = swing_status_class(status)
+
     score = safe_float(row.get("score"), 0)
     rr = safe_float(row.get("reward_risk"), 0)
-    entry = format_price_dash(row.get("entry_trigger"))
+    confidence = safe_float(row.get("confidence"), score)
+
+    entry = format_price_dash(row.get("entry_trigger") or row.get("entry"))
     stop = format_price_dash(row.get("stop_loss"))
     t1 = format_price_dash(row.get("target_1"))
     t2 = format_price_dash(row.get("target_2"))
-    close_price = format_price_dash(row.get("close_price") or row.get("price"))
-    latest_date = esc(safe_str(row.get("latest_date_et"), "—"))
-    close_time = esc(safe_str(row.get("close_time_et"), "—"))
+
+    current_price_val = safe_float(
+        swing_first_value(row, ["live_current_price", "current_price", "last_price", "price", "close_price"], 0),
+        0,
+    )
+    current_price = format_price_dash(current_price_val)
     hold_days = esc(safe_str(row.get("expected_hold_days"), "1–3"))
     atr = format_percent_dash(row.get("atr_pct"))
-    atr_tier = esc(safe_str(row.get("atr_tier"), "—"))
-    earnings = esc(safe_str(row.get("earnings_risk"), "UNKNOWN"))
-    gap_risk = esc(safe_str(row.get("gap_risk"), "—"))
-    reason = esc(safe_str(row.get("reason"), "Swing scanner candidate."))
-    invalid_if = esc(safe_str(row.get("invalid_if"), "Invalid if swing support breaks."))
-    warnings = safe_str(row.get("warnings"), "")
-    warning_html = ""
-    if warnings:
-        warning_html = f'<div class="swing-warning">{esc(warnings)}</div>'
+
+    exchange = safe_str(row.get("exchange"), "").upper()
+    exchange_chip = exchange if exchange else "Unknown"
+
+    company = safe_str(row.get("company_name") or row.get("name"), symbol_raw)
+    latest_time = (
+        compact_time_et(row.get("price_updated_at"))
+        or compact_time_et(row.get("close_time_et"))
+        or safe_str(row.get("latest_date_et"), "")
+    )
+    live_overlay = truthy(row.get("swing_live_price_overlay"))
+    price_source_label = safe_str(
+        row.get("price_source"),
+        "Alpaca SIP latest trade" if live_overlay else "Alpaca SIP swing MTF",
+    )
+    price_meta = f"{price_source_label} · {latest_time}" if latest_time else price_source_label
+
+    ret5 = safe_float(row.get("ret_5d_pct"), None)
+    change_value = safe_float(
+        swing_first_value(row, ["day_change_pct", "change_pct", "regular_change_pct"], None),
+        None,
+    )
+    if ret5 is not None:
+        move_line = f"5-Day Move {ret5:+.2f}%"
+        move_class = "positive" if ret5 >= 0 else "negative"
+    elif change_value is not None:
+        move_line = f"{change_value:+.2f}%"
+        move_class = "positive" if change_value >= 0 else "negative"
+    else:
+        move_line = f"Score {score:.0f}"
+        move_class = "positive" if score >= 80 else ""
+
+    avg_dollar = safe_float(row.get("avg_dollar_volume_20d"), 0)
+    avg_volume = safe_float(row.get("avg_volume_20d"), 0)
+    avg_dollar_text = format_money_raw(avg_dollar)
+    avg_volume_text = format_compact_count(avg_volume)
+    liquidity_label, liquidity_cls = swing_liquidity_quality(avg_dollar)
+    volume_quality, volume_quality_cls = swing_volume_quality(row)
+    setup_quality, setup_quality_cls = swing_setup_quality_label(score, rr)
+    entry_trigger_label, entry_trigger_cls, interpretation_text = swing_entry_trigger_label(status)
+
+    sector_info = swing_sector_display(row)
+    sector = sector_info["sector"]
+    sector_etf = sector_info["etf"]
+    sector_change = sector_info["sector_change"]
+    vs_sector = sector_info["vs_sector"]
+    rotation_label = sector_info["rotation_label"]
+    rotation_class = sector_info["rotation_class"]
+    has_real_rotation_inputs = bool(sector_info.get("has_real_rotation_inputs"))
+    context_label = sector_info.get("context_label", "Market Context")
+
+    sector_chip = swing_clean_sector_value(sector)
+    sector_chip_html = ""
+    if sector_chip and sector_chip.upper() not in SWING_EXCHANGE_VALUES and sector_chip.upper() != exchange_chip:
+        sector_chip_html = f'<span class="sector-chip">{esc(sector_chip)}</span>'
+
+    earnings_display, earnings_cls = swing_earnings_display(row)
+    news_display, news_cls = swing_news_display(row)
+    news_explanation = swing_news_explanation(row, news_display)
+    smart_display, smart_cls = swing_smart_money_display(row)
+    macd_display = swing_clean_chip_label(row.get("macd_state"), "MACD Review")
+
+    trend_bits = []
+    if swing_bool(row.get("above_sma50")):
+        trend_bits.append("Above SMA50")
+    if swing_bool(row.get("above_sma200")):
+        trend_bits.append("Above SMA200")
+    if swing_bool(row.get("above_ema20")) or swing_bool(row.get("above_ema21")):
+        trend_bits.append("EMA20/21 Hold")
+    if not trend_bits:
+        trend_bits.append("Trend Check")
+
+    rr_chip = "Clean R/R" if rr >= 1.5 else "R/R Review"
+    atr_tier = compact_chip_value(row.get("atr_tier"), "ATR Normal")
+    volume_pattern = compact_chip_value(row.get("volume_pattern"), "Volume Watch")
+    overnight_risk = compact_chip_value(row.get("overnight_gap_risk"), "Overnight Risk Normal")
+
+    headline_html = ""
+    if news_explanation:
+        headline_html = f'<div class="catalyst-headline">{esc(news_explanation)}</div>'
+
+    setup_time_display = swing_setup_generated_display(row)
+    setup_time_html = (
+        f'<div class="swing-setup-time">{esc(setup_time_display)}</div>'
+        if setup_time_display else ""
+    )
+
+    entry_status_text, entry_status_cls = swing_entry_status_display(row, current_price_val)
+    entry_status_html = (
+        f'<div class="swing-entry-status {esc(entry_status_cls)}">{esc(entry_status_text)}</div>'
+        if entry_status_text else ""
+    )
+
+    trend_tags = "".join(status_chip(bit, "status-tech") for bit in trend_bits[:3])
+
+    macd_cls = "status-positive" if "bull" in macd_display.lower() else "status-neutral"
+    rr_cls = "status-positive" if rr >= 1.5 else "status-risk"
+    sector_cls = "status-positive" if rotation_label in {"Strong", "Supportive"} else ("status-risk" if rotation_label == "Weak" else "status-neutral")
+    volume_tag_cls = volume_quality_cls.replace("status-", "tag-") if volume_quality_cls.startswith("status-") else "tag-neutral"
+    entry_tag_cls = entry_trigger_cls.replace("status-", "tag-") if entry_trigger_cls.startswith("status-") else "tag-neutral"
+
+    if sector_chip:
+        if has_real_rotation_inputs:
+            sector_strip_html = f"""
+            <div class="sector-strip">
+                <span>Sector <strong>{esc(sector_chip)}</strong></span>
+                <span>ETF <strong>{esc(sector_etf)}</strong> <b>{esc(sector_change)}</b></span>
+                <span>Vs Sector <b>{esc(vs_sector)}</b></span>
+                <span>Rotation <b class="{esc(rotation_class)}">{esc(rotation_label)}</b></span>
+            </div>
+            """
+        else:
+            sector_strip_html = f"""
+            <div class="sector-strip">
+                <span>Sector <strong>{esc(sector_chip)}</strong></span>
+                <span>ETF <strong>{esc(sector_etf)}</strong></span>
+                <span>{esc(context_label)} <b class="{esc(rotation_class)}">{esc(rotation_label)}</b></span>
+                <span>{esc(vs_sector)}</span>
+            </div>
+            """
+    else:
+        sector_strip_html = f"""
+        <div class="sector-strip">
+            <span>Market Context <b class="{esc(rotation_class)}">{esc(rotation_label)}</b></span>
+            <span>Relative Strength <b>{esc(vs_sector)}</b></span>
+        </div>
+        """
 
     return f"""
-    <article class="swing-card">
-        <div class="swing-card-top">
-            <div>
-                <div class="swing-symbol">{symbol}</div>
-                <div class="swing-setup">{setup}</div>
+    <div class="stock-card swing-stock-card" id="{esc(card_id)}" style="--accent:#8b5cf6;">
+        <div class="card-top">
+            <div class="card-id">
+                <div class="symbol-row">
+                    <span class="symbol">{symbol}</span>
+                    <span class="sector-chip">{esc(exchange_chip)}</span>
+                    {sector_chip_html}
+                </div>
+                <div class="company-name">{esc(company)}</div>
             </div>
-            <div class="swing-score">
-                <span class="{status_cls}">{status_label}</span>
-                <strong>{score:.0f}</strong>
+            <div class="price-box">
+                <div class="price">{current_price}</div>
+                <div class="price-meta">{esc(price_meta)}</div>
+                <div class="change {move_class}">{esc(move_line)}</div>
             </div>
         </div>
 
-        <div class="swing-price-grid">
+        <div class="score-risk-row">
+            <span class="score-pill">Swing Score {score:.0f}/100</span>
+            <span class="risk-pill {status_cls}">{status_label}</span>
+            <span class="sector-status-pill">{setup_short}</span>
+        </div>
+
+        {sector_strip_html}
+
+        <div class="catalyst-strip swing-plan-strip">
+            <div class="catalyst-label">Swing Setup: {setup}</div>
+            {setup_time_html}
+            {entry_status_html}
+            {headline_html}
+        </div>
+
+        <div class="metrics-grid">
             <div><span>Entry</span><strong>{entry}</strong></div>
             <div><span>Stop</span><strong>{stop}</strong></div>
-            <div><span>T1</span><strong>{t1}</strong></div>
-            <div><span>T2</span><strong>{t2}</strong></div>
+            <div><span>Target 1</span><strong>{t1}</strong></div>
+            <div><span>Target 2</span><strong>{t2}</strong></div>
         </div>
 
-        <div class="swing-meta-grid">
+        <div class="metrics-grid swing-metrics-second">
             <div><span>R/R</span><strong>{rr:.2f}</strong></div>
             <div><span>Hold</span><strong>{hold_days}d</strong></div>
-            <div><span>Close</span><strong>{close_price}</strong></div>
             <div><span>ATR</span><strong>{atr}</strong></div>
+            <div class="liquidity-metric"><span>Liquidity</span><strong>{avg_dollar_text}</strong><em class="{liquidity_cls}">{esc(liquidity_label)}</em></div>
         </div>
 
-        <div class="swing-tags">
-            <span>ATR: {atr_tier}</span>
-            <span>Gap: {gap_risk}</span>
-            <span>Earnings: {earnings}</span>
-            <span>{latest_date} {close_time}</span>
+        <div class="status-row">
+            {trend_tags}
+            {status_chip("MACD " + macd_display, macd_cls)}
+            {status_chip(rr_chip, rr_cls)}
+            {status_chip("Sector " + rotation_label, sector_cls)}
         </div>
 
-        <p class="swing-reason">{reason}</p>
-        <p class="swing-invalid">{invalid_if}</p>
-        {warning_html}
-    </article>
+        <div class="catalyst-strip">
+            <div class="catalyst-label">Swing Risk Check</div>
+            <div class="mini-row"><span>Earnings</span><strong class="{earnings_cls}">{esc(earnings_display)}</strong></div>
+            <div class="mini-row"><span>News</span><strong class="{news_cls}">{esc(news_display)}</strong></div>
+            <div class="mini-row"><span>Smart Money</span><strong class="{smart_cls}">{esc(smart_display)}</strong></div>
+            <div class="mini-row"><span>Overnight</span><strong>{esc(overnight_risk)}</strong></div>
+        </div>
+
+        <div class="tags-row">
+            <span class="tag {volume_tag_cls}">Volume: {esc(volume_quality)}</span>
+            <span class="tag {setup_quality_cls.replace("status-", "tag-")}">{esc(setup_quality)}</span>
+            <span class="tag {entry_tag_cls}">{esc(entry_trigger_label)}</span>
+        </div>
+
+        <div class="interpretation">
+            {esc(interpretation_text)}
+        </div>
+
+        <div class="card-actions">
+            <a class="action-btn action-chart" href="https://www.tradingview.com/chart/?symbol={symbol}" target="_blank">
+                <img src="assets/tradingview.png" alt="TradingView"> Chart
+            </a>
+            <a class="action-btn action-yahoo" href="https://finance.yahoo.com/quote/{symbol}" target="_blank">
+                <img src="assets/yahoo.png" alt="Yahoo Finance"> Yahoo
+            </a>
+            <a class="action-btn action-twits" href="https://stocktwits.com/symbol/{symbol}" target="_blank">
+                <img src="assets/stocktwits.png" alt="Stocktwits"> Twits
+            </a>
+        </div>
+    </div>
     """
 
 
@@ -4788,8 +5876,8 @@ def build_swing_trade_section(rows):
         <div class="trade-block-heading">
             <div>
                 <span class="trade-kicker swing-kicker">Swing Trade</span>
-                <h2>1–3 Day Swing Desk</h2>
-                <p>Research / visualization only until swing forward backtest and swing outcomes are finalized.</p>
+                <h2>Swing Trade Desk</h2>
+                <p>Live all-universe Swing Watch / Ready shortlist.</p>
             </div>
             <div class="swing-counts">
                 <span>Active <strong>{active}</strong></span>
@@ -4799,7 +5887,7 @@ def build_swing_trade_section(rows):
         </div>
 
         <div class="swing-research-banner">
-            Research Only — not a live trade instruction. Confirm earnings, news, liquidity, spread, daily chart, and risk before any manual decision. Swing Active entries are regular-market only.
+            Live Swing Desk — regular-market entries only. No after-hours entries. Confirm volume, spread, support, and risk before any manual decision.
         </div>
 
         <div class="swing-card-grid">
@@ -4839,7 +5927,7 @@ def build_dashboard(potential, active, extended, highrisk, raw, active_watchlist
     afterhours_section = ""
     early_reclaim_section = ""
     priority_reclaim_section = ""
-    swing_rows = load_swing_candidates(limit=12)
+    swing_rows = load_swing_candidates(limit=8)
     swing_section_html = build_swing_trade_section(swing_rows)
     day_trade_bar_html = ""
 
@@ -5073,14 +6161,41 @@ def build_dashboard(potential, active, extended, highrisk, raw, active_watchlist
     "use strict";
     var REFRESH_MS = 60000;
 
+    function cleanDashboardUrl() {
+        return window.location.origin + window.location.pathname;
+    }
+
+    function cleanVisibleUrl() {
+        if (window.history && window.history.replaceState && (window.location.search || window.location.hash)) {
+            window.history.replaceState(null, document.title, cleanDashboardUrl());
+        }
+    }
+
     function cacheBustedUrl() {
-        var url = new URL(window.location.href);
+        var url = new URL(cleanDashboardUrl());
         url.searchParams.set("v", Date.now().toString());
         return url.toString();
     }
 
+    if ("scrollRestoration" in window.history) {
+        window.history.scrollRestoration = "manual";
+    }
+
+    // Keep the visible address clean even when auto-refresh uses a cache-busting query.
+    cleanVisibleUrl();
+    window.addEventListener("load", function() {
+        cleanVisibleUrl();
+    });
+    window.setTimeout(cleanVisibleUrl, 250);
+
     window.forceDashboardRefresh = function() {
-        window.location.replace(cacheBustedUrl());
+        window.location.replace(cleanDashboardUrl());
+    };
+
+    window.goDashboardTop = function() {
+        cleanVisibleUrl();
+        window.scrollTo({top: 0, left: 0, behavior: "smooth"});
+        window.setTimeout(cleanVisibleUrl, 100);
     };
 
     window.setTimeout(function() {
@@ -5455,6 +6570,12 @@ body {
     color: #e5e7eb;
 }
 
+/* Signal Desk header counts are intentionally hidden; counts live in the Day Trade Desk banner only. */
+.signal-desk-top .signal-desk-counts,
+.signal-desk-panel .signal-desk-counts {
+    display: none !important;
+}
+
 .signal-desk-empty {
     display: flex;
     flex-direction: column;
@@ -5746,6 +6867,13 @@ body {
     grid-template-columns: repeat(5, minmax(0, 1fr));
     gap: 4px;
     margin-top: 7px;
+}
+
+.signal-desk-plan.signal-desk-plan-six {
+    grid-template-columns: repeat(6, max-content);
+    justify-content: space-between;
+    column-gap: 8px;
+    row-gap: 0;
 }
 
 .signal-desk-plan span {
@@ -6284,6 +7412,47 @@ body {
     font-size: 12px;
     font-weight: 650;
     line-height: 1.35;
+}
+
+
+.liquidity-metric strong {
+    display: block;
+}
+
+.liquidity-metric em {
+    display: block;
+    width: fit-content;
+    margin-top: 2px;
+    padding: 0 !important;
+    background: transparent !important;
+    border: 0 !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+    text-shadow: none !important;
+    font-size: 11px;
+    line-height: 1.2;
+    font-style: normal;
+    font-weight: 800;
+}
+
+.liq-thin {
+    color: #f87171 !important;
+}
+
+.liq-acceptable {
+    color: #fbbf24 !important;
+}
+
+.liq-good {
+    color: #60a5fa !important;
+}
+
+.liq-strong {
+    color: #34d399 !important;
+}
+
+.liq-excellent {
+    color: #2dd4bf !important;
 }
 
 
@@ -7392,6 +8561,12 @@ td small {
     font-weight: 650;
 }
 
+.day-counts span {
+    border-color: rgba(56, 189, 248, 0.24);
+    color: #bae6fd;
+    background: rgba(8, 47, 73, 0.24);
+}
+
 .swing-research-banner {
     margin-bottom: 14px;
     padding: 11px 13px;
@@ -7405,8 +8580,61 @@ td small {
 
 .swing-card-grid {
     display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 14px;
+    grid-template-columns: repeat(auto-fill, minmax(330px, 1fr));
+    gap: 16px;
+}
+
+.swing-stock-card {
+    border-top-color: #8b5cf6;
+}
+
+.swing-stock-card .sector-status-pill {
+    color: #c4b5fd;
+    border-color: rgba(167, 139, 250, 0.22);
+    background: rgba(88, 28, 135, 0.18);
+}
+
+.swing-plan-strip {
+    border-color: rgba(167, 139, 250, 0.18);
+    background: rgba(88, 28, 135, 0.12);
+}
+
+.swing-plan-strip .swing-setup-time {
+    margin-top: 7px;
+    color: #cbd5e1;
+    font-size: 13px;
+    line-height: 1.35;
+}
+
+.swing-plan-strip .swing-entry-status {
+    margin-top: 6px;
+    font-size: 13px;
+    font-weight: 800;
+    line-height: 1.35;
+}
+
+.swing-plan-strip .entry-status-positive {
+    color: #34d399;
+}
+
+.swing-plan-strip .entry-status-waiting {
+    color: #cbd5e1;
+}
+
+.swing-plan-strip .entry-status-caution {
+    color: #fbbf24;
+}
+
+.swing-plan-strip .entry-status-extended {
+    color: #f59e0b;
+}
+
+.swing-plan-strip .entry-status-negative {
+    color: #f87171;
+}
+
+.swing-metrics-second {
+    margin-top: 8px;
 }
 
 .swing-card,
@@ -7521,21 +8749,13 @@ td small {
     font-size: 10px;
 }
 
-.swing-reason,
-.swing-invalid,
-.swing-warning {
+.swing-headline {
     color: #cbd5e1;
     font-size: 12px;
     line-height: 1.45;
     margin-top: 8px;
-}
-
-.swing-invalid {
-    color: #fca5a5;
-}
-
-.swing-warning {
-    color: #fde68a;
+    border-top: 1px solid rgba(148, 163, 184, 0.10);
+    padding-top: 8px;
 }
 
 .swing-empty {
@@ -7567,12 +8787,14 @@ td small {
         grid-template-columns: repeat(3, minmax(92px, 1fr));
     }
 
-    .swing-card-grid {
-        grid-template-columns: 1fr;
-    }
-
     .trade-block-heading {
         flex-direction: column;
+    }
+}
+
+@media (max-width: 720px) {
+    .swing-card-grid {
+        grid-template-columns: 1fr;
     }
 }
 
@@ -7588,7 +8810,7 @@ td small {
 </head>
 <body>
 
-<a class="floating-top" href="#top" onclick="window.scrollTo({top:0,left:0,behavior:'smooth'}); return false;" title="Back to top">Top ↑</a>
+<a class="floating-top" href="/" onclick="window.goDashboardTop(); return false;" title="Back to top">Top ↑</a>
 
 <header class="header" id="top">
     <div class="header-inner">
