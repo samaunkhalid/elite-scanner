@@ -78,7 +78,7 @@ SIGNAL_STATE_FILE = "signal_state.json"
 SUPPRESSED_SIGNALS_FILE = "suppressed_signals.csv"
 SIGNAL_OUTCOMES_FILE = "signal_outcomes.csv"
 SIGNAL_OUTCOMES_SUMMARY_FILE = "signal_outcomes_summary.json"
-SIGNAL_ENGINE_STRATEGY_VERSION = "v2.8.5_daytrade_scalp_t1_075r_real_t2"
+SIGNAL_ENGINE_STRATEGY_VERSION = "v2.9.0_daytrade_aplus_trigger_060r"
 
 # State retention.
 ACTIVE_STALE_MINUTES = 10
@@ -172,12 +172,34 @@ MIN_RR_READY = 1.00   # READY = prepare / near-trigger; does not require full Ac
 MIN_RR_ACTIVE = 1.50  # ACTIVE = execution-quality only.
 MIN_RR = MIN_RR_ACTIVE  # Backward-compatible alias for Active checks.
 
-# v2.8.5 day-trade target display:
-# Backtests on 300 high-volatility tickers and S&P 500 samples showed that
-# intraday ACTIVE signals often move +0.50R to +1.00R, while real-resistance
-# T1 was too far as the first target. Therefore day-trade T1 is a practical
-# scalp/partial target, while T2 remains the real resistance/open-air target.
-DAY_TRADE_T1_SCALP_RR = float(os.getenv("DAY_TRADE_T1_SCALP_RR", "0.75"))
+# v2.9.0 day-trade target display:
+# Monthly outcome audit + filter trials showed the highest balance of win rate
+# and portfolio return when the first day-trade target is a practical 0.60R
+# scalp target. T2 remains the real resistance/open-air target, and reward_risk
+# remains based on that real T2 plan.
+DAY_TRADE_T1_SCALP_RR = float(os.getenv("DAY_TRADE_T1_SCALP_RR", "0.60"))
+
+# Stage 1 A+ Trigger Trading layer.
+# This layer does NOT touch Swing scanner logic. It only changes Signal Desk
+# day-trade actionability:
+# - Qualified Trigger Ready / Trigger Touched = trade-entry timing state.
+# - Active Signal = late confirmation / manage-only, not the primary entry gate.
+# - Everything else stays monitor-only.
+A_PLUS_DAYTRADE_ENABLED = os.getenv("A_PLUS_DAYTRADE_ENABLED", "1").strip().lower() not in {"0", "false", "no", "off"}
+A_PLUS_ENTRY_START_ET = os.getenv("A_PLUS_ENTRY_START_ET", "09:45")
+A_PLUS_ENTRY_END_ET = os.getenv("A_PLUS_ENTRY_END_ET", "10:15")
+A_PLUS_ACTIONABLE_SETUP_TYPES = {
+    x.strip().upper()
+    for x in os.getenv(
+        "A_PLUS_ACTIONABLE_SETUP_TYPES",
+        "VWAP_EMA_RECLAIM_RUNNER,RECLAIM_PULLBACK_HOLDING",
+    ).split(",")
+    if x.strip()
+}
+A_PLUS_MIN_SCANNER_SCORE = float(os.getenv("A_PLUS_MIN_SCANNER_SCORE", "85"))
+A_PLUS_MIN_LIVE_SIGNAL_SCORE = float(os.getenv("A_PLUS_MIN_LIVE_SIGNAL_SCORE", "85"))
+A_PLUS_MIN_CONFIDENCE = float(os.getenv("A_PLUS_MIN_CONFIDENCE", "85"))
+
 ACTIONABLE_MAIN_TARGET_SOURCES = {"REAL_RESISTANCE_FIRST", "ROUND_LIQUIDITY_LEVEL", "OPEN_AIR_MEASURED_MOVE"}
 MIN_CONF_WATCH = 55.0
 MIN_CONF_READY = 70.0
@@ -4073,6 +4095,188 @@ def parse_hhmm_config(value: str, default: dtime) -> dtime:
     return default
 
 
+def a_plus_entry_start_time() -> dtime:
+    return parse_hhmm_config(A_PLUS_ENTRY_START_ET, dtime(9, 45))
+
+
+def a_plus_entry_end_time() -> dtime:
+    return parse_hhmm_config(A_PLUS_ENTRY_END_ET, dtime(10, 15))
+
+
+def is_a_plus_entry_window(now: Optional[datetime] = None) -> bool:
+    if not A_PLUS_DAYTRADE_ENABLED:
+        return False
+    now = now or ny_now()
+    if now.weekday() >= 5:
+        return False
+    t = now.time()
+    return a_plus_entry_start_time() <= t <= a_plus_entry_end_time()
+
+
+def a_plus_filter_decision(
+    row: Dict[str, Any],
+    metrics: "IntradayMetrics",
+    setup_type: str,
+    confidence: float,
+    live_signal: float,
+    phase: str,
+    now: Optional[datetime] = None,
+) -> Tuple[bool, str]:
+    """
+    Stage 1 A+ production filter.
+
+    The monthly outcome audit showed broad Trigger Ready is too noisy, while
+    Active is too late. Therefore only this high-quality Trigger Ready /
+    Trigger Touched subset is treated as actionable.
+    """
+    setup = safe_str(setup_type, "").upper()
+    scanner_score = safe_float(row.get("score"), safe_float(row.get("scanner_score"), 0.0))
+
+    if not A_PLUS_DAYTRADE_ENABLED:
+        return False, "A+ day-trade layer disabled"
+
+    if phase != "VALID_MORNING":
+        return False, f"A+ entries allowed only in valid morning phase, current phase={phase}"
+
+    if not is_a_plus_entry_window(now):
+        return False, f"Outside A+ entry window {A_PLUS_ENTRY_START_ET}-{A_PLUS_ENTRY_END_ET} ET"
+
+    if setup not in A_PLUS_ACTIONABLE_SETUP_TYPES:
+        return False, f"Setup {setup or 'UNKNOWN'} is monitor-only under Stage 1 A+ rules"
+
+    if scanner_score < A_PLUS_MIN_SCANNER_SCORE:
+        return False, f"Scanner score {scanner_score:.1f} < A+ minimum {A_PLUS_MIN_SCANNER_SCORE:.0f}"
+
+    if live_signal < A_PLUS_MIN_LIVE_SIGNAL_SCORE:
+        return False, f"Live signal score {live_signal:.1f} < A+ minimum {A_PLUS_MIN_LIVE_SIGNAL_SCORE:.0f}"
+
+    if confidence < A_PLUS_MIN_CONFIDENCE:
+        return False, f"Confidence {confidence:.1f} < A+ minimum {A_PLUS_MIN_CONFIDENCE:.0f}"
+
+    if not getattr(metrics, "has_data", False):
+        return False, "No live intraday data for A+ validation"
+
+    if getattr(metrics, "bearish_momentum_divergence", False):
+        return False, "Bearish momentum divergence blocks A+ entry"
+
+    if getattr(metrics, "volume_fading_vs_morning", False) and not getattr(metrics, "reclaim_pullback_holding", False):
+        return False, "Volume fading blocks A+ entry unless reclaim pullback is clearly holding"
+
+    return True, (
+        "A+ Trigger trade: qualified Trigger Ready/Touched entry. "
+        f"Window {A_PLUS_ENTRY_START_ET}-{A_PLUS_ENTRY_END_ET} ET; "
+        f"setup={setup}; scanner={scanner_score:.1f}; live={live_signal:.1f}; confidence={confidence:.1f}; "
+        f"T1={DAY_TRADE_T1_SCALP_RR:.2f}R."
+    )
+
+
+def apply_a_plus_fields(
+    signal: Dict[str, Any],
+    row: Dict[str, Any],
+    metrics: "IntradayMetrics",
+    phase: str,
+    live_signal: Optional[float] = None,
+    confidence: Optional[float] = None,
+    force_actionability: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Attach Stage 1 A+ metadata to a signal. This is display/state metadata only;
+    it does not place orders.
+    """
+    if not signal:
+        return signal
+
+    out = dict(signal)
+    setup = safe_str(out.get("setup_type"), "")
+    live = safe_float(live_signal, safe_float(out.get("live_signal_score"), 0.0))
+    conf = safe_float(confidence, safe_float(out.get("confidence"), 0.0))
+    ok, reason = a_plus_filter_decision(row, metrics, setup, conf, live, phase)
+
+    status = normalize_status(out.get("signal_status"))
+    actionable_status = status in {"TRIGGER_READY", "TRIGGER_TOUCHED"}
+
+    out["a_plus_stage1_enabled"] = A_PLUS_DAYTRADE_ENABLED
+    out["a_plus_entry_window"] = f"{A_PLUS_ENTRY_START_ET}-{A_PLUS_ENTRY_END_ET} ET"
+    out["a_plus_allowed_setups"] = ",".join(sorted(A_PLUS_ACTIONABLE_SETUP_TYPES))
+    out["a_plus_min_scanner_score"] = A_PLUS_MIN_SCANNER_SCORE
+    out["a_plus_min_live_signal_score"] = A_PLUS_MIN_LIVE_SIGNAL_SCORE
+    out["a_plus_min_confidence"] = A_PLUS_MIN_CONFIDENCE
+    out["a_plus_filter_pass"] = ok
+    out["a_plus_filter_reason"] = reason
+    out["a_plus_t1_rr"] = DAY_TRADE_T1_SCALP_RR
+    out["active_entry_role"] = "MANAGE_ONLY_CONFIRMATION"
+
+    if ok and actionable_status:
+        out["a_plus_trade_signal"] = True
+        out["a_plus_entry_qualified"] = True
+        out["actionable"] = True
+        out["actionability"] = force_actionability or (
+            "A_PLUS_TRIGGER_TOUCHED" if status == "TRIGGER_TOUCHED" else "A_PLUS_TRIGGER_READY"
+        )
+        out["entry_warning"] = combine_warning(
+            out.get("entry_warning", ""),
+            "A+ Stage 1: entry is valid only on/near the planned trigger during the A+ window. Do not chase extended candles.",
+        )
+    elif status == "ACTIVE_SIGNAL":
+        # Active is retained for confirmation/management, not as the primary entry gate.
+        out["a_plus_trade_signal"] = bool(out.get("a_plus_trade_signal") or out.get("a_plus_entry_qualified"))
+        out["actionability"] = force_actionability or "ACTIVE_MANAGE_ONLY"
+        out["active_entry_role"] = "MANAGE_ONLY_NOT_PRIMARY_ENTRY"
+        out["entry_warning"] = combine_warning(
+            out.get("entry_warning", ""),
+            "Active is late confirmation/manage-only. Primary entry was the qualified A+ trigger.",
+        )
+    else:
+        out["a_plus_trade_signal"] = False
+        out["a_plus_entry_qualified"] = False
+        if status == "WATCH":
+            out["actionability"] = force_actionability or safe_str(out.get("actionability"), "WATCH") or "WATCH"
+
+    return out
+
+
+def make_a_plus_monitor_only_signal(
+    row: Dict[str, Any],
+    metrics: "IntradayMetrics",
+    plan: Dict[str, Any],
+    setup_type: str,
+    confidence: float,
+    live_signal: float,
+    reason: str,
+    phase: str,
+    regime: Dict[str, Any],
+) -> Dict[str, Any]:
+    """
+    Keep a valid but non-A+ ticker visible as WATCH/monitor only instead of
+    promoting it to Trigger Ready.
+    """
+    out = signal_base(
+        row,
+        metrics,
+        plan,
+        "WATCH",
+        setup_type,
+        confidence,
+        live_signal,
+        f"Monitor only under Stage 1 A+ rules: {reason}",
+        phase,
+        regime,
+    )
+    out["detected_at"] = iso_now_et()
+    out["a_plus_filter_pass"] = False
+    out["a_plus_filter_reason"] = reason
+    out["a_plus_trade_signal"] = False
+    out["a_plus_entry_qualified"] = False
+    out["a_plus_monitor_only"] = True
+    out["actionability"] = "A_PLUS_MONITOR_ONLY"
+    out["entry_warning"] = combine_warning(
+        out.get("entry_warning", ""),
+        "Monitor only. Does not meet Stage 1 A+ entry filter.",
+    )
+    out["not_ready_reasons"] = list(dict.fromkeys((out.get("not_ready_reasons") or []) + [reason]))
+    return out
+
+
 def morning_reclaim_start_time() -> dtime:
     return parse_hhmm_config(MORNING_RECLAIM_START_ET, dtime(9, 35))
 
@@ -4804,7 +5008,7 @@ def apply_daytrade_scalp_t1(
     """
     Convert a valid intraday plan into the v2.8.5 target display model.
 
-    - target_1 = 0.75R scalp/partial target for day trades.
+    - target_1 = configurable scalp/partial target for day trades; Stage 1 default is 0.60R.
     - target_2 = nearest real resistance / round liquidity / open-air target.
     - reward_risk remains based on target_2, so READY/ACTIVE validation still
       requires real target quality and does not weaken execution standards.
@@ -6536,6 +6740,14 @@ def signal_base(
         "risk_flags": safe_str(row.get("risk_flags"), ""),
         "company_name": safe_str(row.get("company_name"), ""),
         "not_ready_reasons": not_ready_reasons(metrics, plan, confidence) if status == "WATCH" else [],
+        "a_plus_stage1_enabled": A_PLUS_DAYTRADE_ENABLED,
+        "a_plus_entry_window": f"{A_PLUS_ENTRY_START_ET}-{A_PLUS_ENTRY_END_ET} ET",
+        "a_plus_trade_signal": False,
+        "a_plus_entry_qualified": False,
+        "a_plus_filter_pass": False,
+        "a_plus_filter_reason": "",
+        "a_plus_t1_rr": DAY_TRADE_T1_SCALP_RR,
+        "active_entry_role": "ACTIVE_IS_CONFIRMATION_ONLY",
     }
 
 
@@ -7242,6 +7454,15 @@ def trigger_ready_reassessment(
     )
     out["ready_since"] = existing.get("ready_since") or iso_now_et()
     out["detected_at"] = existing.get("detected_at") or existing.get("ready_since") or iso_now_et()
+    out = apply_a_plus_fields(
+        out,
+        row,
+        metrics,
+        phase,
+        live_signal=exact_live,
+        confidence=exact_conf,
+        force_actionability="A_PLUS_TRIGGER_READY" if A_PLUS_DAYTRADE_ENABLED else None,
+    )
     decision_log(
         normalize_symbol(row.get("symbol")),
         "TRIGGER_READY_RECONFIRMED",
@@ -7269,8 +7490,8 @@ def locked_plan_from_signal(signal: Dict[str, Any]) -> Dict[str, Any]:
     target_3 = safe_float(signal.get("target_3"), 0)
     rr = safe_float(signal.get("reward_risk"), 0)
 
-    # v2.8.5: reward_risk is the main/real target R:R, while target_1 may be
-    # the 0.75R scalp target. ACTIVE still requires real-target R:R >= MIN_RR.
+    # v2.9.0: reward_risk is the main/real target R:R, while target_1 may be
+    # the Stage 1 scalp target (default 0.60R). ACTIVE still requires real-target R:R >= MIN_RR.
     valid = entry > 0 and stop > 0 and target_1 > entry and target_2 > entry and stop < entry and rr >= MIN_RR
 
     return {
@@ -7585,9 +7806,9 @@ def make_trigger_touched(
     """
     First step after a Trigger Ready entry price is touched.
 
-    This is a protected, non-actionable confirmation state. It stays visible in
-    the Trigger Ready column but is not an Active Signal until a later refresh
-    confirms hold/volume quality.
+    This is a protected confirmation state. Under Stage 1 A+ rules, a qualified
+    Trigger Touched signal is the primary trade-entry state; Active is later
+    confirmation/manage-only.
     """
     now_text = iso_now_et()
     out = dict(existing)
@@ -7628,6 +7849,16 @@ def make_trigger_touched(
         "macd_signal": round(metrics.macd_signal, 4) if metrics.has_data else out.get("macd_signal", 0),
         "macd_histogram": round(metrics.macd_histogram, 4) if metrics.has_data else out.get("macd_histogram", 0),
     })
+
+    out = apply_a_plus_fields(
+        out,
+        row,
+        metrics,
+        phase,
+        live_signal=safe_float(out.get("live_signal_score"), 0.0),
+        confidence=safe_float(out.get("confidence"), 0.0),
+        force_actionability="A_PLUS_TRIGGER_TOUCHED" if out.get("a_plus_filter_pass") else None,
+    )
 
     decision_log(
         symbol,
@@ -7989,6 +8220,21 @@ def promote_trigger_ready_to_active(
     out["active_gate_reason"] = hard_gate_reason
     out["target_source"] = plan.get("target_source", "")
     out["trigger_source"] = metrics.price_source
+    out = apply_a_plus_fields(
+        out,
+        row,
+        metrics,
+        phase,
+        live_signal=live,
+        confidence=conf,
+        force_actionability="ACTIVE_MANAGE_ONLY",
+    )
+    out["a_plus_trade_signal"] = bool(existing.get("a_plus_trade_signal") or existing.get("a_plus_entry_qualified"))
+    out["a_plus_entry_qualified"] = bool(existing.get("a_plus_entry_qualified") or existing.get("a_plus_trade_signal"))
+    out["a_plus_filter_pass"] = bool(existing.get("a_plus_filter_pass") or out.get("a_plus_filter_pass"))
+    out["a_plus_filter_reason"] = safe_str(existing.get("a_plus_filter_reason"), out.get("a_plus_filter_reason", ""))
+    out["a_plus_t1_rr"] = safe_float(existing.get("a_plus_t1_rr"), DAY_TRADE_T1_SCALP_RR)
+    out["active_entry_role"] = "MANAGE_ONLY_NOT_PRIMARY_ENTRY"
 
     entry = safe_float(plan.get("entry_trigger"), 0)
     target_1 = safe_float(plan.get("target_1"), 0)
@@ -8073,8 +8319,14 @@ def process_existing_signal(
             "actionable": True,
             "active_family": active_strategy_family(safe_str(existing.get("setup_type"), "")),
             "active_gate_reason": active_signal_runtime_gate(existing, metrics)[1],
-            "actionability": "ACTIVE_AGED_MONITORING" if active_aged else (safe_str(existing.get("actionability"), "ACTIVE") or "ACTIVE"),
+            "actionability": "ACTIVE_AGED_MONITORING" if active_aged else "ACTIVE_MANAGE_ONLY",
             "active_aged_monitoring": active_aged,
+            "a_plus_trade_signal": bool(existing.get("a_plus_trade_signal") or existing.get("a_plus_entry_qualified")),
+            "a_plus_entry_qualified": bool(existing.get("a_plus_entry_qualified") or existing.get("a_plus_trade_signal")),
+            "a_plus_filter_pass": bool(existing.get("a_plus_filter_pass")),
+            "a_plus_filter_reason": safe_str(existing.get("a_plus_filter_reason"), ""),
+            "a_plus_t1_rr": safe_float(existing.get("a_plus_t1_rr"), DAY_TRADE_T1_SCALP_RR),
+            "active_entry_role": "MANAGE_ONLY_NOT_PRIMARY_ENTRY",
             "entry_warning": combine_warning(
                 existing.get("entry_warning", ""),
                 "Active reclaim is older than the normal stale window but structure still holds; monitor by VWAP/EMA/stop, not time alone."
@@ -8114,16 +8366,70 @@ def process_existing_signal(
         if fired_now and not is_valid_signal_phase(phase):
             return suppress_trigger_during_blackout(existing, row, metrics, phase, regime)
 
+        # Stage 1 A+ gate:
+        # Trigger Ready is the primary entry state only for the qualified A+
+        # subset. If the entry fires outside the A+ window or fails the A+ score
+        # thresholds, do not create a new actionable trade.
+        if fired_now and is_valid_signal_phase(phase):
+            locked_plan = locked_plan_from_signal(existing)
+            live_at_touch = live_signal_score(row, metrics, locked_plan, regime, phase)
+            conf_at_touch = final_confidence(
+                safe_float(row.get("score"), safe_float(existing.get("scanner_score"), 0)),
+                live_at_touch,
+            )
+            conf_at_touch = max(safe_float(existing.get("confidence"), 0), conf_at_touch)
+            a_plus_ok, a_plus_reason = a_plus_filter_decision(
+                row,
+                metrics,
+                safe_str(existing.get("setup_type"), ""),
+                conf_at_touch,
+                live_at_touch,
+                phase,
+            )
+            if not a_plus_ok:
+                return make_invalidated(
+                    existing,
+                    row,
+                    metrics,
+                    f"A+ entry blocked at trigger touch: {a_plus_reason}",
+                    "A_PLUS_FILTER_FAILED",
+                    phase,
+                )
+
+            existing = apply_a_plus_fields(
+                existing,
+                row,
+                metrics,
+                phase,
+                live_signal=live_at_touch,
+                confidence=conf_at_touch,
+                force_actionability="A_PLUS_TRIGGER_READY",
+            )
+
         # New confirmation layer:
         # Price touching the entry does NOT become ACTIVE immediately. It first
-        # becomes TRIGGER_TOUCHED, then the next refresh must confirm hold/volume.
+        # becomes TRIGGER_TOUCHED, then the next refresh can confirm/manage.
         if fired_now and is_valid_signal_phase(phase):
             return make_trigger_touched(
                 existing,
                 row,
                 metrics,
                 phase,
-                "Entry trigger touched; waiting for the next refresh to confirm hold/volume before Active Signal.",
+                "A+ entry trigger touched; Active will be confirmation/manage-only.",
+            )
+
+        if (
+            A_PLUS_DAYTRADE_ENABLED
+            and existing.get("a_plus_trade_signal")
+            and not is_a_plus_entry_window()
+        ):
+            return make_invalidated(
+                existing,
+                row,
+                metrics,
+                f"A+ entry window closed before trigger fired ({A_PLUS_ENTRY_START_ET}-{A_PLUS_ENTRY_END_ET} ET).",
+                "MISSED_WINDOW",
+                phase,
             )
 
         invalid, reason, category = ready_invalidated(existing, metrics)
@@ -8156,6 +8462,16 @@ def process_existing_signal(
         return reassessed_signal
 
     if status == "TRIGGER_TOUCHED":
+        if not existing.get("a_plus_trade_signal") and A_PLUS_DAYTRADE_ENABLED:
+            return make_invalidated(
+                existing,
+                row,
+                metrics,
+                "Trigger Touched is not A+ qualified under Stage 1; monitor-only, no trade entry.",
+                "A_PLUS_FILTER_FAILED",
+                phase,
+            )
+
         if not is_valid_signal_phase(phase):
             return suppress_trigger_during_blackout(existing, row, metrics, phase, regime)
 
@@ -8212,6 +8528,10 @@ def process_existing_signal(
                 "price_source": metrics.price_source,
                 "price_updated_at": metrics.price_updated_at,
                 "latest_bar_time": timestamp_to_et_iso(metrics.latest_bar_time),
+                "a_plus_trade_signal": True,
+                "a_plus_entry_qualified": True,
+                "a_plus_filter_pass": True,
+                "active_entry_role": "MANAGE_ONLY_CONFIRMATION_PENDING",
                 "reason": f"Trigger touched; Active confirmation still pending: {fail_reason}",
                 "entry_warning": (
                     "Trigger touched but price is already too far above entry. Wait for retest; do not chase."
@@ -8256,8 +8576,16 @@ def process_existing_signal(
             "price_source": metrics.price_source if metrics.has_data else out.get("price_source", ""),
             "price_updated_at": metrics.price_updated_at if metrics.has_data else out.get("price_updated_at", ""),
             "latest_bar_time": timestamp_to_et_iso(metrics.latest_bar_time) if metrics.has_data else out.get("latest_bar_time", ""),
+            "a_plus_trade_signal": True,
+            "a_plus_entry_qualified": True,
+            "a_plus_filter_pass": True,
+            "active_entry_role": "MANAGE_ONLY_CONFIRMATION_PENDING",
             "reason": f"Trigger touched; waiting for confirmation: {confirm_reason}",
-            "entry_warning": "Touched trigger but not confirmed Active yet. Avoid same-candle fakeout.",
+            "entry_warning": combine_warning(
+                "Touched A+ trigger; manage by plan. Active is confirmation/manage-only.",
+                "Avoid same-candle fakeout; do not chase if price is extended beyond entry.",
+            ),
+            "actionability": safe_str(out.get("actionability"), "A_PLUS_TRIGGER_TOUCHED") or "A_PLUS_TRIGGER_TOUCHED",
         })
         return out
 
@@ -8393,6 +8721,41 @@ def process_new_or_watch(
                 lunch_ready_failures.extend(event_reasons)
 
             if not lunch_ready_failures:
+                a_plus_ok, a_plus_reason = a_plus_filter_decision(
+                    row,
+                    metrics,
+                    setup_ready_type,
+                    exact_conf,
+                    exact_live,
+                    phase,
+                )
+                if not a_plus_ok:
+                    out = make_a_plus_monitor_only_signal(
+                        row,
+                        metrics,
+                        exact_plan,
+                        setup_ready_type,
+                        exact_conf,
+                        exact_live,
+                        a_plus_reason,
+                        phase,
+                        regime,
+                    )
+                    out["lunch_caution"] = True
+                    out["event_risk_warning"] = combine_warning(out.get("event_risk_warning", ""), LUNCH_CAUTION_WARNING)
+                    log_watch_evaluated(symbol, out, metrics, phase)
+                    decision_log(
+                        symbol,
+                        "A_PLUS_LUNCH_MONITOR_ONLY",
+                        setup=setup_ready_type,
+                        confidence=exact_conf,
+                        live=exact_live,
+                        scanner_score=safe_float(row.get("score"), 0),
+                        reason=a_plus_reason,
+                        phase=phase,
+                    )
+                    return out, None
+
                 out = signal_base(
                     row,
                     metrics,
@@ -8503,6 +8866,39 @@ def process_new_or_watch(
     )
 
     if setup_ready_type:
+        a_plus_ok, a_plus_reason = a_plus_filter_decision(
+            row,
+            metrics,
+            setup_ready_type,
+            exact_conf,
+            exact_live,
+            phase,
+        )
+        if not a_plus_ok:
+            out = make_a_plus_monitor_only_signal(
+                row,
+                metrics,
+                exact_plan,
+                setup_ready_type,
+                exact_conf,
+                exact_live,
+                a_plus_reason,
+                phase,
+                regime,
+            )
+            log_watch_evaluated(symbol, out, metrics, phase)
+            decision_log(
+                symbol,
+                "A_PLUS_MONITOR_ONLY",
+                setup=setup_ready_type,
+                confidence=exact_conf,
+                live=exact_live,
+                scanner_score=safe_float(row.get("score"), 0),
+                reason=a_plus_reason,
+                phase=phase,
+            )
+            return out, None
+
         out = signal_base(
             row,
             metrics,
@@ -8518,6 +8914,15 @@ def process_new_or_watch(
         now_text = iso_now_et()
         out["ready_since"] = now_text
         out["detected_at"] = now_text
+        out = apply_a_plus_fields(
+            out,
+            row,
+            metrics,
+            phase,
+            live_signal=exact_live,
+            confidence=exact_conf,
+            force_actionability="A_PLUS_TRIGGER_READY",
+        )
 
         if trigger_was_touched_recently(out, metrics):
             stale, stale_reason = trigger_pullback_after_touch(out, metrics)
@@ -8936,6 +9341,18 @@ def run_signal_engine() -> None:
             "max_tickers": MORNING_RECLAIM_MAX_TICKERS,
             "min_priority_score": MORNING_RECLAIM_MIN_PRIORITY_SCORE,
         },
+        "a_plus_stage1": {
+            "enabled": A_PLUS_DAYTRADE_ENABLED,
+            "entry_window_active": is_a_plus_entry_window(),
+            "entry_start_et": A_PLUS_ENTRY_START_ET,
+            "entry_end_et": A_PLUS_ENTRY_END_ET,
+            "allowed_setups": sorted(A_PLUS_ACTIONABLE_SETUP_TYPES),
+            "min_scanner_score": A_PLUS_MIN_SCANNER_SCORE,
+            "min_live_signal_score": A_PLUS_MIN_LIVE_SIGNAL_SCORE,
+            "min_confidence": A_PLUS_MIN_CONFIDENCE,
+            "t1_rr": DAY_TRADE_T1_SCALP_RR,
+            "rule": "Qualified Trigger Ready/Touched is the trade-entry state; Active is late confirmation/manage-only.",
+        },
         "priority_morning_reclaim": priority_morning_reclaim,
         "signals": signals,
         "rejected_candidates": rejected_candidates,
@@ -8954,6 +9371,10 @@ def run_signal_engine() -> None:
             "monitor_count": len(monitor_symbols),
             "counts": counts,
             "rejected_count": len(rejected_candidates),
+            "a_plus_stage1_enabled": A_PLUS_DAYTRADE_ENABLED,
+            "a_plus_entry_window": f"{A_PLUS_ENTRY_START_ET}-{A_PLUS_ENTRY_END_ET} ET",
+            "a_plus_allowed_setups": sorted(A_PLUS_ACTIONABLE_SETUP_TYPES),
+            "a_plus_t1_rr": DAY_TRADE_T1_SCALP_RR,
         },
     )
 
